@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
 
-from minicut.errors import UserInputError
+from minicut.errors import ProcessingError, UserInputError
 from minicut.media import MediaAsset
 from minicut.project import ProjectManifest, ProjectRepository
 
@@ -35,6 +35,15 @@ class ObservingReplacer:
         self.source_manifest = _read_manifest(source)
         self.destination_manifest = _read_manifest(destination)
         source.replace(destination)
+
+
+class FailingReplacer:
+    def __init__(self) -> None:
+        self.temporary_path: Path | None = None
+
+    def __call__(self, source: Path, destination: Path) -> None:
+        self.temporary_path = source
+        raise OSError("simulated raw filesystem failure")
 
 
 class ProjectRepositoryTest(unittest.TestCase):
@@ -89,6 +98,58 @@ class ProjectRepositoryTest(unittest.TestCase):
                 repository.read()
             with self.assertRaisesRegex(UserInputError, "does not exist"):
                 repository.update(ProjectManifest(project_id="project-1"))
+
+    def test_read_maps_malformed_json_to_a_safe_processing_error(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            repository = ProjectRepository(Path(temporary_directory))
+            repository.manifest_path.write_text(
+                "{private invalid json", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(
+                ProcessingError, "invalid or unsupported"
+            ) as raised:
+                repository.read()
+
+            self.assertIsInstance(raised.exception.__cause__, json.JSONDecodeError)
+            self.assertNotIn("private invalid json", str(raised.exception))
+            self.assertNotIn(temporary_directory, str(raised.exception))
+
+    def test_read_rejects_an_unsupported_manifest_version_safely(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            repository = ProjectRepository(Path(temporary_directory))
+            data = ProjectManifest(project_id="project-1").to_dict()
+            data["schema_version"] = 2
+            repository.manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ProcessingError, "invalid or unsupported"
+            ) as raised:
+                repository.read()
+
+            self.assertIsInstance(raised.exception.__cause__, ValueError)
+
+    def test_interrupted_update_preserves_the_last_valid_manifest(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            project_directory = Path(temporary_directory)
+            original = ProjectManifest(project_id="project-1")
+            ProjectRepository(project_directory).create(original)
+            replacer = FailingReplacer()
+            repository = ProjectRepository(project_directory, replace_file=replacer)
+
+            with self.assertRaisesRegex(
+                ProcessingError, "could not be updated"
+            ) as raised:
+                repository.update(
+                    ProjectManifest(project_id="project-1", assets=(_asset(),))
+                )
+
+            self.assertIsInstance(raised.exception.__cause__, OSError)
+            self.assertNotIn("raw filesystem failure", str(raised.exception))
+            self.assertEqual(repository.read(), original)
+            self.assertIsNotNone(replacer.temporary_path)
+            assert replacer.temporary_path is not None
+            self.assertFalse(replacer.temporary_path.exists())
 
 
 if __name__ == "__main__":

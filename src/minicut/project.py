@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import cast
 
-from minicut.errors import UserInputError
+from minicut.errors import ProcessingError, UserInputError
 from minicut.media import MediaAsset
 
 MANIFEST_SCHEMA_VERSION = 1
@@ -73,23 +73,34 @@ class ProjectRepository:
         self.project_directory.mkdir(parents=True, exist_ok=True)
         if self.manifest_path.exists():
             raise UserInputError("Project manifest already exists")
-        self._write(manifest)
+        try:
+            self._write(manifest)
+        except OSError as error:
+            raise ProcessingError("Project manifest could not be created") from error
 
     def read(self) -> ProjectManifest:
         """Read the current project manifest."""
         if not self.manifest_path.is_file():
             raise UserInputError("Project manifest does not exist")
-        data = cast(
-            dict[str, object],
-            json.loads(self.manifest_path.read_text(encoding="utf-8")),
-        )
-        return ProjectManifest.from_dict(data)
+        try:
+            data = cast(
+                dict[str, object],
+                json.loads(self.manifest_path.read_text(encoding="utf-8")),
+            )
+            return ProjectManifest.from_dict(data)
+        except (AttributeError, KeyError, TypeError, UnicodeError, ValueError) as error:
+            raise ProcessingError(
+                "Project manifest is invalid or unsupported"
+            ) from error
 
     def update(self, manifest: ProjectManifest) -> None:
         """Atomically replace an existing project manifest."""
         if not self.manifest_path.is_file():
             raise UserInputError("Project manifest does not exist")
-        self._write(manifest)
+        try:
+            self._write(manifest)
+        except OSError as error:
+            raise ProcessingError("Project manifest could not be updated") from error
 
     def _write(self, manifest: ProjectManifest) -> None:
         temporary_path: Path | None = None
