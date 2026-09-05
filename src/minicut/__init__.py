@@ -1,0 +1,1 @@
+"""MiniCut application package."""

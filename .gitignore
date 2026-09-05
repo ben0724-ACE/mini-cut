@@ -18,6 +18,8 @@ htmlcov/
 # Environments and secrets
 .venv/
 venv/
+.uv-cache/
+.uv-python/
 .env
 .env.*
 !.env.example
