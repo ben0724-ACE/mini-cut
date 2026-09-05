@@ -1,9 +1,17 @@
 import json
 import unittest
 from collections.abc import Mapping, Sequence
+from subprocess import TimeoutExpired
 
+from minicut.errors import ProcessingError, UserInputError
 from minicut.media import StreamType
-from minicut.probe import build_ffprobe_command, parse_ffprobe_json
+from minicut.probe import (
+    Command,
+    ProcessResult,
+    build_ffprobe_command,
+    parse_ffprobe_json,
+    probe_media,
+)
 
 
 def ffprobe_output(
@@ -11,6 +19,25 @@ def ffprobe_output(
     streams: Sequence[Mapping[str, object]],
 ) -> str:
     return json.dumps({"format": {"duration": duration}, "streams": streams})
+
+
+class FakeRunner:
+    def __init__(
+        self,
+        result: ProcessResult | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self._result = result
+        self._error = error
+        self.calls: list[tuple[Command, float]] = []
+
+    def __call__(self, command: Command, timeout_seconds: float) -> ProcessResult:
+        self.calls.append((command, timeout_seconds))
+        if self._error is not None:
+            raise self._error
+        if self._result is None:
+            raise AssertionError("FakeRunner requires a result or error")
+        return self._result
 
 
 class FfprobeCommandTest(unittest.TestCase):
@@ -77,6 +104,83 @@ class FfprobeJsonTest(unittest.TestCase):
 
         self.assertEqual(len(result.streams), 1)
         self.assertEqual(result.streams[0].stream_type, StreamType.VIDEO)
+
+
+class MediaProbeTest(unittest.TestCase):
+    def test_probe_executes_the_built_command_and_returns_metadata(self) -> None:
+        runner = FakeRunner(
+            ProcessResult(
+                return_code=0,
+                stdout=ffprobe_output(
+                    "1.250",
+                    [{"index": 0, "codec_type": "audio", "codec_name": "aac"}],
+                ),
+                stderr="",
+            )
+        )
+
+        result = probe_media(
+            "voice.m4a",
+            runner=runner,
+            executable="/tools/ffprobe",
+            timeout_seconds=2.5,
+        )
+
+        self.assertEqual(result.duration_ms, 1_250)
+        command, timeout_seconds = runner.calls[0]
+        self.assertEqual(command[0], "/tools/ffprobe")
+        self.assertEqual(command[-1], "voice.m4a")
+        self.assertEqual(timeout_seconds, 2.5)
+
+    def test_nonzero_exit_is_mapped_without_exposing_stderr(self) -> None:
+        runner = FakeRunner(
+            ProcessResult(
+                return_code=1,
+                stdout="",
+                stderr="private/path.mp4: invalid data",
+            )
+        )
+
+        with self.assertRaisesRegex(ProcessingError, "could not read") as raised:
+            probe_media("private/path.mp4", runner=runner)
+
+        self.assertNotIn("private/path.mp4", str(raised.exception))
+
+    def test_missing_executable_is_mapped(self) -> None:
+        runner = FakeRunner(error=FileNotFoundError())
+
+        with self.assertRaisesRegex(ProcessingError, "not available"):
+            probe_media("clip.mp4", runner=runner)
+
+    def test_timeout_is_mapped(self) -> None:
+        runner = FakeRunner(error=TimeoutExpired(("ffprobe",), 5.0))
+
+        with self.assertRaisesRegex(ProcessingError, "timed out"):
+            probe_media("clip.mp4", runner=runner)
+
+    def test_malformed_metadata_is_mapped(self) -> None:
+        invalid_outputs = ("not JSON", json.dumps({"streams": []}))
+
+        for output in invalid_outputs:
+            with self.subTest(output=output):
+                runner = FakeRunner(ProcessResult(0, output, ""))
+                with self.assertRaisesRegex(ProcessingError, "invalid metadata"):
+                    probe_media("clip.mp4", runner=runner)
+
+    def test_media_without_supported_streams_is_rejected(self) -> None:
+        runner = FakeRunner(
+            ProcessResult(
+                0,
+                ffprobe_output(
+                    "1.000",
+                    [{"index": 0, "codec_type": "subtitle", "codec_name": "srt"}],
+                ),
+                "",
+            )
+        )
+
+        with self.assertRaisesRegex(UserInputError, "no supported audio or video"):
+            probe_media("subtitles.mkv", runner=runner)
 
 
 if __name__ == "__main__":
