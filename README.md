@@ -32,6 +32,15 @@ The model never invents media timestamps. It selects stable transcript segment i
 
 The project is in its foundation phase. Product contracts, quality gates, and the incremental delivery plan are being established before implementation begins.
 
+## Development
+
+Create or update the local environment, then run the complete quality gate:
+
+```bash
+uv sync
+uv run python tools/check.py
+```
+
 ## Development principles
 
 - Build one testable behavior at a time.

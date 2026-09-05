@@ -54,6 +54,7 @@ class ToolingConfigurationTest(unittest.TestCase):
         pytest_config = require_nested_table(project, "tool", "pytest", "ini_options")
         addopts = require_string(pytest_config["addopts"])
 
+        self.assertEqual(require_string_list(pytest_config["pythonpath"]), ["."])
         self.assertEqual(require_string_list(pytest_config["testpaths"]), ["tests"])
         self.assertIn("--strict-config", addopts)
         self.assertIn("--strict-markers", addopts)
@@ -75,7 +76,8 @@ class ToolingConfigurationTest(unittest.TestCase):
         pyright_config = require_nested_table(project, "tool", "pyright")
 
         self.assertEqual(
-            require_string_list(pyright_config["include"]), ["src", "tests"]
+            require_string_list(pyright_config["include"]),
+            ["src", "tests", "tools"],
         )
         self.assertEqual(pyright_config["pythonVersion"], "3.11")
         self.assertEqual(pyright_config["typeCheckingMode"], "strict")
