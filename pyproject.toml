@@ -15,3 +15,29 @@ dependencies = []
 
 [tool.uv.build-backend]
 module-name = "minicut"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.411",
+    "pytest>=9.1.1",
+    "ruff>=0.16.6",
+]
+
+[tool.pytest.ini_options]
+minversion = "9.1"
+addopts = "-ra --strict-config --strict-markers"
+testpaths = ["tests"]
+xfail_strict = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["B", "E4", "E7", "E9", "F", "I", "UP"]
+
+[tool.pyright]
+include = ["src", "tests"]
+exclude = [".venv", ".uv-cache", ".uv-python"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"

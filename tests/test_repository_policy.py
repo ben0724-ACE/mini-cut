@@ -1,7 +1,6 @@
-from pathlib import Path
 import subprocess
 import unittest
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 

@@ -1,10 +1,9 @@
-from importlib.metadata import version as distribution_version
-from pathlib import Path
 import tomllib
 import unittest
+from importlib.metadata import version as distribution_version
+from pathlib import Path
 
 import minicut
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
