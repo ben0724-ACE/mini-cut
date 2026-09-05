@@ -2,7 +2,14 @@ import json
 import unittest
 from typing import cast
 
-from minicut.media import MediaAsset, StreamInfo, StreamType, TimeRange
+from minicut.errors import UserInputError
+from minicut.media import (
+    MediaAsset,
+    StreamInfo,
+    StreamType,
+    TimeRange,
+    classify_media,
+)
 
 
 class TimeRangeTest(unittest.TestCase):
@@ -54,6 +61,26 @@ class MediaAssetTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             StreamInfo(index=0, stream_type=unknown_type, codec_name="subrip")
+
+
+class MediaTypeTest(unittest.TestCase):
+    def test_supported_video_and_audio_are_classified(self) -> None:
+        self.assertEqual(
+            classify_media("recording.MP4", "video/mp4"),
+            StreamType.VIDEO,
+        )
+        self.assertEqual(
+            classify_media("voice.m4a", "audio/mp4"),
+            StreamType.AUDIO,
+        )
+
+    def test_unsupported_extension_is_rejected(self) -> None:
+        with self.assertRaisesRegex(UserInputError, "Unsupported media extension"):
+            classify_media("notes.txt", "text/plain")
+
+    def test_mime_type_must_match_the_extension_category(self) -> None:
+        with self.assertRaisesRegex(UserInputError, "MIME type"):
+            classify_media("recording.mp4", "audio/mpeg")
 
 
 if __name__ == "__main__":

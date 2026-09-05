@@ -3,7 +3,13 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import PurePath
 from typing import cast
+
+from minicut.errors import UserInputError
+
+_VIDEO_EXTENSIONS = frozenset({".mp4", ".mov", ".mkv", ".avi", ".flv", ".f4v", ".webm"})
+_AUDIO_EXTENSIONS = frozenset({".ogg", ".wav", ".mp3", ".flac", ".m4a"})
 
 
 @dataclass(slots=True)
@@ -30,6 +36,28 @@ class StreamType(StrEnum):
 
     AUDIO = "audio"
     VIDEO = "video"
+
+
+def classify_media(source_path: str, mime_type: str | None = None) -> StreamType:
+    """Classify a supported media path and validate an optional MIME type."""
+    extension = PurePath(source_path).suffix.casefold()
+    if extension in _VIDEO_EXTENSIONS:
+        stream_type = StreamType.VIDEO
+    elif extension in _AUDIO_EXTENSIONS:
+        stream_type = StreamType.AUDIO
+    else:
+        displayed_extension = extension or "<none>"
+        raise UserInputError(f"Unsupported media extension: {displayed_extension}")
+
+    if mime_type is not None:
+        normalized_mime = mime_type.partition(";")[0].strip().casefold()
+        mime_category, separator, mime_subtype = normalized_mime.partition("/")
+        if separator != "/" or not mime_subtype or mime_category != stream_type.value:
+            raise UserInputError(
+                f"MIME type {mime_type!r} does not match extension {extension}"
+            )
+
+    return stream_type
 
 
 def _validate_stream_type(value: object) -> None:
@@ -102,4 +130,4 @@ class MediaAsset:
         )
 
 
-__all__ = ["MediaAsset", "StreamInfo", "StreamType", "TimeRange"]
+__all__ = ["MediaAsset", "StreamInfo", "StreamType", "TimeRange", "classify_media"]
