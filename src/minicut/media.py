@@ -1,0 +1,105 @@
+"""Media domain models with millisecond time values."""
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import cast
+
+
+@dataclass(slots=True)
+class TimeRange:
+    """A non-empty time range measured in integer milliseconds."""
+
+    start_ms: int
+    end_ms: int
+
+    def __post_init__(self) -> None:
+        if self.start_ms < 0:
+            raise ValueError("start_ms must not be negative")
+        if self.end_ms <= self.start_ms:
+            raise ValueError("end_ms must be greater than start_ms")
+
+    @property
+    def duration_ms(self) -> int:
+        """Return the range duration in milliseconds."""
+        return self.end_ms - self.start_ms
+
+
+class StreamType(StrEnum):
+    """Media stream types supported by MiniCut."""
+
+    AUDIO = "audio"
+    VIDEO = "video"
+
+
+def _validate_stream_type(value: object) -> None:
+    if not isinstance(value, StreamType):
+        raise ValueError("stream_type must be audio or video")
+
+
+@dataclass(slots=True)
+class StreamInfo:
+    """Normalized information about one audio or video stream."""
+
+    index: int
+    stream_type: StreamType
+    codec_name: str
+
+    def __post_init__(self) -> None:
+        _validate_stream_type(self.stream_type)
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-compatible representation."""
+        return {
+            "index": self.index,
+            "stream_type": self.stream_type.value,
+            "codec_name": self.codec_name,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "StreamInfo":
+        """Restore stream information from a JSON-compatible mapping."""
+        return cls(
+            index=cast(int, data["index"]),
+            stream_type=StreamType(cast(str, data["stream_type"])),
+            codec_name=cast(str, data["codec_name"]),
+        )
+
+
+@dataclass(slots=True)
+class MediaAsset:
+    """Normalized metadata for one source media asset."""
+
+    asset_id: str
+    source_path: str
+    duration_ms: int
+    streams: tuple[StreamInfo, ...]
+
+    def __post_init__(self) -> None:
+        if not self.asset_id.strip():
+            raise ValueError("asset_id must not be empty")
+        if self.duration_ms < 0:
+            raise ValueError("duration_ms must not be negative")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-compatible representation."""
+        return {
+            "asset_id": self.asset_id,
+            "source_path": self.source_path,
+            "duration_ms": self.duration_ms,
+            "streams": [stream.to_dict() for stream in self.streams],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "MediaAsset":
+        """Restore an asset from a JSON-compatible mapping."""
+        stream_data = cast(list[dict[str, object]], data["streams"])
+        return cls(
+            asset_id=cast(str, data["asset_id"]),
+            source_path=cast(str, data["source_path"]),
+            duration_ms=cast(int, data["duration_ms"]),
+            streams=tuple(StreamInfo.from_dict(item) for item in stream_data),
+        )
+
+
+__all__ = ["MediaAsset", "StreamInfo", "StreamType", "TimeRange"]
