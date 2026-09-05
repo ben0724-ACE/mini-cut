@@ -30,7 +30,7 @@ The model never invents media timestamps. It selects stable transcript segment i
 
 ## Current status
 
-The media-ingestion and local-project foundation is complete: MiniCut can validate, inspect, fingerprint, and idempotently register source media without copying it. The next implementation step is the word-timestamped transcript protocol.
+The media-ingestion and local-project foundation is complete, and the initial word-timestamped transcript models are in place. The next implementation step is transcript timing and containment validation.
 
 ## Development
 
