@@ -30,7 +30,7 @@ The model never invents media timestamps. It selects stable transcript segment i
 
 ## Current status
 
-The media-ingestion and local-project foundation is complete, and the initial word-timestamped transcript models are in place. The next implementation step is transcript timing and containment validation.
+The media-ingestion and local-project foundation is complete, and the transcript models now enforce timing order and utterance containment. The next implementation step is deterministic transcript identifiers.
 
 ## Development
 
