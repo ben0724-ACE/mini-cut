@@ -30,7 +30,7 @@ The model never invents media timestamps. It selects stable transcript segment i
 
 ## Current status
 
-The media-ingestion and local-project foundation is complete, and transcript models now include validated timing relationships and deterministic identifiers. The next implementation step is versioned JSON persistence for transcripts.
+The media-ingestion and local-project foundation is complete, and the versioned Transcript v1 protocol now supports timing validation, deterministic identifiers, and JSON round trips. The next implementation step is the MLX Whisper provider configuration.
 
 ## Development
 

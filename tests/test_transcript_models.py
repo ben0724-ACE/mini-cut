@@ -1,4 +1,6 @@
+import json
 import unittest
+from typing import cast
 
 from minicut.transcript import (
     TRANSCRIPT_SCHEMA_VERSION,
@@ -291,6 +293,62 @@ class StableTranscriptIdTest(unittest.TestCase):
         )
 
         self.assertNotEqual(changed, original)
+
+
+class TranscriptSerializationTest(unittest.TestCase):
+    @staticmethod
+    def _transcript(*, probability: float | None = 0.97) -> Transcript:
+        source = TranscriptSource("asset-1", "mlx-whisper", "large-v3-turbo")
+        word = Word("word-1", "你好", 100, 420, probability)
+        utterance = Utterance(
+            "utterance-1",
+            "你好",
+            100,
+            420,
+            (word.word_id,),
+            "speaker-1",
+        )
+        return Transcript(
+            "transcript-1",
+            source,
+            "zh",
+            words=(word,),
+            utterances=(utterance,),
+        )
+
+    def test_transcript_round_trips_through_json_with_nested_models(self) -> None:
+        transcript = self._transcript()
+
+        encoded = json.dumps(transcript.to_dict(), ensure_ascii=False)
+        decoded = cast(dict[str, object], json.loads(encoded))
+        decoded["future_optional_field"] = {"ignored": True}
+        restored = Transcript.from_dict(decoded)
+
+        self.assertEqual(restored, transcript)
+
+    def test_transcript_round_trip_preserves_empty_and_optional_values(self) -> None:
+        transcript = Transcript(
+            "transcript-1",
+            TranscriptSource("asset-1", "mlx-whisper", "large-v3-turbo"),
+            "zh",
+            words=(Word("word-1", "嗯", 0, 100, None),),
+        )
+
+        decoded = cast(
+            dict[str, object],
+            json.loads(json.dumps(transcript.to_dict(), ensure_ascii=False)),
+        )
+
+        self.assertEqual(Transcript.from_dict(decoded), transcript)
+
+    def test_transcript_rejects_unknown_schema_with_migration_hint(self) -> None:
+        for schema_version in (TRANSCRIPT_SCHEMA_VERSION + 1, "1", 1.0, True):
+            data = self._transcript().to_dict()
+            data["schema_version"] = schema_version
+
+            with self.subTest(schema_version=schema_version):
+                with self.assertRaisesRegex(ValueError, "Migrate.*schema version 1"):
+                    Transcript.from_dict(data)
 
 
 if __name__ == "__main__":
