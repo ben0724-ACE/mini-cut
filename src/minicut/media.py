@@ -117,6 +117,8 @@ class MediaAsset:
             raise ValueError("asset_id must not be empty")
         if self.duration_ms < 0:
             raise ValueError("duration_ms must not be negative")
+        if not self.content_fingerprint.strip():
+            raise ValueError("content_fingerprint must not be empty")
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-compatible representation."""

@@ -30,7 +30,7 @@ The model never invents media timestamps. It selects stable transcript segment i
 
 ## Current status
 
-The engineering foundation, media domain models, ffprobe adapter, and versioned local project persistence are implemented. The next implementation step is idempotent media asset registration and import.
+The engineering foundation, media domain models, ffprobe adapter, versioned local project persistence, and idempotent asset registration are implemented. The next implementation step is read-only media import.
 
 ## Development
 

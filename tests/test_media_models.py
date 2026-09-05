@@ -65,6 +65,8 @@ class MediaAssetTest(unittest.TestCase):
                 (valid_stream,),
                 "sha256:example",
             )
+        with self.assertRaisesRegex(ValueError, "content_fingerprint"):
+            MediaAsset("asset-1", "audio.m4a", 1_000, (valid_stream,), "  ")
 
     def test_unknown_stream_type_is_rejected(self) -> None:
         unknown_type = cast(StreamType, "subtitle")

@@ -102,6 +102,25 @@ class ProjectRepository:
         except OSError as error:
             raise ProcessingError("Project manifest could not be updated") from error
 
+    def add_asset(self, asset: MediaAsset) -> MediaAsset:
+        """Register new content or return the matching existing asset."""
+        manifest = self.read()
+        for existing_asset in manifest.assets:
+            if existing_asset.content_fingerprint == asset.content_fingerprint:
+                return existing_asset
+
+        for existing_asset in manifest.assets:
+            if existing_asset.asset_id == asset.asset_id:
+                raise UserInputError("Project asset ID already exists")
+
+        updated_manifest = ProjectManifest(
+            project_id=manifest.project_id,
+            assets=(*manifest.assets, asset),
+            schema_version=manifest.schema_version,
+        )
+        self.update(updated_manifest)
+        return asset
+
     def _write(self, manifest: ProjectManifest) -> None:
         temporary_path: Path | None = None
         try:

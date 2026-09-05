@@ -14,13 +14,18 @@ def _read_manifest(path: Path) -> ProjectManifest:
     return ProjectManifest.from_dict(data)
 
 
-def _asset() -> MediaAsset:
+def _asset(
+    *,
+    asset_id: str = "asset-1",
+    source_path: str = "/media/example.mov",
+    content_fingerprint: str = "fingerprint-1",
+) -> MediaAsset:
     return MediaAsset(
-        asset_id="asset-1",
-        source_path="/media/example.mov",
+        asset_id=asset_id,
+        source_path=source_path,
         duration_ms=1_250,
         streams=(),
-        content_fingerprint="fingerprint-1",
+        content_fingerprint=content_fingerprint,
     )
 
 
@@ -150,6 +155,48 @@ class ProjectRepositoryTest(unittest.TestCase):
             self.assertIsNotNone(replacer.temporary_path)
             assert replacer.temporary_path is not None
             self.assertFalse(replacer.temporary_path.exists())
+
+    def test_add_asset_persists_a_new_content_fingerprint(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            repository = ProjectRepository(Path(temporary_directory))
+            repository.create(ProjectManifest(project_id="project-1"))
+            asset = _asset()
+
+            registered = repository.add_asset(asset)
+
+            self.assertEqual(registered, asset)
+            self.assertEqual(repository.read().assets, (asset,))
+
+    def test_add_asset_returns_existing_asset_for_the_same_content(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            repository = ProjectRepository(Path(temporary_directory))
+            existing = _asset()
+            repository.create(
+                ProjectManifest(project_id="project-1", assets=(existing,))
+            )
+            renamed_copy = _asset(
+                asset_id="asset-2",
+                source_path="/media/renamed-copy.mov",
+            )
+
+            registered = repository.add_asset(renamed_copy)
+
+            self.assertEqual(registered, existing)
+            self.assertEqual(repository.read().assets, (existing,))
+
+    def test_add_asset_rejects_an_id_used_by_different_content(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            repository = ProjectRepository(Path(temporary_directory))
+            existing = _asset()
+            repository.create(
+                ProjectManifest(project_id="project-1", assets=(existing,))
+            )
+            conflicting = _asset(content_fingerprint="fingerprint-2")
+
+            with self.assertRaisesRegex(UserInputError, "asset ID already exists"):
+                repository.add_asset(conflicting)
+
+            self.assertEqual(repository.read().assets, (existing,))
 
 
 if __name__ == "__main__":
