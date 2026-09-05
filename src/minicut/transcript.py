@@ -1,6 +1,8 @@
 """Normalized transcript domain models."""
 
+import json
 from dataclasses import dataclass
+from hashlib import sha256
 from itertools import pairwise
 
 TRANSCRIPT_SCHEMA_VERSION = 1
@@ -79,10 +81,75 @@ class Transcript:
                     raise ValueError("Utterance must contain each referenced Word")
 
 
+def _stable_id(kind: str, *components: object) -> str:
+    normalized = json.dumps(
+        [kind, *components],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"{kind}:{sha256(normalized).hexdigest()}"
+
+
+def _validate_ordinal(ordinal: int) -> None:
+    if ordinal < 0:
+        raise ValueError("ordinal must not be negative")
+
+
+def generate_transcript_id(source: TranscriptSource, language: str) -> str:
+    """Generate a stable transcript ID from its normalized source identity."""
+    return _stable_id(
+        "transcript",
+        source.asset_id,
+        source.provider,
+        source.model,
+        language,
+    )
+
+
+def generate_word_id(
+    transcript_id: str,
+    ordinal: int,
+    *,
+    text: str,
+    start_ms: int,
+    end_ms: int,
+) -> str:
+    """Generate a stable Word ID from normalized word fields."""
+    _validate_ordinal(ordinal)
+    return _stable_id("word", transcript_id, ordinal, text, start_ms, end_ms)
+
+
+def generate_utterance_id(
+    transcript_id: str,
+    ordinal: int,
+    *,
+    text: str,
+    start_ms: int,
+    end_ms: int,
+    word_ids: tuple[str, ...],
+    speaker: str | None = None,
+) -> str:
+    """Generate a stable Utterance ID from normalized utterance fields."""
+    _validate_ordinal(ordinal)
+    return _stable_id(
+        "utterance",
+        transcript_id,
+        ordinal,
+        text,
+        start_ms,
+        end_ms,
+        word_ids,
+        speaker,
+    )
+
+
 __all__ = [
     "TRANSCRIPT_SCHEMA_VERSION",
     "Transcript",
     "TranscriptSource",
     "Utterance",
     "Word",
+    "generate_transcript_id",
+    "generate_utterance_id",
+    "generate_word_id",
 ]

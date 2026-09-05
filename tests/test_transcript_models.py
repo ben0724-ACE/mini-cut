@@ -6,6 +6,9 @@ from minicut.transcript import (
     TranscriptSource,
     Utterance,
     Word,
+    generate_transcript_id,
+    generate_utterance_id,
+    generate_word_id,
 )
 
 
@@ -145,6 +148,149 @@ class TranscriptModelTest(unittest.TestCase):
                         words=(word,),
                         utterances=(utterance,),
                     )
+
+
+class StableTranscriptIdTest(unittest.TestCase):
+    def test_same_normalized_input_produces_the_same_ids(self) -> None:
+        source = TranscriptSource("asset-1", "mlx-whisper", "large-v3-turbo")
+
+        first_transcript_id = generate_transcript_id(source, "zh")
+        first_word_id = generate_word_id(
+            first_transcript_id,
+            0,
+            text="你好",
+            start_ms=100,
+            end_ms=420,
+        )
+        first_utterance_id = generate_utterance_id(
+            first_transcript_id,
+            0,
+            text="你好",
+            start_ms=100,
+            end_ms=420,
+            word_ids=(first_word_id,),
+            speaker="speaker-1",
+        )
+
+        second_transcript_id = generate_transcript_id(source, "zh")
+        second_word_id = generate_word_id(
+            second_transcript_id,
+            0,
+            text="你好",
+            start_ms=100,
+            end_ms=420,
+        )
+        second_utterance_id = generate_utterance_id(
+            second_transcript_id,
+            0,
+            text="你好",
+            start_ms=100,
+            end_ms=420,
+            word_ids=(second_word_id,),
+            speaker="speaker-1",
+        )
+
+        self.assertEqual(second_transcript_id, first_transcript_id)
+        self.assertEqual(second_word_id, first_word_id)
+        self.assertEqual(second_utterance_id, first_utterance_id)
+        for stable_id in (first_transcript_id, first_word_id, first_utterance_id):
+            self.assertNotIn("你好", stable_id)
+            self.assertNotIn("large-v3-turbo", stable_id)
+
+    def test_meaningful_normalized_word_changes_produce_different_ids(self) -> None:
+        transcript_id = generate_transcript_id(
+            TranscriptSource("asset-1", "mlx-whisper", "large-v3-turbo"),
+            "zh",
+        )
+        original = generate_word_id(
+            transcript_id,
+            0,
+            text="你好",
+            start_ms=100,
+            end_ms=420,
+        )
+        changed_ids = (
+            generate_word_id(
+                transcript_id,
+                1,
+                text="你好",
+                start_ms=100,
+                end_ms=420,
+            ),
+            generate_word_id(
+                transcript_id,
+                0,
+                text="您好",
+                start_ms=100,
+                end_ms=420,
+            ),
+            generate_word_id(
+                transcript_id,
+                0,
+                text="你好",
+                start_ms=110,
+                end_ms=420,
+            ),
+        )
+
+        for changed_id in changed_ids:
+            with self.subTest(changed_id=changed_id):
+                self.assertNotEqual(changed_id, original)
+
+    def test_word_and_utterance_ids_reject_negative_ordinals(self) -> None:
+        with self.assertRaisesRegex(ValueError, "ordinal"):
+            generate_word_id(
+                "transcript-1",
+                -1,
+                text="你好",
+                start_ms=100,
+                end_ms=420,
+            )
+        with self.assertRaisesRegex(ValueError, "ordinal"):
+            generate_utterance_id(
+                "transcript-1",
+                -1,
+                text="你好",
+                start_ms=100,
+                end_ms=420,
+                word_ids=("word-1",),
+            )
+
+    def test_transcript_and_utterance_inputs_distinguish_ids(self) -> None:
+        source = TranscriptSource("asset-1", "mlx-whisper", "large-v3-turbo")
+        transcript_id = generate_transcript_id(source, "zh")
+
+        self.assertNotEqual(
+            generate_transcript_id(source, "en"),
+            transcript_id,
+        )
+        self.assertNotEqual(
+            generate_transcript_id(
+                TranscriptSource("asset-2", "mlx-whisper", "large-v3-turbo"),
+                "zh",
+            ),
+            transcript_id,
+        )
+
+        original = generate_utterance_id(
+            transcript_id,
+            0,
+            text="你好",
+            start_ms=100,
+            end_ms=420,
+            word_ids=("word-1",),
+        )
+        changed = generate_utterance_id(
+            transcript_id,
+            0,
+            text="你好",
+            start_ms=100,
+            end_ms=420,
+            word_ids=("word-1",),
+            speaker="speaker-1",
+        )
+
+        self.assertNotEqual(changed, original)
 
 
 if __name__ == "__main__":
