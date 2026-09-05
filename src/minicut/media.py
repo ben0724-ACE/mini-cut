@@ -3,7 +3,8 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import PurePath
+from hashlib import file_digest
+from pathlib import Path, PurePath
 from typing import cast
 
 from minicut.errors import UserInputError
@@ -60,6 +61,13 @@ def classify_media(source_path: str, mime_type: str | None = None) -> StreamType
     return stream_type
 
 
+def fingerprint_media(source_path: str | Path) -> str:
+    """Return a stable fingerprint for the complete media file content."""
+    with Path(source_path).open("rb") as media_file:
+        digest = file_digest(media_file, "sha256").hexdigest()
+    return f"sha256:{digest}"
+
+
 def _validate_stream_type(value: object) -> None:
     if not isinstance(value, StreamType):
         raise ValueError("stream_type must be audio or video")
@@ -102,6 +110,7 @@ class MediaAsset:
     source_path: str
     duration_ms: int
     streams: tuple[StreamInfo, ...]
+    content_fingerprint: str
 
     def __post_init__(self) -> None:
         if not self.asset_id.strip():
@@ -116,6 +125,7 @@ class MediaAsset:
             "source_path": self.source_path,
             "duration_ms": self.duration_ms,
             "streams": [stream.to_dict() for stream in self.streams],
+            "content_fingerprint": self.content_fingerprint,
         }
 
     @classmethod
@@ -127,7 +137,15 @@ class MediaAsset:
             source_path=cast(str, data["source_path"]),
             duration_ms=cast(int, data["duration_ms"]),
             streams=tuple(StreamInfo.from_dict(item) for item in stream_data),
+            content_fingerprint=cast(str, data["content_fingerprint"]),
         )
 
 
-__all__ = ["MediaAsset", "StreamInfo", "StreamType", "TimeRange", "classify_media"]
+__all__ = [
+    "MediaAsset",
+    "StreamInfo",
+    "StreamType",
+    "TimeRange",
+    "classify_media",
+    "fingerprint_media",
+]

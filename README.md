@@ -30,7 +30,7 @@ The model never invents media timestamps. It selects stable transcript segment i
 
 ## Current status
 
-The project is in its foundation phase. Product contracts, quality gates, and the incremental delivery plan are being established before implementation begins.
+The engineering foundation and initial media domain models are complete. The next implementation step is the ffprobe adapter for reading real media metadata.
 
 ## Development
 
