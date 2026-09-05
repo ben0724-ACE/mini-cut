@@ -31,6 +31,37 @@ class StructuredLogTest(unittest.TestCase):
         self.assertTrue(job_id)
         self.assertNotEqual(request_id, job_id)
 
+    def test_sensitive_structured_fields_are_redacted(self) -> None:
+        stream = StringIO()
+        logger = create_logger(LogContext(request_id="request-1"), stream=stream)
+
+        log_event(
+            logger,
+            "planner.requested",
+            "Planning requested.",
+            fields={
+                "api_key": "secret-api-key",
+                "headers": {
+                    "Authorization": "Bearer secret-token",
+                    "Content-Type": "application/json",
+                },
+                "prompt": "the complete private prompt",
+                "model": "example-model",
+            },
+        )
+
+        serialized = stream.getvalue()
+        payload = cast(dict[str, object], json.loads(serialized))
+        fields = cast(dict[str, object], payload["fields"])
+        headers = cast(dict[str, object], fields["headers"])
+
+        self.assertEqual(fields["api_key"], "[REDACTED]")
+        self.assertEqual(headers["Authorization"], "[REDACTED]")
+        self.assertEqual(fields["prompt"], "[REDACTED]")
+        self.assertEqual(fields["model"], "example-model")
+        self.assertNotIn("secret", serialized)
+        self.assertNotIn("complete private prompt", serialized)
+
 
 if __name__ == "__main__":
     unittest.main()
