@@ -30,7 +30,7 @@ The model never invents media timestamps. It selects stable transcript segment i
 
 ## Current status
 
-The media-ingestion and local-project foundation is complete, and valid MLX Whisper word-timestamp output can now be mapped deterministically into Transcript v1. The next implementation step is provider error handling for incomplete and failed transcriptions.
+The media-ingestion and local-project foundation is complete. MLX Whisper output can be mapped deterministically into Transcript v1, with safe domain errors for unavailable backends, failed inference, empty results, and incomplete word timestamps. The next implementation step is an optional integration test with real short audio.
 
 ## Development
 

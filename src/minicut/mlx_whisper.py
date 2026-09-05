@@ -3,10 +3,11 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
+from importlib import import_module
 from pathlib import Path
 from typing import Protocol, cast
 
-from minicut.errors import UserInputError
+from minicut.errors import MiniCutError, ProcessingError, UserInputError
 from minicut.transcript import (
     Transcript,
     TranscriptSource,
@@ -81,17 +82,35 @@ def transcribe_with_mlx(
     source_path: str | Path,
     config: MlxWhisperConfig,
     *,
-    transcribe: MlxTranscribeCallable,
+    transcribe: MlxTranscribeCallable | None = None,
 ) -> dict[str, object]:
     """Call MLX Whisper with word-level timestamps enabled."""
-    return transcribe(
-        str(source_path),
-        path_or_hf_repo=config.model_repository,
-        language=config.language,
-        initial_prompt=config.initial_prompt,
-        word_timestamps=True,
-        verbose=False,
-    )
+    backend = transcribe if transcribe is not None else _load_mlx_transcribe()
+    try:
+        return backend(
+            str(source_path),
+            path_or_hf_repo=config.model_repository,
+            language=config.language,
+            initial_prompt=config.initial_prompt,
+            word_timestamps=True,
+            verbose=False,
+        )
+    except MiniCutError:
+        raise
+    except Exception as error:
+        raise ProcessingError("MLX Whisper transcription failed") from error
+
+
+def _load_mlx_transcribe() -> MlxTranscribeCallable:
+    try:
+        module = import_module("mlx_whisper")
+    except (ImportError, OSError) as error:
+        raise ProcessingError("MLX Whisper backend is not available") from error
+
+    backend = getattr(module, "transcribe", None)
+    if not callable(backend):
+        raise ProcessingError("MLX Whisper backend is not available")
+    return cast(MlxTranscribeCallable, backend)
 
 
 def _seconds_to_milliseconds(value: object) -> int:
@@ -99,7 +118,7 @@ def _seconds_to_milliseconds(value: object) -> int:
     return int((seconds * 1_000).to_integral_value(rounding=ROUND_HALF_UP))
 
 
-def map_mlx_transcription(
+def _map_mlx_transcription(
     response: Mapping[str, object],
     *,
     asset_id: str,
@@ -170,6 +189,29 @@ def map_mlx_transcription(
         words=tuple(words),
         utterances=tuple(utterances),
     )
+
+
+def map_mlx_transcription(
+    response: Mapping[str, object],
+    *,
+    asset_id: str,
+    config: MlxWhisperConfig,
+) -> Transcript:
+    """Map an MLX response while keeping provider failures user-safe."""
+    try:
+        transcript = _map_mlx_transcription(
+            response,
+            asset_id=asset_id,
+            config=config,
+        )
+    except (ArithmeticError, AttributeError, KeyError, TypeError, ValueError) as error:
+        raise ProcessingError(
+            "MLX Whisper returned invalid or incomplete word timestamps"
+        ) from error
+
+    if not transcript.words:
+        raise ProcessingError("MLX Whisper returned no timestamped words")
+    return transcript
 
 
 __all__ = [

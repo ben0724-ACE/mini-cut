@@ -1,7 +1,9 @@
 import copy
 import unittest
+from typing import cast
+from unittest.mock import patch
 
-from minicut.errors import UserInputError
+from minicut.errors import ProcessingError, UserInputError
 from minicut.mlx_whisper import (
     MlxWhisperConfig,
     map_mlx_transcription,
@@ -89,6 +91,28 @@ class RecordingMlxTranscribe:
         return self.result
 
 
+class FailingMlxTranscribe:
+    def __call__(
+        self,
+        audio: str,
+        *,
+        path_or_hf_repo: str,
+        language: str,
+        initial_prompt: str | None,
+        word_timestamps: bool,
+        verbose: bool,
+    ) -> dict[str, object]:
+        del (
+            audio,
+            path_or_hf_repo,
+            language,
+            initial_prompt,
+            word_timestamps,
+            verbose,
+        )
+        raise RuntimeError("failed at /Users/private/model/cache")
+
+
 class MlxWhisperConfigTest(unittest.TestCase):
     def test_defaults_target_the_verified_turbo_repository_for_chinese(self) -> None:
         config = MlxWhisperConfig()
@@ -160,6 +184,36 @@ class MlxWhisperInvocationTest(unittest.TestCase):
 
         self.assertIsNone(backend.initial_prompt)
 
+    def test_inference_failure_becomes_safe_processing_error(self) -> None:
+        with self.assertRaisesRegex(
+            ProcessingError,
+            "MLX Whisper transcription failed",
+        ) as raised:
+            transcribe_with_mlx(
+                "/media/source.mov",
+                MlxWhisperConfig(),
+                transcribe=FailingMlxTranscribe(),
+            )
+
+        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
+        self.assertNotIn("/Users/private", str(raised.exception))
+
+    def test_missing_default_backend_becomes_safe_processing_error(self) -> None:
+        import_failure = ModuleNotFoundError("mlx_whisper missing in /Users/private")
+
+        with patch(
+            "minicut.mlx_whisper.import_module",
+            side_effect=import_failure,
+        ):
+            with self.assertRaisesRegex(
+                ProcessingError,
+                "MLX Whisper backend is not available",
+            ) as raised:
+                transcribe_with_mlx("/media/source.mov", MlxWhisperConfig())
+
+        self.assertIs(raised.exception.__cause__, import_failure)
+        self.assertNotIn("/Users/private", str(raised.exception))
+
 
 class MlxWhisperMappingTest(unittest.TestCase):
     def test_fixed_chinese_response_maps_to_transcript_v1(self) -> None:
@@ -226,6 +280,54 @@ class MlxWhisperMappingTest(unittest.TestCase):
 
         self.assertEqual(second, first)
         self.assertEqual(raw_response, original_response)
+
+    def test_empty_or_wordless_response_is_rejected(self) -> None:
+        responses: tuple[dict[str, object], ...] = (
+            {"text": "", "language": "zh", "segments": []},
+            {
+                "text": "静音",
+                "language": "zh",
+                "segments": [
+                    {
+                        "start": 0.0,
+                        "end": 1.0,
+                        "text": "静音",
+                        "words": [],
+                    }
+                ],
+            },
+        )
+
+        for response in responses:
+            with self.subTest(response=response):
+                with self.assertRaisesRegex(
+                    ProcessingError,
+                    "no timestamped words",
+                ):
+                    map_mlx_transcription(
+                        response,
+                        asset_id="asset-1",
+                        config=MlxWhisperConfig(),
+                    )
+
+    def test_missing_word_timestamp_becomes_safe_processing_error(self) -> None:
+        response = _raw_mlx_response()
+        segments = cast(list[dict[str, object]], response["segments"])
+        words = cast(list[dict[str, object]], segments[0]["words"])
+        words[0].pop("end")
+
+        with self.assertRaisesRegex(
+            ProcessingError,
+            "invalid or incomplete word timestamps",
+        ) as raised:
+            map_mlx_transcription(
+                response,
+                asset_id="asset-1",
+                config=MlxWhisperConfig(),
+            )
+
+        self.assertIsInstance(raised.exception.__cause__, KeyError)
+        self.assertNotIn("你", str(raised.exception))
 
 
 if __name__ == "__main__":
