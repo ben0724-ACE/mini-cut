@@ -1,6 +1,8 @@
 """Configuration for the MLX Whisper transcription provider."""
 
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol
 
 from minicut.errors import UserInputError
 
@@ -14,6 +16,23 @@ _MODEL_REPOSITORIES = {
     "large-v3": "mlx-community/whisper-large-v3-mlx",
     "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
 }
+
+
+class MlxTranscribeCallable(Protocol):
+    """Callable subset of the mlx_whisper.transcribe API used by MiniCut."""
+
+    def __call__(
+        self,
+        audio: str,
+        *,
+        path_or_hf_repo: str,
+        language: str,
+        initial_prompt: str | None,
+        word_timestamps: bool,
+        verbose: bool,
+    ) -> dict[str, object]:
+        """Return the raw MLX Whisper transcription response."""
+        ...
 
 
 def resolve_mlx_model_repository(model_name: str) -> str:
@@ -47,4 +66,26 @@ class MlxWhisperConfig:
         return resolve_mlx_model_repository(self.model_name)
 
 
-__all__ = ["MlxWhisperConfig", "resolve_mlx_model_repository"]
+def transcribe_with_mlx(
+    source_path: str | Path,
+    config: MlxWhisperConfig,
+    *,
+    transcribe: MlxTranscribeCallable,
+) -> dict[str, object]:
+    """Call MLX Whisper with word-level timestamps enabled."""
+    return transcribe(
+        str(source_path),
+        path_or_hf_repo=config.model_repository,
+        language=config.language,
+        initial_prompt=config.initial_prompt,
+        word_timestamps=True,
+        verbose=False,
+    )
+
+
+__all__ = [
+    "MlxTranscribeCallable",
+    "MlxWhisperConfig",
+    "resolve_mlx_model_repository",
+    "transcribe_with_mlx",
+]

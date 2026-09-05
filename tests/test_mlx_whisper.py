@@ -1,7 +1,40 @@
 import unittest
 
 from minicut.errors import UserInputError
-from minicut.mlx_whisper import MlxWhisperConfig, resolve_mlx_model_repository
+from minicut.mlx_whisper import (
+    MlxWhisperConfig,
+    resolve_mlx_model_repository,
+    transcribe_with_mlx,
+)
+
+
+class RecordingMlxTranscribe:
+    def __init__(self) -> None:
+        self.audio: str | None = None
+        self.path_or_hf_repo: str | None = None
+        self.language: str | None = None
+        self.initial_prompt: str | None = None
+        self.word_timestamps: bool | None = None
+        self.verbose: bool | None = None
+        self.result: dict[str, object] = {"text": "你好", "segments": []}
+
+    def __call__(
+        self,
+        audio: str,
+        *,
+        path_or_hf_repo: str,
+        language: str,
+        initial_prompt: str | None,
+        word_timestamps: bool,
+        verbose: bool,
+    ) -> dict[str, object]:
+        self.audio = audio
+        self.path_or_hf_repo = path_or_hf_repo
+        self.language = language
+        self.initial_prompt = initial_prompt
+        self.word_timestamps = word_timestamps
+        self.verbose = verbose
+        return self.result
 
 
 class MlxWhisperConfigTest(unittest.TestCase):
@@ -39,6 +72,41 @@ class MlxWhisperConfigTest(unittest.TestCase):
     def test_blank_language_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "language"):
             MlxWhisperConfig(language="  ")
+
+
+class MlxWhisperInvocationTest(unittest.TestCase):
+    def test_invocation_enables_word_timestamps_and_uses_config(self) -> None:
+        backend = RecordingMlxTranscribe()
+        config = MlxWhisperConfig(
+            model_name="large-v3-turbo",
+            language="zh",
+            initial_prompt="这是一个产品演示",
+        )
+
+        result = transcribe_with_mlx(
+            "/media/source.mov",
+            config,
+            transcribe=backend,
+        )
+
+        self.assertIs(result, backend.result)
+        self.assertEqual(backend.audio, "/media/source.mov")
+        self.assertEqual(backend.path_or_hf_repo, config.model_repository)
+        self.assertEqual(backend.language, "zh")
+        self.assertEqual(backend.initial_prompt, "这是一个产品演示")
+        self.assertIs(backend.word_timestamps, True)
+        self.assertIs(backend.verbose, False)
+
+    def test_invocation_forwards_an_absent_prompt_as_none(self) -> None:
+        backend = RecordingMlxTranscribe()
+
+        transcribe_with_mlx(
+            "/media/source.mov",
+            MlxWhisperConfig(),
+            transcribe=backend,
+        )
+
+        self.assertIsNone(backend.initial_prompt)
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ The model never invents media timestamps. It selects stable transcript segment i
 
 ## Current status
 
-The media-ingestion and local-project foundation is complete, the Transcript v1 protocol is validated and versioned, and MLX Whisper model configuration is in place. The next implementation step is invoking MLX Whisper with word timestamps enabled.
+The media-ingestion and local-project foundation is complete, the Transcript v1 protocol is validated and versioned, and the MLX Whisper boundary enforces word timestamps. The next implementation step is mapping MLX output into Transcript v1.
 
 ## Development
 
