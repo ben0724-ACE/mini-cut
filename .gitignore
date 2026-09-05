@@ -1,0 +1,50 @@
+# Keep the public repository free of internal Markdown working notes.
+*.md
+!/README.md
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Environments and secrets
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Build and runtime artifacts
+build/
+dist/
+tmp/
+cache/
+artifacts/
+outputs/
+*.log
+
+# Large media and model files
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.safetensors
+*.bin
+*.gguf
+
+# Editors
+.idea/
+.vscode/
