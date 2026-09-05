@@ -30,7 +30,7 @@ The model never invents media timestamps. It selects stable transcript segment i
 
 ## Current status
 
-The media-ingestion and local-project foundation is complete. MLX Whisper output can be mapped deterministically into Transcript v1, with safe domain errors for unavailable backends, failed inference, empty results, and incomplete word timestamps. The next implementation step is an optional integration test with real short audio.
+The media-ingestion and local-project foundation is complete. The MLX Whisper provider produces validated Transcript v1 data with word timestamps and safe domain errors, and has been verified against real Chinese media on Apple Silicon. The next implementation step is the replaceable open-source Whisper provider.
 
 ## Development
 
@@ -39,6 +39,13 @@ Create or update the local environment, then run the complete quality gate:
 ```bash
 uv sync
 uv run python tools/check.py
+```
+
+Real MLX inference is opt-in so the default test suite never downloads or loads a model. In an environment that provides `mlx-whisper`, point the integration test at a local media file:
+
+```bash
+MINICUT_MLX_INTEGRATION_MEDIA=/path/to/media.mov \
+  python -m pytest tests/integration/test_mlx_whisper_integration.py
 ```
 
 ## Development principles
