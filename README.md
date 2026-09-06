@@ -30,7 +30,7 @@ The model never invents media timestamps. It selects stable transcript segment i
 
 ## Current status
 
-The media-ingestion and local-project foundation is complete. MLX Whisper and open-source Whisper share the same validated Transcript v1 output contract, including word timestamps and absolute time across VAD chunks. Transcription results now support structured cache hits, configuration invalidation, and atomic local persistence; the next implementation step is progress reporting and cooperative cancellation.
+The media-ingestion and local-project foundation is complete. MLX Whisper and open-source Whisper share the same validated Transcript v1 output contract, including word timestamps and absolute time across VAD chunks. Transcription tasks now support cache reuse, progress phases, and cooperative cancellation without publishing cancelled results. The next implementation step is deterministic text normalization.
 
 ## Development
 
