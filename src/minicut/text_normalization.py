@@ -27,6 +27,9 @@ _PUNCTUATION_TRANSLATION = str.maketrans(
 _CJK_PUNCTUATION = "，。！？；：、"
 _OPENING_PUNCTUATION = "（【《「『“‘"
 _CLOSING_PUNCTUATION = "）】》」』”’"
+_CJK_CHARACTER_RANGE = "\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
+_WESTERN_WORD_CHARACTER_RANGE = "A-Za-z0-9"
+_ASCII_TRAILING_PUNCTUATION = ",.;:!?"
 
 
 class ChineseScriptPolicy(StrEnum):
@@ -81,9 +84,25 @@ def _normalize_spacing_and_punctuation(text: str) -> str:
         r"\1",
         normalized,
     )
-    return re.sub(
+    normalized = re.sub(
         rf"\s+([{re.escape(_CLOSING_PUNCTUATION)}])",
         r"\1",
+        normalized,
+    )
+    normalized = re.sub(
+        rf"(?<=[{_CJK_CHARACTER_RANGE}])\s+(?=[{_CJK_CHARACTER_RANGE}])",
+        "",
+        normalized,
+    )
+    normalized = re.sub(
+        rf"\s+([{re.escape(_ASCII_TRAILING_PUNCTUATION)}])",
+        r"\1",
+        normalized,
+    )
+    return re.sub(
+        rf"(?<=[{_CJK_CHARACTER_RANGE}])(?=[{_WESTERN_WORD_CHARACTER_RANGE}])"
+        rf"|(?<=[{_WESTERN_WORD_CHARACTER_RANGE}])(?=[{_CJK_CHARACTER_RANGE}])",
+        " ",
         normalized,
     )
 

@@ -82,7 +82,7 @@ class TextNormalizationTest(unittest.TestCase):
             converter=converter,
         )
 
-        self.assertEqual(result, "繁體 中文")
+        self.assertEqual(result, "繁體中文")
         self.assertEqual(converter.inputs, [])
 
     def test_blank_and_punctuation_only_text_are_deterministic(self) -> None:
@@ -91,6 +91,30 @@ class TextNormalizationTest(unittest.TestCase):
         self.assertEqual(normalize_text(" \t\n", converter=converter), "")
         self.assertEqual(normalize_text("  ﹗  ", converter=converter), "！")
         self.assertEqual(converter.inputs, ["！"])
+
+    def test_chinese_words_are_joined_without_artificial_spaces(self) -> None:
+        result = normalize_text(
+            "你 好 ， 世 界",
+            policy=TextNormalizationPolicy(chinese_script=ChineseScriptPolicy.PRESERVE),
+        )
+
+        self.assertEqual(result, "你好，世界")
+
+    def test_english_spacing_preserves_contractions_and_decimal_points(self) -> None:
+        result = normalize_text(
+            "  Don't  change version 3.14 , please !  ",
+            policy=TextNormalizationPolicy(chinese_script=ChineseScriptPolicy.PRESERVE),
+        )
+
+        self.assertEqual(result, "Don't change version 3.14, please!")
+
+    def test_mixed_chinese_and_latin_text_has_stable_boundaries(self) -> None:
+        result = normalize_text(
+            "使用Python和Whisper large-v3模型",
+            policy=TextNormalizationPolicy(chinese_script=ChineseScriptPolicy.PRESERVE),
+        )
+
+        self.assertEqual(result, "使用 Python 和 Whisper large-v3 模型")
 
 
 class TranscriptWordNormalizationTest(unittest.TestCase):
@@ -104,7 +128,7 @@ class TranscriptWordNormalizationTest(unittest.TestCase):
         self.assertEqual(
             mappings,
             (
-                WordTextMapping("word-1", "  繁體\t中文  ", "繁体 中文"),
+                WordTextMapping("word-1", "  繁體\t中文  ", "繁体中文"),
                 WordTextMapping("word-2", " ﹗ ", "！"),
                 WordTextMapping("word-3", " \n ", ""),
             ),
@@ -117,7 +141,7 @@ class TranscriptWordNormalizationTest(unittest.TestCase):
             ((100, 500), (600, 700), (800, 900)),
         )
         self.assertEqual(transcript.to_dict(), original)
-        self.assertEqual(converter.inputs, ["繁體 中文", "！"])
+        self.assertEqual(converter.inputs, ["繁體中文", "！"])
 
     def test_default_converter_is_loaded_once_for_the_whole_transcript(self) -> None:
         converter = ReplacingConverter()
