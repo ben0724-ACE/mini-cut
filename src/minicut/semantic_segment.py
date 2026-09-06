@@ -13,6 +13,16 @@ class ContextDirection(StrEnum):
     FOLLOWING = "following"
 
 
+class SegmentLabel(StrEnum):
+    """A conservative rule-produced candidate label, not an edit decision."""
+
+    CONTENT = "content"
+    FILLER = "filler"
+    SILENCE = "silence"
+    FALSE_START = "false_start"
+    REPETITION_CANDIDATE = "repetition_candidate"
+
+
 @dataclass(slots=True)
 class SegmentContextDependency:
     """A directional reference to context required by a segment."""
@@ -51,6 +61,7 @@ class SemanticSegment:
     utterance_ids: tuple[str, ...]
     word_ids: tuple[str, ...]
     context_dependencies: tuple[SegmentContextDependency, ...] = ()
+    labels: tuple[SegmentLabel, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.segment_id.strip():
@@ -71,6 +82,8 @@ class SemanticSegment:
             raise ValueError("segment cannot have a context dependency on itself")
         if len(set(dependency_ids)) != len(dependency_ids):
             raise ValueError("segment context dependency IDs must be unique")
+        if len(set(self.labels)) != len(self.labels):
+            raise ValueError("segment labels must be unique")
 
     @staticmethod
     def _validate_coverage(label: str, identifiers: tuple[str, ...]) -> None:
@@ -91,6 +104,7 @@ class SemanticSegment:
             "context_dependencies": [
                 dependency.to_dict() for dependency in self.context_dependencies
             ],
+            "labels": [label.value for label in self.labels],
         }
 
     @classmethod
@@ -100,6 +114,7 @@ class SemanticSegment:
             list[dict[str, object]],
             data["context_dependencies"],
         )
+        label_data = cast(list[str], data.get("labels", []))
         return cls(
             segment_id=cast(str, data["segment_id"]),
             text=cast(str, data["text"]),
@@ -111,6 +126,7 @@ class SemanticSegment:
                 SegmentContextDependency.from_dict(dependency)
                 for dependency in dependency_data
             ),
+            labels=tuple(SegmentLabel(label) for label in label_data),
         )
 
 
@@ -149,6 +165,7 @@ def validate_segment_context_dependencies(
 __all__ = [
     "ContextDirection",
     "SegmentContextDependency",
+    "SegmentLabel",
     "SemanticSegment",
     "generate_segment_id",
     "validate_segment_context_dependencies",

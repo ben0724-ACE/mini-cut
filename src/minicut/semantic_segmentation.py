@@ -1,9 +1,16 @@
 """Deterministic construction of initial semantic segments."""
 
+from dataclasses import replace
 from itertools import pairwise
 
-from minicut.semantic_segment import SemanticSegment, generate_segment_id
+from minicut.semantic_segment import SegmentLabel, SemanticSegment, generate_segment_id
 from minicut.transcript import Transcript, Utterance
+
+_EXPLICIT_SILENCE_MARKERS = frozenset(
+    {"[silence]", "(silence)", "<silence>", "[静音]", "【静音】", "（静音）"}
+)
+_PURE_FILLERS = frozenset({"嗯", "嗯嗯", "呃", "啊", "呃嗯", "um", "uh", "erm", "hmm"})
+_FALSE_START_ENDINGS = ("——", "—", "...", "…", "-")
 
 
 def _validate_utterances(
@@ -56,4 +63,35 @@ def build_rule_based_segments(
     )
 
 
-__all__ = ["build_rule_based_segments"]
+def _canonical_comparison_text(text: str) -> str:
+    return "".join(character for character in text.casefold() if character.isalnum())
+
+
+def mark_segment_candidates(
+    segments: tuple[SemanticSegment, ...],
+) -> tuple[SemanticSegment, ...]:
+    """Return segments with conservative rule-based candidate labels."""
+    marked: list[SemanticSegment] = []
+    previous_text = ""
+    for segment in segments:
+        stripped_text = segment.text.strip()
+        canonical_text = _canonical_comparison_text(stripped_text)
+        labels: list[SegmentLabel] = []
+        if stripped_text.casefold() in _EXPLICIT_SILENCE_MARKERS:
+            labels.append(SegmentLabel.SILENCE)
+        if canonical_text in _PURE_FILLERS:
+            labels.append(SegmentLabel.FILLER)
+        if stripped_text.endswith(_FALSE_START_ENDINGS):
+            labels.append(SegmentLabel.FALSE_START)
+        if canonical_text and canonical_text == previous_text:
+            labels.append(SegmentLabel.REPETITION_CANDIDATE)
+        if not labels:
+            labels.append(SegmentLabel.CONTENT)
+
+        marked.append(replace(segment, labels=tuple(labels)))
+        previous_text = canonical_text
+
+    return tuple(marked)
+
+
+__all__ = ["build_rule_based_segments", "mark_segment_candidates"]
