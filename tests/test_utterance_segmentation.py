@@ -1,6 +1,10 @@
 import unittest
 
-from minicut.segmentation import SegmentationPolicy, build_utterances_by_pause
+from minicut.segmentation import (
+    SegmentationPolicy,
+    build_utterances,
+    build_utterances_by_pause,
+)
 from minicut.text_normalization import WordTextMapping
 from minicut.transcript import (
     Transcript,
@@ -109,6 +113,71 @@ class PauseSegmentationTest(unittest.TestCase):
                 _transcript(words),
                 (WordTextMapping("another-word", "你好", "你好"),),
             )
+
+
+class UtteranceBoundaryTest(unittest.TestCase):
+    def test_chinese_and_english_terminal_punctuation_end_an_utterance(
+        self,
+    ) -> None:
+        for terminator in ("。", "！", "？", ".", "!", "?"):
+            with self.subTest(terminator=terminator):
+                words = (
+                    Word("word-1", f"first{terminator}", 0, 400),
+                    Word("word-2", "next", 500, 800),
+                )
+
+                utterances = build_utterances(_transcript(words), _mappings(words))
+
+                self.assertEqual(
+                    tuple(utterance.word_ids for utterance in utterances),
+                    (("word-1",), ("word-2",)),
+                )
+
+    def test_non_terminal_punctuation_does_not_force_a_split(self) -> None:
+        words = (
+            Word("word-1", "however,", 0, 400),
+            Word("word-2", "continue", 500, 800),
+        )
+
+        utterances = build_utterances(_transcript(words), _mappings(words))
+
+        self.assertEqual(len(utterances), 1)
+        self.assertEqual(utterances[0].text, "however, continue")
+
+    def test_exact_maximum_is_allowed_and_excess_starts_a_new_group(self) -> None:
+        words = (
+            Word("word-1", "one", 0, 500),
+            Word("word-2", "two", 600, 1_500),
+            Word("word-3", "three", 1_600, 1_700),
+        )
+        policy = SegmentationPolicy(min_duration_ms=100, max_duration_ms=1_500)
+
+        utterances = build_utterances(
+            _transcript(words),
+            _mappings(words),
+            policy=policy,
+        )
+
+        self.assertEqual(
+            tuple(utterance.word_ids for utterance in utterances),
+            (("word-1", "word-2"), ("word-3",)),
+        )
+
+    def test_single_word_longer_than_maximum_remains_atomic(self) -> None:
+        words = (
+            Word("word-1", "extraordinary", 0, 2_000),
+            Word("word-2", "next", 2_100, 2_300),
+        )
+        policy = SegmentationPolicy(min_duration_ms=100, max_duration_ms=1_500)
+
+        utterances = build_utterances(
+            _transcript(words),
+            _mappings(words),
+            policy=policy,
+        )
+
+        self.assertEqual(utterances[0].word_ids, ("word-1",))
+        self.assertEqual(utterances[0].end_ms - utterances[0].start_ms, 2_000)
 
 
 if __name__ == "__main__":

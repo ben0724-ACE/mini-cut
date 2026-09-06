@@ -30,7 +30,7 @@ The model never invents media timestamps. It selects stable transcript segment i
 
 ## Current status
 
-The media-ingestion and local-project foundation is complete. MLX Whisper and open-source Whisper share the same validated Transcript v1 output contract, including word timestamps and absolute time across VAD chunks. Transcription tasks support cache reuse and cooperative cancellation. Text normalization covers Chinese, English, and mixed text with traceable raw-to-normalized word mapping. Utterance construction now groups words across short gaps and splits at configurable pause boundaries; the next step adds maximum-duration and terminal-punctuation splitting.
+The media-ingestion and local-project foundation is complete. MLX Whisper and open-source Whisper share the same validated Transcript v1 output contract, including word timestamps and absolute time across VAD chunks. Transcription tasks support cache reuse and cooperative cancellation. Text normalization covers Chinese, English, and mixed text with traceable raw-to-normalized word mapping. Utterance construction now combines configurable pause, maximum-duration, and terminal-punctuation boundaries; the next step protects very short groups and mixed-language boundaries.
 
 ## Development
 

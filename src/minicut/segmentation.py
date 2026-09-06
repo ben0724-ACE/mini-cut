@@ -10,6 +10,8 @@ from minicut.text_normalization import (
 )
 from minicut.transcript import Transcript, Utterance, Word, generate_utterance_id
 
+_TERMINAL_PUNCTUATION = "。！？.!?"
+
 
 @dataclass(slots=True)
 class SegmentationPolicy:
@@ -73,24 +75,33 @@ def _build_utterance(
     )
 
 
-def build_utterances_by_pause(
+def _build_utterances(
     transcript: Transcript,
     mappings: tuple[WordTextMapping, ...],
     *,
-    policy: SegmentationPolicy | None = None,
+    policy: SegmentationPolicy,
+    include_text_boundaries: bool,
 ) -> tuple[Utterance, ...]:
-    """Group aligned transcript words whenever their gap stays below the threshold."""
     _validate_mapping_alignment(transcript, mappings)
     if not transcript.words:
         return ()
 
-    selected_policy = policy if policy is not None else SegmentationPolicy()
     utterances: list[Utterance] = []
     group_start = 0
     for index in range(1, len(transcript.words)):
         previous = transcript.words[index - 1]
         current = transcript.words[index]
-        if current.start_ms - previous.end_ms < selected_policy.pause_threshold_ms:
+        pause_boundary = current.start_ms - previous.end_ms >= policy.pause_threshold_ms
+        terminal_boundary = (
+            include_text_boundaries
+            and mappings[index - 1].normalized_text[-1:] in _TERMINAL_PUNCTUATION
+        )
+        duration_boundary = (
+            include_text_boundaries
+            and current.end_ms - transcript.words[group_start].start_ms
+            > policy.max_duration_ms
+        )
+        if not (pause_boundary or terminal_boundary or duration_boundary):
             continue
 
         utterances.append(
@@ -114,4 +125,38 @@ def build_utterances_by_pause(
     return tuple(utterances)
 
 
-__all__ = ["SegmentationPolicy", "build_utterances_by_pause"]
+def build_utterances_by_pause(
+    transcript: Transcript,
+    mappings: tuple[WordTextMapping, ...],
+    *,
+    policy: SegmentationPolicy | None = None,
+) -> tuple[Utterance, ...]:
+    """Group aligned transcript words using pause boundaries only."""
+    return _build_utterances(
+        transcript,
+        mappings,
+        policy=policy if policy is not None else SegmentationPolicy(),
+        include_text_boundaries=False,
+    )
+
+
+def build_utterances(
+    transcript: Transcript,
+    mappings: tuple[WordTextMapping, ...],
+    *,
+    policy: SegmentationPolicy | None = None,
+) -> tuple[Utterance, ...]:
+    """Build utterances from pause, terminal punctuation, and duration boundaries."""
+    return _build_utterances(
+        transcript,
+        mappings,
+        policy=policy if policy is not None else SegmentationPolicy(),
+        include_text_boundaries=True,
+    )
+
+
+__all__ = [
+    "SegmentationPolicy",
+    "build_utterances",
+    "build_utterances_by_pause",
+]
