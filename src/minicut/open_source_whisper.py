@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from minicut.errors import MiniCutError, ProcessingError, UserInputError
+from minicut.transcript import Transcript, TranscriptSource
+from minicut.whisper_mapping import map_whisper_response
 
 _SUPPORTED_MODELS = frozenset(
     {
@@ -112,6 +114,32 @@ def offset_vad_chunk_timestamps(
     return shifted
 
 
+def map_open_source_whisper_transcription(
+    response: Mapping[str, object],
+    *,
+    asset_id: str,
+    config: OpenSourceWhisperConfig,
+) -> Transcript:
+    """Map an open-source Whisper response to the shared Transcript contract."""
+    try:
+        transcript = map_whisper_response(
+            response,
+            source=TranscriptSource(
+                asset_id=asset_id,
+                provider="open-source-whisper",
+                model=config.model_name,
+            ),
+        )
+    except (ArithmeticError, AttributeError, KeyError, TypeError, ValueError) as error:
+        raise ProcessingError(
+            "open-source Whisper returned invalid or incomplete word timestamps"
+        ) from error
+
+    if not transcript.words:
+        raise ProcessingError("open-source Whisper returned no timestamped words")
+    return transcript
+
+
 def _load_open_source_whisper_loader() -> OpenSourceWhisperLoader:
     try:
         module = import_module("whisper")
@@ -160,6 +188,7 @@ __all__ = [
     "OpenSourceWhisperConfig",
     "OpenSourceWhisperLoader",
     "OpenSourceWhisperModel",
+    "map_open_source_whisper_transcription",
     "offset_vad_chunk_timestamps",
     "transcribe_with_open_source_whisper",
 ]
