@@ -75,6 +75,85 @@ def _build_utterance(
     )
 
 
+def _contains_cjk(text: str) -> bool:
+    return any(
+        "\u3400" <= character <= "\u4dbf"
+        or "\u4e00" <= character <= "\u9fff"
+        or "\uf900" <= character <= "\ufaff"
+        for character in text
+    )
+
+
+def _contains_western_word_character(text: str) -> bool:
+    return any(character.isascii() and character.isalnum() for character in text)
+
+
+def _is_mixed_language_boundary(left: str, right: str) -> bool:
+    return (_contains_cjk(left) and _contains_western_word_character(right)) or (
+        _contains_western_word_character(left) and _contains_cjk(right)
+    )
+
+
+def _span_duration_ms(words: tuple[Word, ...], span: tuple[int, int]) -> int:
+    start, end = span
+    return words[end - 1].end_ms - words[start].start_ms
+
+
+def _can_merge_spans(
+    words: tuple[Word, ...],
+    left: tuple[int, int],
+    right: tuple[int, int],
+    policy: SegmentationPolicy,
+) -> bool:
+    gap_ms = words[right[0]].start_ms - words[left[1] - 1].end_ms
+    merged_duration_ms = words[right[1] - 1].end_ms - words[left[0]].start_ms
+    return (
+        gap_ms < policy.pause_threshold_ms
+        and merged_duration_ms <= policy.max_duration_ms
+    )
+
+
+def _merge_short_spans(
+    words: tuple[Word, ...],
+    spans: list[tuple[int, int]],
+    policy: SegmentationPolicy,
+) -> list[tuple[int, int]]:
+    index = 0
+    while index < len(spans):
+        if _span_duration_ms(words, spans[index]) >= policy.min_duration_ms:
+            index += 1
+            continue
+
+        candidates: list[tuple[int, int]] = []
+        if index > 0 and _can_merge_spans(
+            words, spans[index - 1], spans[index], policy
+        ):
+            previous_gap = (
+                words[spans[index][0]].start_ms - words[spans[index - 1][1] - 1].end_ms
+            )
+            candidates.append((previous_gap, index - 1))
+        if index + 1 < len(spans) and _can_merge_spans(
+            words, spans[index], spans[index + 1], policy
+        ):
+            next_gap = (
+                words[spans[index + 1][0]].start_ms - words[spans[index][1] - 1].end_ms
+            )
+            candidates.append((next_gap, index))
+
+        if not candidates:
+            index += 1
+            continue
+
+        _, left_index = min(candidates)
+        left = spans[left_index]
+        right = spans[left_index + 1]
+        spans[left_index] = (left[0], right[1])
+        del spans[left_index + 1]
+        index = max(0, left_index - 1)
+
+    return spans
+
+
 def _build_utterances(
     transcript: Transcript,
     mappings: tuple[WordTextMapping, ...],
@@ -86,8 +165,9 @@ def _build_utterances(
     if not transcript.words:
         return ()
 
-    utterances: list[Utterance] = []
+    spans: list[tuple[int, int]] = []
     group_start = 0
+    pending_boundary = False
     for index in range(1, len(transcript.words)):
         previous = transcript.words[index - 1]
         current = transcript.words[index]
@@ -101,28 +181,43 @@ def _build_utterances(
             and current.end_ms - transcript.words[group_start].start_ms
             > policy.max_duration_ms
         )
-        if not (pause_boundary or terminal_boundary or duration_boundary):
+        boundary_requested = pause_boundary or terminal_boundary or duration_boundary
+        if current.start_ms < previous.end_ms:
+            pending_boundary = pending_boundary or boundary_requested
+            continue
+        if not (pending_boundary or boundary_requested):
             continue
 
-        utterances.append(
-            _build_utterance(
-                transcript.transcript_id,
-                len(utterances),
-                transcript.words[group_start:index],
-                mappings[group_start:index],
+        boundary_index = index
+        if (
+            duration_boundary
+            and not pause_boundary
+            and not terminal_boundary
+            and index - group_start >= 2
+            and _is_mixed_language_boundary(
+                mappings[index - 1].normalized_text,
+                mappings[index].normalized_text,
             )
-        )
-        group_start = index
+        ):
+            boundary_index -= 1
 
-    utterances.append(
+        spans.append((group_start, boundary_index))
+        group_start = boundary_index
+        pending_boundary = False
+
+    spans.append((group_start, len(transcript.words)))
+    if include_text_boundaries:
+        spans = _merge_short_spans(transcript.words, spans, policy)
+
+    return tuple(
         _build_utterance(
             transcript.transcript_id,
-            len(utterances),
-            transcript.words[group_start:],
-            mappings[group_start:],
+            ordinal,
+            transcript.words[start:end],
+            mappings[start:end],
         )
+        for ordinal, (start, end) in enumerate(spans)
     )
-    return tuple(utterances)
 
 
 def build_utterances_by_pause(

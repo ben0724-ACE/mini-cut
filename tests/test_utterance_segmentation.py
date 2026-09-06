@@ -126,7 +126,11 @@ class UtteranceBoundaryTest(unittest.TestCase):
                     Word("word-2", "next", 500, 800),
                 )
 
-                utterances = build_utterances(_transcript(words), _mappings(words))
+                utterances = build_utterances(
+                    _transcript(words),
+                    _mappings(words),
+                    policy=SegmentationPolicy(min_duration_ms=100),
+                )
 
                 self.assertEqual(
                     tuple(utterance.word_ids for utterance in utterances),
@@ -178,6 +182,96 @@ class UtteranceBoundaryTest(unittest.TestCase):
 
         self.assertEqual(utterances[0].word_ids, ("word-1",))
         self.assertEqual(utterances[0].end_ms - utterances[0].start_ms, 2_000)
+
+
+class ShortGroupAndMixedBoundaryTest(unittest.TestCase):
+    def test_short_groups_merge_across_soft_boundaries(self) -> None:
+        cases = (
+            (
+                (
+                    Word("word-1", "好。", 0, 300),
+                    Word("word-2", "继续", 400, 1_400),
+                ),
+                ("word-1", "word-2"),
+            ),
+            (
+                (
+                    Word("word-1", "继续。", 0, 1_200),
+                    Word("word-2", "好", 1_300, 1_500),
+                ),
+                ("word-1", "word-2"),
+            ),
+        )
+
+        for words, expected_word_ids in cases:
+            with self.subTest(words=words):
+                utterances = build_utterances(_transcript(words), _mappings(words))
+
+                self.assertEqual(len(utterances), 1)
+                self.assertEqual(utterances[0].word_ids, expected_word_ids)
+
+    def test_short_group_does_not_merge_across_a_hard_pause(self) -> None:
+        words = (
+            Word("word-1", "好。", 0, 300),
+            Word("word-2", "继续", 1_100, 2_100),
+        )
+
+        utterances = build_utterances(_transcript(words), _mappings(words))
+
+        self.assertEqual(
+            tuple(utterance.word_ids for utterance in utterances),
+            (("word-1",), ("word-2",)),
+        )
+
+    def test_maximum_duration_does_not_split_a_mixed_language_pair(self) -> None:
+        words = (
+            Word("word-1", "前文", 0, 13_000),
+            Word("word-2", "Python", 13_100, 14_000),
+            Word("word-3", "教程", 14_100, 15_100),
+        )
+
+        utterances = build_utterances(_transcript(words), _mappings(words))
+
+        self.assertEqual(
+            tuple(utterance.word_ids for utterance in utterances),
+            (("word-1",), ("word-2", "word-3")),
+        )
+
+    def test_final_groups_cover_every_word_once_in_source_order(self) -> None:
+        words = (
+            Word("word-1", "开始。", 0, 1_200),
+            Word("word-2", "短句", 1_300, 1_500),
+            Word("word-3", "English", 1_600, 2_500),
+            Word("word-4", "结束", 3_300, 4_500),
+        )
+
+        utterances = build_utterances(_transcript(words), _mappings(words))
+
+        self.assertEqual(
+            tuple(word_id for item in utterances for word_id in item.word_ids),
+            tuple(word.word_id for word in words),
+        )
+        self.assertTrue(
+            all(
+                current.start_ms >= previous.end_ms
+                for previous, current in zip(utterances, utterances[1:], strict=False)
+            )
+        )
+
+    def test_overlapping_words_are_not_split_into_overlapping_utterances(self) -> None:
+        words = (
+            Word("word-1", "first.", 0, 500),
+            Word("word-2", "next", 450, 900),
+        )
+
+        utterances = build_utterances(
+            _transcript(words),
+            _mappings(words),
+            policy=SegmentationPolicy(min_duration_ms=100),
+        )
+
+        self.assertEqual(len(utterances), 1)
+        self.assertEqual(utterances[0].word_ids, ("word-1", "word-2"))
 
 
 if __name__ == "__main__":
