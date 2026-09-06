@@ -1,10 +1,14 @@
 import unittest
+from unittest.mock import patch
 
 from minicut.text_normalization import (
     ChineseScriptPolicy,
     TextNormalizationPolicy,
+    WordTextMapping,
     normalize_text,
+    normalize_transcript_words,
 )
+from minicut.transcript import Transcript, TranscriptSource, Word
 
 
 class RecordingConverter:
@@ -15,6 +19,32 @@ class RecordingConverter:
     def convert(self, text: str) -> str:
         self.inputs.append(text)
         return self.result
+
+
+class ReplacingConverter:
+    def __init__(self) -> None:
+        self.inputs: list[str] = []
+
+    def convert(self, text: str) -> str:
+        self.inputs.append(text)
+        return text.replace("體", "体").replace("與", "与")
+
+
+def _transcript_with_raw_words() -> Transcript:
+    return Transcript(
+        transcript_id="transcript-1",
+        source=TranscriptSource(
+            asset_id="asset-1",
+            provider="mlx-whisper",
+            model="small",
+        ),
+        language="zh",
+        words=(
+            Word("word-1", "  繁體\t中文  ", 100, 500, 0.98),
+            Word("word-2", " ﹗ ", 600, 700, 0.96),
+            Word("word-3", " \n ", 800, 900, 0.94),
+        ),
+    )
 
 
 class TextNormalizationTest(unittest.TestCase):
@@ -61,6 +91,44 @@ class TextNormalizationTest(unittest.TestCase):
         self.assertEqual(normalize_text(" \t\n", converter=converter), "")
         self.assertEqual(normalize_text("  ﹗  ", converter=converter), "！")
         self.assertEqual(converter.inputs, ["！"])
+
+
+class TranscriptWordNormalizationTest(unittest.TestCase):
+    def test_mapping_preserves_raw_text_order_identity_and_timestamps(self) -> None:
+        transcript = _transcript_with_raw_words()
+        original = transcript.to_dict()
+        converter = ReplacingConverter()
+
+        mappings = normalize_transcript_words(transcript, converter=converter)
+
+        self.assertEqual(
+            mappings,
+            (
+                WordTextMapping("word-1", "  繁體\t中文  ", "繁体 中文"),
+                WordTextMapping("word-2", " ﹗ ", "！"),
+                WordTextMapping("word-3", " \n ", ""),
+            ),
+        )
+        words_by_id = {word.word_id: word for word in transcript.words}
+        for mapping in mappings:
+            self.assertEqual(words_by_id[mapping.word_id].text, mapping.raw_text)
+        self.assertEqual(
+            tuple((word.start_ms, word.end_ms) for word in transcript.words),
+            ((100, 500), (600, 700), (800, 900)),
+        )
+        self.assertEqual(transcript.to_dict(), original)
+        self.assertEqual(converter.inputs, ["繁體 中文", "！"])
+
+    def test_default_converter_is_loaded_once_for_the_whole_transcript(self) -> None:
+        converter = ReplacingConverter()
+
+        with patch(
+            "minicut.text_normalization._load_simplified_converter",
+            return_value=converter,
+        ) as load_converter:
+            normalize_transcript_words(_transcript_with_raw_words())
+
+        load_converter.assert_called_once_with()
 
 
 if __name__ == "__main__":

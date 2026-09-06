@@ -7,6 +7,7 @@ from importlib import import_module
 from typing import Protocol, cast
 
 from minicut.errors import ProcessingError
+from minicut.transcript import Transcript
 
 _PUNCTUATION_TRANSLATION = str.maketrans(
     {
@@ -40,6 +41,15 @@ class TextNormalizationPolicy:
     """Text choices that must remain consistent across the pipeline."""
 
     chinese_script: ChineseScriptPolicy = ChineseScriptPolicy.SIMPLIFIED
+
+
+@dataclass(slots=True)
+class WordTextMapping:
+    """Trace one normalized text value back to its source Word."""
+
+    word_id: str
+    raw_text: str
+    normalized_text: str
 
 
 class ChineseConverter(Protocol):
@@ -99,9 +109,41 @@ def normalize_text(
         raise ProcessingError("Chinese text conversion failed") from error
 
 
+def normalize_transcript_words(
+    transcript: Transcript,
+    *,
+    policy: TextNormalizationPolicy | None = None,
+    converter: ChineseConverter | None = None,
+) -> tuple[WordTextMapping, ...]:
+    """Normalize every Word while preserving its source identity and text."""
+    selected_policy = policy if policy is not None else TextNormalizationPolicy()
+    selected_converter = converter
+    if (
+        transcript.words
+        and selected_policy.chinese_script is ChineseScriptPolicy.SIMPLIFIED
+        and selected_converter is None
+    ):
+        selected_converter = _load_simplified_converter()
+
+    return tuple(
+        WordTextMapping(
+            word_id=word.word_id,
+            raw_text=word.text,
+            normalized_text=normalize_text(
+                word.text,
+                policy=selected_policy,
+                converter=selected_converter,
+            ),
+        )
+        for word in transcript.words
+    )
+
+
 __all__ = [
     "ChineseConverter",
     "ChineseScriptPolicy",
     "TextNormalizationPolicy",
+    "WordTextMapping",
     "normalize_text",
+    "normalize_transcript_words",
 ]
