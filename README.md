@@ -30,7 +30,7 @@ The model never invents media timestamps. It selects stable transcript segment i
 
 ## Current status
 
-The media-ingestion and local-project foundation is complete. The MLX Whisper provider produces validated Transcript v1 data with word timestamps and safe domain errors, and has been verified against real Chinese media on Apple Silicon. A replaceable open-source Whisper boundary now also forces word timestamps; the next implementation step is preserving absolute time across VAD chunks.
+The media-ingestion and local-project foundation is complete. The MLX Whisper provider produces validated Transcript v1 data with word timestamps and safe domain errors, and has been verified against real Chinese media on Apple Silicon. The open-source Whisper boundary also forces word timestamps and preserves absolute Segment and Word time across VAD chunks; the next implementation step is a shared Transcript v1 contract across both providers.
 
 ## Development
 

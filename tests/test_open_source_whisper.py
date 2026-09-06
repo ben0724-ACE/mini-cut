@@ -1,11 +1,36 @@
 import unittest
+from copy import deepcopy
+from typing import cast
 from unittest.mock import patch
 
 from minicut.errors import ProcessingError, UserInputError
 from minicut.open_source_whisper import (
     OpenSourceWhisperConfig,
+    offset_vad_chunk_timestamps,
     transcribe_with_open_source_whisper,
 )
+
+
+def _raw_chunk_response(text: str) -> dict[str, object]:
+    return {
+        "text": text,
+        "language": "zh",
+        "segments": [
+            {
+                "start": 0.1,
+                "end": 0.9,
+                "text": text,
+                "words": [
+                    {
+                        "word": text,
+                        "start": 0.2,
+                        "end": 0.8,
+                        "probability": 0.95,
+                    }
+                ],
+            }
+        ],
+    }
 
 
 class RecordingWhisperModel:
@@ -177,6 +202,49 @@ class OpenSourceWhisperInvocationTest(unittest.TestCase):
 
         self.assertIsInstance(raised.exception.__cause__, RuntimeError)
         self.assertNotIn("/Users/private", str(raised.exception))
+
+
+class OpenSourceWhisperVadOffsetTest(unittest.TestCase):
+    def test_multiple_chunks_get_absolute_segment_and_word_times(self) -> None:
+        first_raw = _raw_chunk_response("第一段")
+        second_raw = _raw_chunk_response("第二段")
+        first_original = deepcopy(first_raw)
+        second_original = deepcopy(second_raw)
+
+        first = offset_vad_chunk_timestamps(first_raw, origin_ms=1_000)
+        second = offset_vad_chunk_timestamps(second_raw, origin_ms=5_000)
+
+        first_segment = cast(list[dict[str, object]], first["segments"])[0]
+        second_segment = cast(list[dict[str, object]], second["segments"])[0]
+        first_word = cast(list[dict[str, object]], first_segment["words"])[0]
+        second_word = cast(list[dict[str, object]], second_segment["words"])[0]
+        self.assertEqual((first_segment["start"], first_segment["end"]), (1.1, 1.9))
+        self.assertEqual((first_word["start"], first_word["end"]), (1.2, 1.8))
+        self.assertEqual((second_segment["start"], second_segment["end"]), (5.1, 5.9))
+        self.assertEqual((second_word["start"], second_word["end"]), (5.2, 5.8))
+        self.assertLess(
+            cast(float, first_word["end"]), cast(float, second_word["start"])
+        )
+        self.assertEqual(first_raw, first_original)
+        self.assertEqual(second_raw, second_original)
+
+    def test_negative_origin_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "origin_ms"):
+            offset_vad_chunk_timestamps(_raw_chunk_response("测试"), origin_ms=-1)
+
+    def test_missing_word_timestamp_becomes_safe_processing_error(self) -> None:
+        response = _raw_chunk_response("测试")
+        segment = cast(list[dict[str, object]], response["segments"])[0]
+        word = cast(list[dict[str, object]], segment["words"])[0]
+        word.pop("start")
+
+        with self.assertRaisesRegex(
+            ProcessingError,
+            "invalid VAD chunk timestamps",
+        ) as raised:
+            offset_vad_chunk_timestamps(response, origin_ms=1_000)
+
+        self.assertIsInstance(raised.exception.__cause__, KeyError)
 
 
 if __name__ == "__main__":

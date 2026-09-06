@@ -1,6 +1,9 @@
 """Open-source Whisper transcription provider."""
 
+from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
+from decimal import Decimal
 from importlib import import_module
 from pathlib import Path
 from typing import Protocol, cast
@@ -79,6 +82,36 @@ class OpenSourceWhisperConfig:
             raise ValueError("device must not be blank")
 
 
+def _offset_seconds(value: object, origin_ms: int) -> float:
+    return float(Decimal(str(value)) + Decimal(origin_ms) / Decimal(1_000))
+
+
+def offset_vad_chunk_timestamps(
+    response: Mapping[str, object],
+    *,
+    origin_ms: int,
+) -> dict[str, object]:
+    """Return a response whose chunk-relative times use the media origin."""
+    if origin_ms < 0:
+        raise ValueError("origin_ms must not be negative")
+
+    shifted = deepcopy(dict(response))
+    try:
+        segments = cast(list[dict[str, object]], shifted["segments"])
+        for segment in segments:
+            segment["start"] = _offset_seconds(segment["start"], origin_ms)
+            segment["end"] = _offset_seconds(segment["end"], origin_ms)
+            words = cast(list[dict[str, object]], segment["words"])
+            for word in words:
+                word["start"] = _offset_seconds(word["start"], origin_ms)
+                word["end"] = _offset_seconds(word["end"], origin_ms)
+    except (ArithmeticError, AttributeError, KeyError, TypeError, ValueError) as error:
+        raise ProcessingError(
+            "open-source Whisper returned invalid VAD chunk timestamps"
+        ) from error
+    return shifted
+
+
 def _load_open_source_whisper_loader() -> OpenSourceWhisperLoader:
     try:
         module = import_module("whisper")
@@ -127,5 +160,6 @@ __all__ = [
     "OpenSourceWhisperConfig",
     "OpenSourceWhisperLoader",
     "OpenSourceWhisperModel",
+    "offset_vad_chunk_timestamps",
     "transcribe_with_open_source_whisper",
 ]
