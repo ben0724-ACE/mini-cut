@@ -11,7 +11,9 @@ authors = [
     { name = "ben0724-ACE", email = "244254849@qq.com" },
 ]
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "opencc-python-reimplemented>=0.1.7,<0.2",
+]
 
 [tool.uv.build-backend]
 module-name = "minicut"
