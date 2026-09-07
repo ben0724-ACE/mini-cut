@@ -30,7 +30,7 @@ The model never invents media timestamps. It selects stable transcript segment i
 
 ## Current status
 
-The media-ingestion and local-project foundation is complete. MLX Whisper and open-source Whisper share the same validated Transcript v1 output contract, including word timestamps and absolute time across VAD chunks. Transcription tasks support cache reuse and cooperative cancellation. Deterministic semantic segmentation preserves traceable word timing, labels conservative edit candidates without making decisions, and exports an offline HTML timeline for inspection. The next step defines the user's edit brief, including target duration, intensity, style, and protected content.
+The media-ingestion and local-project foundation is complete. MLX Whisper and open-source Whisper share the same validated Transcript v1 output contract, including word timestamps and absolute time across VAD chunks. Deterministic semantic segmentation preserves traceable word timing, labels conservative edit candidates without making decisions, and exports an offline HTML timeline. Edit briefs now capture target duration, intensity, style, content type, language, and natural-language keep/remove requirements with optional resolved Segment IDs. The next step defines structured edit decisions and plans.
 
 ## Development
 
