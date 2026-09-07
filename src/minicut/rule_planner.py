@@ -37,6 +37,7 @@ class RulePlanner:
             segment.segment_id
             for segment in segments
             if SegmentLabel.SILENCE in segment.labels
+            or SegmentLabel.FILLER in segment.labels
         } | must_remove_ids
         deleted_ids -= must_keep_ids
 
@@ -91,8 +92,12 @@ class RulePlanner:
             explanation = "Deleted because the user explicitly required its removal."
         elif segment.segment_id in deleted_ids:
             action = EditAction.DELETE
-            reason = ReasonCode.SILENCE
-            explanation = "Deleted because the segment is explicit silence."
+            if SegmentLabel.SILENCE in segment.labels:
+                reason = ReasonCode.SILENCE
+                explanation = "Deleted because the segment is explicit silence."
+            else:
+                reason = ReasonCode.FILLER
+                explanation = "Deleted because the segment is pure filler."
         else:
             action = EditAction.KEEP
             reason = ReasonCode.CONTENT
