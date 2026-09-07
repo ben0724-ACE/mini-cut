@@ -5,11 +5,25 @@ from minicut.edit_plan import (
     EditAction,
     EditBrief,
     EditDecision,
+    EditIntensity,
     EditPlan,
     ReasonCode,
     validate_edit_plan,
 )
 from minicut.semantic_segment import SegmentLabel, SemanticSegment
+
+_DELETION_LABELS = {
+    EditIntensity.CONSERVATIVE: frozenset({SegmentLabel.SILENCE}),
+    EditIntensity.BALANCED: frozenset({SegmentLabel.SILENCE, SegmentLabel.FILLER}),
+    EditIntensity.AGGRESSIVE: frozenset(
+        {
+            SegmentLabel.SILENCE,
+            SegmentLabel.FILLER,
+            SegmentLabel.FALSE_START,
+            SegmentLabel.REPETITION_CANDIDATE,
+        }
+    ),
+}
 
 
 def _requirement_ids(
@@ -30,14 +44,14 @@ class RulePlanner:
         brief: EditBrief,
         segments: tuple[SemanticSegment, ...],
     ) -> EditPlan:
-        """Delete explicit silence unless user or context constraints protect it."""
+        """Apply the selected label policy without violating protected context."""
         must_keep_ids = _requirement_ids(brief.must_keep)
         must_remove_ids = _requirement_ids(brief.must_remove)
+        deletion_labels = _DELETION_LABELS[brief.intensity]
         deleted_ids = {
             segment.segment_id
             for segment in segments
-            if SegmentLabel.SILENCE in segment.labels
-            or SegmentLabel.FILLER in segment.labels
+            if any(label in deletion_labels for label in segment.labels)
         } | must_remove_ids
         deleted_ids -= must_keep_ids
 
@@ -95,9 +109,15 @@ class RulePlanner:
             if SegmentLabel.SILENCE in segment.labels:
                 reason = ReasonCode.SILENCE
                 explanation = "Deleted because the segment is explicit silence."
-            else:
+            elif SegmentLabel.FILLER in segment.labels:
                 reason = ReasonCode.FILLER
                 explanation = "Deleted because the segment is pure filler."
+            elif SegmentLabel.FALSE_START in segment.labels:
+                reason = ReasonCode.FALSE_START
+                explanation = "Deleted because the segment is a false start."
+            else:
+                reason = ReasonCode.REPETITION
+                explanation = "Deleted because the segment repeats adjacent content."
         else:
             action = EditAction.KEEP
             reason = ReasonCode.CONTENT

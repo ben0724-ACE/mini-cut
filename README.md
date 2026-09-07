@@ -30,7 +30,7 @@ The model never invents media timestamps. It selects stable transcript segment i
 
 ## Current status
 
-The media-ingestion and local-project foundation is complete. MLX Whisper and open-source Whisper share the same validated Transcript v1 output contract, including word timestamps and absolute time across VAD chunks. Deterministic semantic segmentation preserves traceable word timing and labels conservative edit candidates. Versioned edit plans capture user goals and structured keep/delete decisions without source timestamps, and integrity validation rejects unknown, duplicate, missing, conflicting, or dependency-breaking decisions. The deterministic RulePlanner now removes explicit silence and pure filler while preserving user-required and context-required segments. The next step applies conservative, balanced, and aggressive policies.
+The media-ingestion and local-project foundation is complete. MLX Whisper and open-source Whisper share the same validated Transcript v1 output contract, including word timestamps and absolute time across VAD chunks. Deterministic semantic segmentation preserves traceable word timing and labels conservative edit candidates. Versioned edit plans capture user goals and structured keep/delete decisions without source timestamps, and integrity validation rejects unknown, duplicate, missing, conflicting, or dependency-breaking decisions. The deterministic RulePlanner produces reproducible plans with conservative, balanced, and aggressive policies while preserving user-required and context-required segments. The next step defines the text-model provider boundary for LLM-assisted planning.
 
 ## Development
 
