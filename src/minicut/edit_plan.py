@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import cast
 
+from minicut.semantic_segment import (
+    SemanticSegment,
+    validate_segment_context_dependencies,
+)
+
 EDIT_PLAN_SCHEMA_VERSION = 1
 
 
@@ -177,6 +182,13 @@ class EditPlan:
     schema_version: int = EDIT_PLAN_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
+        if (
+            type(self.schema_version) is not int
+            or self.schema_version != EDIT_PLAN_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                f"Unsupported EditPlan schema version: {self.schema_version}"
+            )
         if not self.summary.strip():
             raise ValueError("edit plan summary must not be blank")
 
@@ -204,6 +216,66 @@ class EditPlan:
         )
 
 
+def _requirement_segment_ids(
+    requirements: tuple[ContentRequirement, ...],
+) -> tuple[str, ...]:
+    return tuple(
+        segment_id
+        for requirement in requirements
+        for segment_id in requirement.segment_ids
+    )
+
+
+def validate_edit_plan(
+    plan: EditPlan,
+    segments: tuple[SemanticSegment, ...],
+) -> None:
+    """Validate plan references and constraints against source segments."""
+    validate_segment_context_dependencies(segments)
+    segment_ids = {segment.segment_id for segment in segments}
+    decision_ids = tuple(decision.segment_id for decision in plan.decisions)
+    if len(set(decision_ids)) != len(decision_ids):
+        raise ValueError("edit plan contains duplicate Segment decisions")
+
+    unknown_decision_ids = set(decision_ids) - segment_ids
+    if unknown_decision_ids:
+        raise ValueError("edit plan references an unknown Segment ID")
+    missing_decision_ids = segment_ids - set(decision_ids)
+    if missing_decision_ids:
+        raise ValueError("edit plan is missing a Segment decision")
+
+    must_keep_ids = set(_requirement_segment_ids(plan.brief.must_keep))
+    must_remove_ids = set(_requirement_segment_ids(plan.brief.must_remove))
+    unknown_requirement_ids = (must_keep_ids | must_remove_ids) - segment_ids
+    if unknown_requirement_ids:
+        raise ValueError("content requirement references an unknown Segment ID")
+    if must_keep_ids & must_remove_ids:
+        raise ValueError("must_keep and must_remove Segment requirements conflict")
+
+    decisions_by_id = {
+        decision.segment_id: decision.action for decision in plan.decisions
+    }
+    if any(
+        decisions_by_id[segment_id] is not EditAction.KEEP
+        for segment_id in must_keep_ids
+    ):
+        raise ValueError("edit plan violates a must_keep requirement")
+    if any(
+        decisions_by_id[segment_id] is not EditAction.DELETE
+        for segment_id in must_remove_ids
+    ):
+        raise ValueError("edit plan violates a must_remove requirement")
+
+    for segment in segments:
+        if decisions_by_id[segment.segment_id] is not EditAction.KEEP:
+            continue
+        if any(
+            decisions_by_id[dependency.segment_id] is not EditAction.KEEP
+            for dependency in segment.context_dependencies
+        ):
+            raise ValueError("kept Segment has a deleted context dependency")
+
+
 __all__ = [
     "EDIT_PLAN_SCHEMA_VERSION",
     "ContentRequirement",
@@ -213,4 +285,5 @@ __all__ = [
     "EditIntensity",
     "EditPlan",
     "ReasonCode",
+    "validate_edit_plan",
 ]
