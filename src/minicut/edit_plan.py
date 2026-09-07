@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import cast
 
+EDIT_PLAN_SCHEMA_VERSION = 1
+
 
 class EditIntensity(StrEnum):
     """How aggressively removable content may be shortened."""
@@ -12,6 +14,25 @@ class EditIntensity(StrEnum):
     CONSERVATIVE = "conservative"
     BALANCED = "balanced"
     AGGRESSIVE = "aggressive"
+
+
+class EditAction(StrEnum):
+    """The only edit actions allowed for one source segment."""
+
+    KEEP = "keep"
+    DELETE = "delete"
+
+
+class ReasonCode(StrEnum):
+    """Machine-readable explanations for edit decisions."""
+
+    USER_REQUIRED = "user_required"
+    CONTENT = "content"
+    SILENCE = "silence"
+    FILLER = "filler"
+    FALSE_START = "false_start"
+    REPETITION = "repetition"
+    TARGET_DURATION = "target_duration"
 
 
 @dataclass(slots=True)
@@ -99,4 +120,97 @@ class EditBrief:
         )
 
 
-__all__ = ["ContentRequirement", "EditBrief", "EditIntensity"]
+@dataclass(slots=True)
+class EditDecision:
+    """One explainable keep or delete decision referencing a Segment ID."""
+
+    segment_id: str
+    action: EditAction
+    reason: ReasonCode
+    confidence: float
+    explanation: str
+    labels: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.segment_id.strip():
+            raise ValueError("decision Segment ID must not be blank")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("decision confidence must be between zero and one")
+        if not self.explanation.strip():
+            raise ValueError("decision explanation must not be blank")
+        if any(not label.strip() for label in self.labels):
+            raise ValueError("decision labels must not be blank")
+        if len(set(self.labels)) != len(self.labels):
+            raise ValueError("decision labels must be unique")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-compatible representation without source timestamps."""
+        return {
+            "segment_id": self.segment_id,
+            "action": self.action.value,
+            "reason": self.reason.value,
+            "confidence": self.confidence,
+            "explanation": self.explanation,
+            "labels": list(self.labels),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "EditDecision":
+        """Restore an edit decision from a JSON-compatible mapping."""
+        return cls(
+            segment_id=cast(str, data["segment_id"]),
+            action=EditAction(cast(str, data["action"])),
+            reason=ReasonCode(cast(str, data["reason"])),
+            confidence=cast(float, data["confidence"]),
+            explanation=cast(str, data["explanation"]),
+            labels=tuple(cast(list[str], data["labels"])),
+        )
+
+
+@dataclass(slots=True)
+class EditPlan:
+    """A versioned collection of structured decisions for an EditBrief."""
+
+    brief: EditBrief
+    decisions: tuple[EditDecision, ...]
+    summary: str
+    schema_version: int = EDIT_PLAN_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if not self.summary.strip():
+            raise ValueError("edit plan summary must not be blank")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-compatible representation."""
+        return {
+            "schema_version": self.schema_version,
+            "brief": self.brief.to_dict(),
+            "decisions": [decision.to_dict() for decision in self.decisions],
+            "summary": self.summary,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "EditPlan":
+        """Restore an edit plan from a JSON-compatible mapping."""
+        brief_data = cast(dict[str, object], data["brief"])
+        decision_data = cast(list[dict[str, object]], data["decisions"])
+        return cls(
+            brief=EditBrief.from_dict(brief_data),
+            decisions=tuple(
+                EditDecision.from_dict(decision) for decision in decision_data
+            ),
+            summary=cast(str, data["summary"]),
+            schema_version=cast(int, data["schema_version"]),
+        )
+
+
+__all__ = [
+    "EDIT_PLAN_SCHEMA_VERSION",
+    "ContentRequirement",
+    "EditAction",
+    "EditBrief",
+    "EditDecision",
+    "EditIntensity",
+    "EditPlan",
+    "ReasonCode",
+]
