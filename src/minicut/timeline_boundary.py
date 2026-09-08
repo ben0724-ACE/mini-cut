@@ -71,4 +71,29 @@ def snap_clip_start_boundaries(
     return _reflow_clips(tuple(refined))
 
 
-__all__ = ["snap_clip_start_boundaries"]
+def snap_clip_end_boundaries(
+    timeline: Timeline,
+    segments: tuple[SemanticSegment, ...],
+    words: tuple[Word, ...],
+) -> Timeline:
+    """Snap every clip end to its latest referenced Word end."""
+    segments_by_id, words_by_id = _index_inputs(timeline, segments, words)
+    refined: list[Clip] = []
+    for clip in timeline.clips:
+        segment = segments_by_id[clip.segment_id]
+        last_word_end_ms = max(
+            words_by_id[word_id].end_ms for word_id in segment.word_ids
+        )
+        refined.append(
+            Clip(
+                clip.clip_id,
+                clip.source_asset_id,
+                clip.segment_id,
+                TimeRange(clip.source_range.start_ms, last_word_end_ms),
+                clip.output_range,
+            )
+        )
+    return _reflow_clips(tuple(refined))
+
+
+__all__ = ["snap_clip_end_boundaries", "snap_clip_start_boundaries"]
