@@ -3,13 +3,52 @@
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import cast
 
 from minicut.llm_provider import TextModelRequest
 from minicut.semantic_segment import SemanticSegment
 
+SEGMENT_CLASSIFICATION_PROMPT_VERSION = "segment-classification-v1"
 SEGMENT_DETAIL_PROMPT_VERSION = "segment-detail-v1"
+_CLASSIFICATION_FIELDS = {"segment_id", "classification"}
 _DETAIL_FIELDS = {"segment_id", "importance", "dependency_ids", "rationale"}
+
+
+class SegmentClassification(StrEnum):
+    """Supported local semantic classifications for one target Segment."""
+
+    FILLER = "filler"
+    REPEAT = "repeat"
+    FALSE_START = "false_start"
+    CONTENT = "content"
+
+
+@dataclass(slots=True)
+class SegmentClassificationResult:
+    """One classification that can only reference its target Segment."""
+
+    segment_id: str
+    classification: SegmentClassification
+
+    def __post_init__(self) -> None:
+        if not self.segment_id.strip():
+            raise ValueError("classification Segment ID must not be blank")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-compatible representation."""
+        return {
+            "segment_id": self.segment_id,
+            "classification": self.classification.value,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "SegmentClassificationResult":
+        """Restore a target classification from a JSON-compatible mapping."""
+        return cls(
+            segment_id=cast(str, data["segment_id"]),
+            classification=SegmentClassification(cast(str, data["classification"])),
+        )
 
 
 @dataclass(slots=True)
@@ -82,6 +121,57 @@ def _validate_context(
         raise ValueError("analysis context Segment IDs must be unique")
 
 
+def build_segment_classification_request(
+    target: SemanticSegment,
+    context: tuple[SemanticSegment, ...],
+    model: str,
+) -> TextModelRequest:
+    """Build a request that classifies only one target Segment."""
+    _validate_context(target, context)
+    classifications = ", ".join(
+        classification.value for classification in SegmentClassification
+    )
+    system_prompt = (
+        "Return one JSON object with exactly segment_id and classification. "
+        "Classify only the target Segment as exactly one of: "
+        f"{classifications}. The read_only_context is provided only to interpret "
+        "the target; you must not classify, modify, or make edit decisions for any "
+        "context Segment. Return the target segment_id unchanged."
+    )
+    payload = {
+        "prompt_version": SEGMENT_CLASSIFICATION_PROMPT_VERSION,
+        "target": _prompt_segment(target),
+        "read_only_context": [_prompt_segment(segment) for segment in context],
+    }
+    return TextModelRequest(
+        model=model,
+        system_prompt=system_prompt,
+        user_prompt=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+    )
+
+
+def parse_segment_classification_response(
+    content: str,
+    target: SemanticSegment,
+    context: tuple[SemanticSegment, ...],
+) -> SegmentClassificationResult:
+    """Strictly parse a classification for the requested target only."""
+    _validate_context(target, context)
+    try:
+        loaded: object = json.loads(content)
+        if not isinstance(loaded, dict):
+            raise TypeError("classification root must be an object")
+        data = cast(dict[str, object], loaded)
+        if set(data) != _CLASSIFICATION_FIELDS:
+            raise ValueError("classification fields are invalid")
+        result = SegmentClassificationResult.from_dict(data)
+        if result.segment_id != target.segment_id:
+            raise ValueError("classification must reference the target Segment")
+        return result
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+        raise ValueError("invalid segment classification") from error
+
+
 def build_segment_detail_request(
     target: SemanticSegment,
     context: tuple[SemanticSegment, ...],
@@ -135,8 +225,13 @@ def parse_segment_detail_response(
 
 
 __all__ = [
+    "SEGMENT_CLASSIFICATION_PROMPT_VERSION",
     "SEGMENT_DETAIL_PROMPT_VERSION",
     "SegmentAnalysisDetail",
+    "SegmentClassification",
+    "SegmentClassificationResult",
+    "build_segment_classification_request",
     "build_segment_detail_request",
+    "parse_segment_classification_response",
     "parse_segment_detail_response",
 ]
