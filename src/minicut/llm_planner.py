@@ -149,6 +149,11 @@ class LlmPlanner:
         self._model = model
         self._timeout_seconds = timeout_seconds
 
+    @property
+    def model(self) -> str:
+        """Return the configured request model name."""
+        return self._model
+
     async def _generate(self, request: TextModelRequest) -> TextModelResponse:
         try:
             return await asyncio.wait_for(

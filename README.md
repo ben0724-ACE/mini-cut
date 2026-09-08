@@ -30,7 +30,7 @@ The model never invents media timestamps. It selects stable transcript segment i
 
 ## Current status
 
-The media-ingestion and local-project foundation is complete. MLX Whisper and open-source Whisper share the same validated Transcript v1 output contract, including word timestamps and absolute time across VAD chunks. Deterministic semantic segmentation preserves traceable word timing and labels conservative edit candidates. Versioned edit plans capture user goals and structured keep/delete decisions without source timestamps, and integrity validation rejects unknown, duplicate, missing, conflicting, or dependency-breaking decisions. The deterministic RulePlanner produces reproducible plans with conservative, balanced, and aggressive policies while preserving user-required and context-required segments. LLM-assisted planning now has a replaceable provider, constrained prompts, strict validation, one controlled repair, bounded calls, safe errors, cooperative cancellation, and credential-free model/prompt/policy provenance. The next step adds local content classification over semantic segments.
+The media-ingestion and local-project foundation is complete. MLX Whisper and open-source Whisper share the same validated Transcript v1 output contract, including word timestamps and absolute time across VAD chunks. Deterministic semantic segmentation preserves traceable word timing and labels conservative edit candidates. Versioned edit plans capture user goals and structured keep/delete decisions without source timestamps, and integrity validation rejects unknown, duplicate, missing, conflicting, or dependency-breaking decisions. The deterministic RulePlanner produces reproducible plans with conservative, balanced, and aggressive policies while preserving user-required and context-required segments. LLM-assisted planning now has a replaceable provider, constrained prompts, strict validation, one controlled repair, bounded calls, safe errors, cooperative cancellation, and credential-free provenance. A concrete DeepSeek adapter uses the OpenAI-compatible API with `deepseek-v4-flash` and JSON output. The next step adds local content classification over semantic segments.
 
 ## Development
 
@@ -47,6 +47,14 @@ Real MLX inference is opt-in so the default test suite never downloads or loads 
 MINICUT_MLX_INTEGRATION_MEDIA=/path/to/media.mov \
   python -m pytest tests/integration/test_mlx_whisper_integration.py
 ```
+
+To configure DeepSeek locally, copy `.env.example` to the ignored `.env` file and set `DEEPSEEK_API_KEY`. The defaults select `deepseek-v4-flash` at `https://api.deepseek.com`. Application code can then create the configured planner with `create_deepseek_planner_from_env`; load the local file when starting Python:
+
+```bash
+uv run --env-file .env python
+```
+
+Never commit `.env`; only `.env.example` belongs in version control.
 
 ## Development principles
 
