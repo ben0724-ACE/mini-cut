@@ -20,6 +20,14 @@ class NarrativeRole(StrEnum):
     CONCLUSION = "conclusion"
 
 
+class DurationFallback(StrEnum):
+    """Why a complete selection could not enter the target tolerance."""
+
+    NONE = "none"
+    REQUIRED_OVERFLOW = "required_overflow"
+    CLOSEST_COMPLETE = "closest_complete"
+
+
 @dataclass(frozen=True, slots=True)
 class NarrativeCoverage:
     """Viable evidence roots for one narrative role or core point."""
@@ -77,6 +85,28 @@ class NarrativeCandidateSelection:
             if candidate.segment_id == segment_id:
                 return candidate.dependency_ids
         raise ValueError("unknown narrative candidate Segment ID")
+
+
+@dataclass(frozen=True, slots=True)
+class TargetDurationSelection:
+    """A complete Segment selection and its explicit duration outcome."""
+
+    selected_ids: tuple[str, ...]
+    estimated_duration_ms: int
+    target_duration_ms: int
+    tolerance_met: bool
+    fallback: DurationFallback
+    explanation: str
+
+    def __post_init__(self) -> None:
+        if not self.selected_ids:
+            raise ValueError("target duration selection must not be empty")
+        if self.estimated_duration_ms <= 0 or self.target_duration_ms <= 0:
+            raise ValueError("target duration values must be positive")
+        if not self.explanation.strip():
+            raise ValueError("target duration explanation must not be blank")
+        if self.tolerance_met != (self.fallback is DurationFallback.NONE):
+            raise ValueError("target duration fallback state is inconsistent")
 
 
 def _requirement_ids(
@@ -202,10 +232,131 @@ def select_narrative_candidates(
     return NarrativeCandidateSelection(candidates, required_ids, tuple(coverages))
 
 
+def select_for_target_duration(
+    brief: EditBrief,
+    segments: tuple[SemanticSegment, ...],
+    selection: NarrativeCandidateSelection,
+) -> TargetDurationSelection:
+    """Choose a complete candidate subset and explain any duration fallback."""
+    validate_segment_context_dependencies(segments)
+    segments_by_id = {segment.segment_id: segment for segment in segments}
+    if len(segments_by_id) != len(segments):
+        raise ValueError("source Segment IDs must be unique")
+    candidate_ids = selection.candidate_ids
+    candidate_set = set(candidate_ids)
+    if not candidate_set <= set(segments_by_id):
+        raise ValueError("narrative candidates reference an unknown Segment ID")
+    candidate_by_id = {
+        candidate.segment_id: candidate for candidate in selection.candidates
+    }
+    if any(
+        not set(candidate.dependency_ids) <= candidate_set
+        for candidate in selection.candidates
+    ):
+        raise ValueError("narrative candidate dependency is unavailable")
+
+    source_order = {
+        segment.segment_id: ordinal for ordinal, segment in enumerate(segments)
+    }
+
+    def closure(root_id: str) -> set[str]:
+        result: set[str] = set()
+        pending = [root_id]
+        while pending:
+            segment_id = pending.pop()
+            if segment_id in result:
+                continue
+            result.add(segment_id)
+            pending.extend(candidate_by_id[segment_id].dependency_ids)
+        return result
+
+    def duration(segment_ids: set[str]) -> int:
+        return sum(
+            segments_by_id[segment_id].end_ms - segments_by_id[segment_id].start_ms
+            for segment_id in segment_ids
+        )
+
+    selected = set(selection.required_ids)
+    required_duration_ms = duration(selected) if selected else 0
+    for coverage in selection.coverages:
+        if selected & set(coverage.segment_ids):
+            continue
+        best_root = min(
+            coverage.segment_ids,
+            key=lambda segment_id: (
+                duration(closure(segment_id) - selected),
+                -candidate_by_id[segment_id].importance,
+                source_order[segment_id],
+            ),
+        )
+        selected.update(closure(best_root))
+
+    root_ids = tuple(
+        segment_id
+        for segment_id in candidate_ids
+        if any(segment_id in coverage.segment_ids for coverage in selection.coverages)
+    )
+    while True:
+        current_difference = abs(duration(selected) - brief.target_duration_ms)
+        additions = tuple(
+            (
+                abs(
+                    duration(selected | closure(segment_id)) - brief.target_duration_ms
+                ),
+                -candidate_by_id[segment_id].importance,
+                source_order[segment_id],
+                segment_id,
+            )
+            for segment_id in root_ids
+            if segment_id not in selected
+        )
+        if not additions:
+            break
+        best_addition = min(additions)
+        if best_addition[0] >= current_difference:
+            break
+        selected.update(closure(best_addition[3]))
+
+    estimated_duration_ms = duration(selected)
+    tolerance_met = (
+        abs(estimated_duration_ms - brief.target_duration_ms) * 10
+        <= brief.target_duration_ms
+    )
+    if tolerance_met:
+        fallback = DurationFallback.NONE
+        explanation = "Estimated duration is within the target ±10% tolerance."
+    elif required_duration_ms * 10 > brief.target_duration_ms * 11:
+        fallback = DurationFallback.REQUIRED_OVERFLOW
+        explanation = (
+            "The must-keep content and its dependencies already exceed the target "
+            "tolerance; all protected content was preserved."
+        )
+    else:
+        fallback = DurationFallback.CLOSEST_COMPLETE
+        explanation = (
+            "No available complete narrative selection reaches the target ±10% "
+            "tolerance; this is the closest deterministic result."
+        )
+    ordered_ids = tuple(
+        segment.segment_id for segment in segments if segment.segment_id in selected
+    )
+    return TargetDurationSelection(
+        ordered_ids,
+        estimated_duration_ms,
+        brief.target_duration_ms,
+        tolerance_met,
+        fallback,
+        explanation,
+    )
+
+
 __all__ = [
+    "DurationFallback",
     "NarrativeCandidate",
     "NarrativeCandidateSelection",
     "NarrativeCoverage",
     "NarrativeRole",
+    "TargetDurationSelection",
+    "select_for_target_duration",
     "select_narrative_candidates",
 ]
