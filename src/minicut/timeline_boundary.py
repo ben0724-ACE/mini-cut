@@ -54,6 +54,7 @@ def _reflow_clips(clips: tuple[Clip, ...]) -> Timeline:
                 clip.segment_id,
                 clip.source_range,
                 TimeRange(output_cursor_ms, output_end_ms),
+                clip.segment_ids,
             )
         )
         output_cursor_ms = output_end_ms
@@ -80,6 +81,7 @@ def snap_clip_start_boundaries(
                 clip.segment_id,
                 TimeRange(first_word_start_ms, clip.source_range.end_ms),
                 clip.output_range,
+                clip.segment_ids,
             )
         )
     return _reflow_clips(tuple(refined))
@@ -105,6 +107,7 @@ def snap_clip_end_boundaries(
                 clip.segment_id,
                 TimeRange(clip.source_range.start_ms, last_word_end_ms),
                 clip.output_range,
+                clip.segment_ids,
             )
         )
     return _reflow_clips(tuple(refined))
@@ -150,6 +153,7 @@ def apply_boundary_padding(
             clip.segment_id,
             source_range,
             clip.output_range,
+            clip.segment_ids,
         )
         for clip, source_range in zip(timeline.clips, padded_ranges, strict=True)
     )
@@ -222,6 +226,7 @@ def protect_word_and_punctuation_boundaries(
                 clip.segment_id,
                 TimeRange(start_ms, end_ms),
                 clip.output_range,
+                clip.segment_ids,
             )
         )
 

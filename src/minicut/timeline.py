@@ -20,6 +20,7 @@ class Clip:
     segment_id: str
     source_range: TimeRange
     output_range: TimeRange
+    segment_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.clip_id.strip():
@@ -28,6 +29,14 @@ class Clip:
             raise ValueError("clip source asset ID must not be blank")
         if not self.segment_id.strip():
             raise ValueError("clip Segment ID must not be blank")
+        if not self.segment_ids:
+            self.segment_ids = (self.segment_id,)
+        if any(not segment_id.strip() for segment_id in self.segment_ids):
+            raise ValueError("clip Segment IDs must not be blank")
+        if len(set(self.segment_ids)) != len(self.segment_ids):
+            raise ValueError("clip Segment IDs must be unique")
+        if self.segment_ids[0] != self.segment_id:
+            raise ValueError("clip primary Segment ID must be first in Segment IDs")
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-compatible representation."""
@@ -35,6 +44,7 @@ class Clip:
             "clip_id": self.clip_id,
             "source_asset_id": self.source_asset_id,
             "segment_id": self.segment_id,
+            "segment_ids": list(self.segment_ids),
             "source_range": {
                 "start_ms": self.source_range.start_ms,
                 "end_ms": self.source_range.end_ms,
@@ -61,6 +71,9 @@ class Clip:
             output_range=TimeRange(
                 cast(int, output_range["start_ms"]),
                 cast(int, output_range["end_ms"]),
+            ),
+            segment_ids=tuple(
+                cast(list[str], data.get("segment_ids", [data["segment_id"]]))
             ),
         )
 
