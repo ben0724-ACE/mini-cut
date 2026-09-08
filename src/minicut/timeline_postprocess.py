@@ -14,6 +14,12 @@ class TimelineAdjustmentReason(StrEnum):
     SHORT_CLIP_REMOVAL = "short_clip_removal"
 
 
+class TimelineRiskReason(StrEnum):
+    """Machine-readable reasons for non-mutating timeline risks."""
+
+    SOURCE_GAP = "source_gap"
+
+
 @dataclass(frozen=True, slots=True)
 class TimelineAdjustment:
     """One traceable transformation from input clips to an output clip."""
@@ -43,6 +49,28 @@ class TimelineTransformResult:
 
     timeline: Timeline
     adjustments: tuple[TimelineAdjustment, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class JumpCutRisk:
+    """A source discontinuity that may be visible at an output junction."""
+
+    reason: TimelineRiskReason
+    left_clip_id: str
+    right_clip_id: str
+    removed_gap_ms: int
+    output_at_ms: int
+    explanation: str
+
+    def __post_init__(self) -> None:
+        if not self.left_clip_id.strip() or not self.right_clip_id.strip():
+            raise ValueError("jump-cut risk clip IDs must not be blank")
+        if self.removed_gap_ms <= 0:
+            raise ValueError("jump-cut risk source gap must be positive")
+        if self.output_at_ms < 0:
+            raise ValueError("jump-cut risk output time must not be negative")
+        if not self.explanation.strip():
+            raise ValueError("jump-cut risk explanation must not be blank")
 
 
 def _reflow(clips: tuple[Clip, ...]) -> Timeline:
@@ -159,10 +187,43 @@ def handle_short_isolated_clips(
     return TimelineTransformResult(_reflow(kept_clips), adjustments)
 
 
+def detect_jump_cut_risks(
+    timeline: Timeline,
+    min_removed_gap_ms: int,
+) -> tuple[JumpCutRisk, ...]:
+    """Mark same-asset source gaps without mutating the timeline."""
+    if min_removed_gap_ms <= 0:
+        raise ValueError("jump-cut gap threshold must be positive")
+    risks: list[JumpCutRisk] = []
+    for left, right in zip(timeline.clips, timeline.clips[1:], strict=False):
+        if left.source_asset_id != right.source_asset_id:
+            continue
+        removed_gap_ms = right.source_range.start_ms - left.source_range.end_ms
+        if removed_gap_ms < min_removed_gap_ms:
+            continue
+        risks.append(
+            JumpCutRisk(
+                TimelineRiskReason.SOURCE_GAP,
+                left.clip_id,
+                right.clip_id,
+                removed_gap_ms,
+                right.output_range.start_ms,
+                (
+                    f"The output junction skips {removed_gap_ms} ms of the same "
+                    "source and may produce a visible jump cut."
+                ),
+            )
+        )
+    return tuple(risks)
+
+
 __all__ = [
+    "JumpCutRisk",
     "TimelineAdjustment",
     "TimelineAdjustmentReason",
     "TimelineTransformResult",
+    "TimelineRiskReason",
+    "detect_jump_cut_risks",
     "handle_short_isolated_clips",
     "merge_nearby_clips",
 ]

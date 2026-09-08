@@ -4,6 +4,8 @@ from minicut.media import TimeRange
 from minicut.timeline import Clip, Timeline
 from minicut.timeline_postprocess import (
     TimelineAdjustmentReason,
+    TimelineRiskReason,
+    detect_jump_cut_risks,
     handle_short_isolated_clips,
     merge_nearby_clips,
 )
@@ -172,6 +174,62 @@ class ShortIsolatedClipTest(unittest.TestCase):
             handle_short_isolated_clips(
                 timeline, 200, protected_segment_ids=("missing",)
             )
+
+
+class JumpCutRiskTest(unittest.TestCase):
+    def test_marks_source_gap_at_or_above_threshold_without_changing_timeline(
+        self,
+    ) -> None:
+        timeline = Timeline(
+            (
+                _clip(0, 0, 500),
+                _clip(1, 800, 1_200),
+                _clip(2, 1_300, 1_700),
+            ),
+            1_300,
+        )
+
+        risks = detect_jump_cut_risks(timeline, min_removed_gap_ms=300)
+
+        self.assertEqual(len(risks), 1)
+        self.assertEqual(risks[0].reason, TimelineRiskReason.SOURCE_GAP)
+        self.assertEqual(risks[0].left_clip_id, "clip:0")
+        self.assertEqual(risks[0].right_clip_id, "clip:1")
+        self.assertEqual(risks[0].removed_gap_ms, 300)
+        self.assertEqual(risks[0].output_at_ms, timeline.clips[1].output_range.start_ms)
+        self.assertEqual(
+            timeline.clips[0].source_range,
+            TimeRange(0, 500),
+        )
+
+    def test_ignores_small_gap_and_cross_asset_transition(self) -> None:
+        cases = (
+            (
+                "small gap",
+                (_clip(0, 0, 500), _clip(1, 700, 1_100)),
+            ),
+            (
+                "cross asset",
+                (
+                    _clip(0, 0, 500),
+                    _clip(1, 900, 1_300, asset_id="asset-2"),
+                ),
+            ),
+        )
+
+        for name, clips in cases:
+            with self.subTest(name=name):
+                timeline = Timeline(
+                    clips, sum(clip.source_range.duration_ms for clip in clips)
+                )
+
+                self.assertEqual(detect_jump_cut_risks(timeline, 300), ())
+
+    def test_rejects_non_positive_jump_gap_threshold(self) -> None:
+        timeline = Timeline((_clip(0, 0, 500),), 500)
+
+        with self.assertRaisesRegex(ValueError, "jump-cut"):
+            detect_jump_cut_risks(timeline, 0)
 
 
 if __name__ == "__main__":
