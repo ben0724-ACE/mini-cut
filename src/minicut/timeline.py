@@ -4,7 +4,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
+from minicut.edit_plan import EditAction, EditPlan, validate_edit_plan
 from minicut.media import TimeRange
+from minicut.semantic_segment import SemanticSegment
 
 TIMELINE_SCHEMA_VERSION = 1
 
@@ -101,4 +103,35 @@ class Timeline:
         )
 
 
-__all__ = ["TIMELINE_SCHEMA_VERSION", "Clip", "Timeline"]
+def resolve_kept_segments(
+    plan: EditPlan,
+    segments: tuple[SemanticSegment, ...],
+) -> tuple[SemanticSegment, ...]:
+    """Resolve validated keep decisions and sort them by source time."""
+    validate_edit_plan(plan, segments)
+    kept_ids = {
+        decision.segment_id
+        for decision in plan.decisions
+        if decision.action is EditAction.KEEP
+    }
+    kept_segments = tuple(
+        sorted(
+            (segment for segment in segments if segment.segment_id in kept_ids),
+            key=lambda segment: (
+                segment.start_ms,
+                segment.end_ms,
+                segment.segment_id,
+            ),
+        )
+    )
+    if not kept_segments:
+        raise ValueError("edit plan contains no kept Segments")
+    return kept_segments
+
+
+__all__ = [
+    "TIMELINE_SCHEMA_VERSION",
+    "Clip",
+    "Timeline",
+    "resolve_kept_segments",
+]
