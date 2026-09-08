@@ -6,6 +6,7 @@ from minicut.timeline import Clip, Timeline
 from minicut.timeline_boundary import (
     BoundaryPolicy,
     apply_boundary_padding,
+    protect_word_and_punctuation_boundaries,
     snap_clip_end_boundaries,
     snap_clip_start_boundaries,
 )
@@ -227,6 +228,92 @@ class BoundaryPaddingTest(unittest.TestCase):
             apply_boundary_padding(timeline, BoundaryPolicy(100, 100), 1_000)
         with self.assertRaisesRegex(ValueError, "media duration"):
             apply_boundary_padding(timeline, BoundaryPolicy(0, 0), 0)
+
+
+class WordAndPunctuationProtectionTest(unittest.TestCase):
+    def test_table_driven_word_boundary_protection(self) -> None:
+        cases = (
+            (
+                "exclude partial neighboring words",
+                TimeRange(50, 250),
+                (_segment(0, ("owned",), 100, 200),),
+                (
+                    Word("previous", "前", 0, 80),
+                    Word("owned", "内容", 100, 200),
+                    Word("next", "后", 230, 300),
+                ),
+                TimeRange(80, 230),
+            ),
+            (
+                "preserve complete owned word",
+                TimeRange(120, 180),
+                (_segment(0, ("owned",), 100, 200),),
+                (Word("owned", "完整", 100, 200),),
+                TimeRange(100, 200),
+            ),
+        )
+
+        for name, source_range, segments, words, expected in cases:
+            with self.subTest(name=name):
+                timeline = Timeline(
+                    (_clip(0, source_range, TimeRange(0, source_range.duration_ms)),),
+                    source_range.duration_ms,
+                )
+
+                protected = protect_word_and_punctuation_boundaries(
+                    timeline, segments, words, 1_000
+                )
+
+                self.assertEqual(protected.clips[0].source_range, expected)
+                self.assertEqual(protected.estimated_duration_ms, expected.duration_ms)
+
+    def test_attaches_unowned_punctuation_but_not_the_next_word(self) -> None:
+        segments = (_segment(0, ("owned",), 100, 200),)
+        words = (
+            Word("owned", "你好", 100, 200),
+            Word("comma", "，", 200, 230),
+            Word("quote", "”", 230, 250),
+            Word("next", "下一句", 260, 400),
+        )
+        timeline = Timeline((_clip(0, TimeRange(100, 200), TimeRange(0, 100)),), 100)
+
+        protected = protect_word_and_punctuation_boundaries(
+            timeline, segments, words, 1_000
+        )
+
+        self.assertEqual(protected.clips[0].source_range, TimeRange(100, 250))
+        self.assertEqual(protected.estimated_duration_ms, 150)
+
+    def test_rejects_overlap_instead_of_cutting_a_protected_word(self) -> None:
+        segments = (
+            _segment(0, ("word-0",), 100, 300),
+            _segment(1, ("word-1",), 250, 450),
+        )
+        words = (
+            Word("word-0", "前词", 100, 300),
+            Word("word-1", "后词", 250, 450),
+        )
+        timeline = Timeline(
+            (
+                _clip(0, TimeRange(100, 280), TimeRange(0, 180)),
+                _clip(1, TimeRange(270, 450), TimeRange(180, 360)),
+            ),
+            360,
+        )
+
+        with self.assertRaisesRegex(ValueError, "protected boundaries overlap"):
+            protect_word_and_punctuation_boundaries(timeline, segments, words, 1_000)
+
+    def test_rejects_protection_beyond_media_duration(self) -> None:
+        segments = (_segment(0, ("owned",), 800, 950),)
+        words = (
+            Word("owned", "结尾", 800, 950),
+            Word("punctuation", "。", 950, 1_010),
+        )
+        timeline = Timeline((_clip(0, TimeRange(800, 950), TimeRange(0, 150)),), 150)
+
+        with self.assertRaisesRegex(ValueError, "media duration"):
+            protect_word_and_punctuation_boundaries(timeline, segments, words, 1_000)
 
 
 if __name__ == "__main__":

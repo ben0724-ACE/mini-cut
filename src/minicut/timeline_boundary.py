@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from unicodedata import category
 
 from minicut.media import TimeRange
 from minicut.semantic_segment import SemanticSegment
@@ -155,9 +156,87 @@ def apply_boundary_padding(
     return _reflow_clips(padded_clips)
 
 
+def _is_punctuation(text: str) -> bool:
+    stripped = text.strip()
+    return bool(stripped) and all(
+        category(character).startswith("P") for character in stripped
+    )
+
+
+def protect_word_and_punctuation_boundaries(
+    timeline: Timeline,
+    segments: tuple[SemanticSegment, ...],
+    words: tuple[Word, ...],
+    media_duration_ms: int,
+) -> Timeline:
+    """Remove partial neighboring words and preserve owned words and punctuation."""
+    if media_duration_ms <= 0:
+        raise ValueError("media duration must be positive")
+    segments_by_id, words_by_id = _index_inputs(timeline, segments, words)
+    ordered_words = tuple(
+        sorted(words, key=lambda word: (word.start_ms, word.end_ms, word.word_id))
+    )
+    owned_elsewhere = {word_id for segment in segments for word_id in segment.word_ids}
+    refined: list[Clip] = []
+    for clip in timeline.clips:
+        segment = segments_by_id[clip.segment_id]
+        owned_ids = set(segment.word_ids)
+        start_ms = clip.source_range.start_ms
+        end_ms = clip.source_range.end_ms
+
+        start_words = tuple(
+            word for word in ordered_words if word.start_ms < start_ms < word.end_ms
+        )
+        owned_start_words = tuple(
+            word for word in start_words if word.word_id in owned_ids
+        )
+        if owned_start_words:
+            start_ms = min(word.start_ms for word in owned_start_words)
+        elif start_words:
+            start_ms = max(word.end_ms for word in start_words)
+
+        end_words = tuple(
+            word for word in ordered_words if word.start_ms < end_ms < word.end_ms
+        )
+        owned_end_words = tuple(word for word in end_words if word.word_id in owned_ids)
+        if owned_end_words:
+            end_ms = max(word.end_ms for word in owned_end_words)
+        elif end_words:
+            end_ms = min(word.start_ms for word in end_words)
+
+        last_owned_word = max(
+            (words_by_id[word_id] for word_id in segment.word_ids),
+            key=lambda word: (word.end_ms, word.start_ms, word.word_id),
+        )
+        if last_owned_word.end_ms <= end_ms:
+            last_index = ordered_words.index(last_owned_word)
+            for word in ordered_words[last_index + 1 :]:
+                if not _is_punctuation(word.text) or word.word_id in owned_elsewhere:
+                    break
+                end_ms = max(end_ms, word.end_ms)
+
+        refined.append(
+            Clip(
+                clip.clip_id,
+                clip.source_asset_id,
+                clip.segment_id,
+                TimeRange(start_ms, end_ms),
+                clip.output_range,
+            )
+        )
+
+    if any(clip.source_range.end_ms > media_duration_ms for clip in refined):
+        raise ValueError("protected boundary exceeds media duration")
+    for previous, current in zip(refined, refined[1:], strict=False):
+        if previous.source_range.end_ms > current.source_range.start_ms:
+            raise ValueError("protected boundaries overlap between adjacent clips")
+    return _reflow_clips(tuple(refined))
+
+
 __all__ = [
     "BoundaryPolicy",
     "apply_boundary_padding",
+    "protect_word_and_punctuation_boundaries",
     "snap_clip_end_boundaries",
     "snap_clip_start_boundaries",
 ]
