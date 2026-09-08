@@ -4,6 +4,7 @@ from minicut.media import TimeRange
 from minicut.timeline import Clip, Timeline
 from minicut.timeline_postprocess import (
     TimelineAdjustmentReason,
+    handle_short_isolated_clips,
     merge_nearby_clips,
 )
 
@@ -94,6 +95,83 @@ class MergeNearbyClipsTest(unittest.TestCase):
             merge_nearby_clips(timeline, -1)
         with self.assertRaisesRegex(ValueError, "overlap"):
             merge_nearby_clips(timeline, 100)
+
+
+class ShortIsolatedClipTest(unittest.TestCase):
+    def test_removes_only_unprotected_clips_below_threshold(self) -> None:
+        timeline = Timeline(
+            (
+                _clip(0, 0, 500),
+                _clip(1, 1_000, 1_120),
+                _clip(2, 2_000, 2_400),
+            ),
+            1_020,
+        )
+
+        result = handle_short_isolated_clips(timeline, min_duration_ms=200)
+
+        self.assertEqual(
+            tuple(clip.clip_id for clip in result.timeline.clips),
+            ("clip:0", "clip:2"),
+        )
+        self.assertEqual(
+            tuple(clip.output_range for clip in result.timeline.clips),
+            (TimeRange(0, 500), TimeRange(500, 900)),
+        )
+        self.assertEqual(result.timeline.estimated_duration_ms, 900)
+        self.assertEqual(len(result.adjustments), 1)
+        self.assertEqual(
+            result.adjustments[0].reason,
+            TimelineAdjustmentReason.SHORT_CLIP_REMOVAL,
+        )
+        self.assertEqual(result.adjustments[0].input_clip_ids, ("clip:1",))
+        self.assertIsNone(result.adjustments[0].output_clip_id)
+
+    def test_preserves_short_clip_containing_any_protected_segment(self) -> None:
+        merged_short = Clip(
+            "clip:0",
+            "asset-1",
+            "segment-0",
+            TimeRange(0, 120),
+            TimeRange(0, 120),
+            ("segment-0", "segment-protected"),
+        )
+        timeline = Timeline((merged_short, _clip(1, 1_000, 1_500)), 620)
+
+        result = handle_short_isolated_clips(
+            timeline,
+            min_duration_ms=200,
+            protected_segment_ids=("segment-protected",),
+        )
+
+        self.assertEqual(result.timeline.clips, timeline.clips)
+        self.assertEqual(result.adjustments, ())
+
+    def test_preserves_equal_threshold_and_prevents_empty_timeline(self) -> None:
+        cases = (
+            ("equal threshold", (_clip(0, 0, 200), _clip(1, 500, 900))),
+            ("only clip", (_clip(0, 0, 100),)),
+        )
+
+        for name, clips in cases:
+            with self.subTest(name=name):
+                timeline = Timeline(
+                    clips, sum(clip.source_range.duration_ms for clip in clips)
+                )
+                result = handle_short_isolated_clips(timeline, 200)
+
+                self.assertGreaterEqual(len(result.timeline.clips), 1)
+                self.assertEqual(result.adjustments, ())
+
+    def test_rejects_invalid_threshold_or_missing_protected_content(self) -> None:
+        timeline = Timeline((_clip(0, 0, 500),), 500)
+
+        with self.assertRaisesRegex(ValueError, "minimum"):
+            handle_short_isolated_clips(timeline, 0)
+        with self.assertRaisesRegex(ValueError, "protected"):
+            handle_short_isolated_clips(
+                timeline, 200, protected_segment_ids=("missing",)
+            )
 
 
 if __name__ == "__main__":

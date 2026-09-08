@@ -11,6 +11,7 @@ class TimelineAdjustmentReason(StrEnum):
     """Machine-readable reasons for timeline repairs."""
 
     NEARBY_MERGE = "nearby_merge"
+    SHORT_CLIP_REMOVAL = "short_clip_removal"
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,16 +20,19 @@ class TimelineAdjustment:
 
     reason: TimelineAdjustmentReason
     input_clip_ids: tuple[str, ...]
-    output_clip_id: str
+    output_clip_id: str | None
     explanation: str
 
     def __post_init__(self) -> None:
-        if len(self.input_clip_ids) < 2:
-            raise ValueError("timeline adjustment requires at least two input clips")
+        if not self.input_clip_ids:
+            raise ValueError("timeline adjustment requires an input clip")
         if any(not clip_id.strip() for clip_id in self.input_clip_ids):
             raise ValueError("timeline adjustment clip IDs must not be blank")
-        if not self.output_clip_id.strip():
-            raise ValueError("timeline adjustment output clip ID must not be blank")
+        if self.reason is TimelineAdjustmentReason.NEARBY_MERGE:
+            if len(self.input_clip_ids) < 2 or not self.output_clip_id:
+                raise ValueError("nearby merge requires inputs and an output clip")
+        elif len(self.input_clip_ids) != 1 or self.output_clip_id is not None:
+            raise ValueError("short clip removal must have one input and no output")
         if not self.explanation.strip():
             raise ValueError("timeline adjustment explanation must not be blank")
 
@@ -106,9 +110,59 @@ def merge_nearby_clips(
     return TimelineTransformResult(_reflow(tuple(merged)), tuple(adjustments))
 
 
+def handle_short_isolated_clips(
+    timeline: Timeline,
+    min_duration_ms: int,
+    protected_segment_ids: tuple[str, ...] = (),
+) -> TimelineTransformResult:
+    """Remove unprotected short clips while always keeping a non-empty timeline."""
+    if min_duration_ms <= 0:
+        raise ValueError("minimum clip duration must be positive")
+    covered_ids = {
+        segment_id for clip in timeline.clips for segment_id in clip.segment_ids
+    }
+    protected_ids = set(protected_segment_ids)
+    if not protected_ids <= covered_ids:
+        raise ValueError("protected Segment is missing from the timeline")
+
+    removable_ids = {
+        clip.clip_id
+        for clip in timeline.clips
+        if clip.source_range.duration_ms < min_duration_ms
+        and not protected_ids.intersection(clip.segment_ids)
+    }
+    if removable_ids and len(removable_ids) == len(timeline.clips):
+        retained = max(
+            timeline.clips,
+            key=lambda clip: clip.source_range.duration_ms,
+        )
+        removable_ids.remove(retained.clip_id)
+    if not removable_ids:
+        return TimelineTransformResult(timeline)
+
+    kept_clips = tuple(
+        clip for clip in timeline.clips if clip.clip_id not in removable_ids
+    )
+    adjustments = tuple(
+        TimelineAdjustment(
+            TimelineAdjustmentReason.SHORT_CLIP_REMOVAL,
+            (clip.clip_id,),
+            None,
+            (
+                f"Removed an unprotected {clip.source_range.duration_ms} ms clip "
+                f"below the {min_duration_ms} ms minimum."
+            ),
+        )
+        for clip in timeline.clips
+        if clip.clip_id in removable_ids
+    )
+    return TimelineTransformResult(_reflow(kept_clips), adjustments)
+
+
 __all__ = [
     "TimelineAdjustment",
     "TimelineAdjustmentReason",
     "TimelineTransformResult",
+    "handle_short_isolated_clips",
     "merge_nearby_clips",
 ]
