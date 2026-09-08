@@ -9,12 +9,18 @@ from minicut.edit_plan import (
     EditDecision,
     EditIntensity,
     EditPlan,
+    PlannerKind,
+    PlanProvenance,
     ReasonCode,
 )
 
 
 def _brief() -> EditBrief:
     return EditBrief(60_000, EditIntensity.BALANCED, "natural")
+
+
+def _provenance() -> PlanProvenance:
+    return PlanProvenance(PlannerKind.RULE, "none", "none", "test-policy-v1")
 
 
 class EditDecisionTest(unittest.TestCase):
@@ -80,6 +86,7 @@ class EditPlanModelTest(unittest.TestCase):
                 ),
             ),
             summary="Keep the core explanation.",
+            provenance=_provenance(),
         )
 
         restored = EditPlan.from_dict(
@@ -90,13 +97,13 @@ class EditPlanModelTest(unittest.TestCase):
         self.assertEqual(restored.schema_version, EDIT_PLAN_SCHEMA_VERSION)
 
     def test_plan_allows_empty_decisions_until_integrity_validation(self) -> None:
-        plan = EditPlan(_brief(), (), "No decisions yet")
+        plan = EditPlan(_brief(), (), "No decisions yet", _provenance())
 
         self.assertEqual(plan.decisions, ())
 
     def test_plan_rejects_blank_summary(self) -> None:
         with self.assertRaisesRegex(ValueError, "summary"):
-            EditPlan(_brief(), (), " ")
+            EditPlan(_brief(), (), " ", _provenance())
 
 
 if __name__ == "__main__":

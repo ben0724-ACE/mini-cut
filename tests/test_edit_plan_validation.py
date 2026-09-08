@@ -9,6 +9,8 @@ from minicut.edit_plan import (
     EditDecision,
     EditIntensity,
     EditPlan,
+    PlannerKind,
+    PlanProvenance,
     ReasonCode,
     validate_edit_plan,
 )
@@ -74,6 +76,10 @@ def _brief() -> EditBrief:
     )
 
 
+def _provenance() -> PlanProvenance:
+    return PlanProvenance(PlannerKind.RULE, "none", "none", "test-policy-v1")
+
+
 def _valid_plan() -> EditPlan:
     return EditPlan(
         _brief(),
@@ -83,6 +89,7 @@ def _valid_plan() -> EditPlan:
             _decision("segment-3", EditAction.DELETE),
         ),
         "Keep the opening and core content.",
+        _provenance(),
     )
 
 
@@ -171,6 +178,7 @@ class EditPlanValidationTest(unittest.TestCase):
                 _decision("segment-3", EditAction.DELETE),
             ),
             "Invalid dependency",
+            _provenance(),
         )
 
         with self.assertRaisesRegex(ValueError, "dependency"):

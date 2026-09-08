@@ -7,10 +7,14 @@ from minicut.edit_plan import (
     EditDecision,
     EditIntensity,
     EditPlan,
+    PlannerKind,
+    PlanProvenance,
     ReasonCode,
     validate_edit_plan,
 )
 from minicut.semantic_segment import SegmentLabel, SemanticSegment
+
+RULE_POLICY_VERSION = "rule-policy-v1"
 
 _DELETION_LABELS = {
     EditIntensity.CONSERVATIVE: frozenset({SegmentLabel.SILENCE}),
@@ -85,6 +89,12 @@ class RulePlanner:
                 f"Rule planner kept {len(decisions) - delete_count} segments "
                 f"and deleted {delete_count} segments."
             ),
+            provenance=PlanProvenance(
+                planner=PlannerKind.RULE,
+                model="none",
+                prompt_version="none",
+                policy_version=RULE_POLICY_VERSION,
+            ),
         )
         validate_edit_plan(plan, segments)
         return plan
@@ -133,4 +143,4 @@ class RulePlanner:
         )
 
 
-__all__ = ["RulePlanner"]
+__all__ = ["RULE_POLICY_VERSION", "RulePlanner"]

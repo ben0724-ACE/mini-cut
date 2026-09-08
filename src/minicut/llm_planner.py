@@ -4,9 +4,16 @@ import asyncio
 import json
 from typing import cast
 
-from minicut.edit_plan import EditBrief, EditDecision, EditPlan, validate_edit_plan
+from minicut.edit_plan import (
+    EditBrief,
+    EditDecision,
+    EditPlan,
+    PlannerKind,
+    PlanProvenance,
+    validate_edit_plan,
+)
 from minicut.errors import ProcessingError
-from minicut.llm_prompt import build_edit_plan_request
+from minicut.llm_prompt import EDIT_PLAN_PROMPT_VERSION, build_edit_plan_request
 from minicut.llm_provider import (
     TextModelProvider,
     TextModelProviderError,
@@ -25,6 +32,7 @@ _DECISION_FIELDS = {
     "explanation",
     "labels",
 }
+LLM_POLICY_VERSION = "llm-policy-v1"
 
 
 class InvalidModelResponseError(ProcessingError):
@@ -43,7 +51,11 @@ class ModelTimeoutError(ModelProviderError):
     """Raised when a text-model request exceeds its configured time limit."""
 
 
-def parse_edit_plan_response(content: str, brief: EditBrief) -> EditPlan:
+def parse_edit_plan_response(
+    content: str,
+    brief: EditBrief,
+    provenance: PlanProvenance,
+) -> EditPlan:
     """Strictly parse the model-owned portion of an EditPlan."""
     try:
         loaded: object = json.loads(content)
@@ -66,7 +78,7 @@ def parse_edit_plan_response(content: str, brief: EditBrief) -> EditPlan:
             if set(decision) != _DECISION_FIELDS:
                 raise ValueError("decision fields are invalid")
             decisions.append(EditDecision.from_dict(decision))
-        return EditPlan(brief, tuple(decisions), summary)
+        return EditPlan(brief, tuple(decisions), summary, provenance)
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
         raise InvalidModelResponseError(
             "Text model returned an invalid edit plan."
@@ -78,7 +90,13 @@ def _validated_plan(
     brief: EditBrief,
     segments: tuple[SemanticSegment, ...],
 ) -> EditPlan:
-    plan = parse_edit_plan_response(response.content, brief)
+    provenance = PlanProvenance(
+        planner=PlannerKind.LLM,
+        model=response.model,
+        prompt_version=EDIT_PLAN_PROMPT_VERSION,
+        policy_version=LLM_POLICY_VERSION,
+    )
+    plan = parse_edit_plan_response(response.content, brief, provenance)
     try:
         validate_edit_plan(plan, segments)
     except ValueError as error:
@@ -174,6 +192,7 @@ class LlmPlanner:
 
 __all__ = [
     "InvalidModelResponseError",
+    "LLM_POLICY_VERSION",
     "LlmPlanner",
     "ModelProviderError",
     "ModelRateLimitError",

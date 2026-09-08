@@ -40,6 +40,50 @@ class ReasonCode(StrEnum):
     TARGET_DURATION = "target_duration"
 
 
+class PlannerKind(StrEnum):
+    """The planning implementation that produced an EditPlan."""
+
+    RULE = "rule"
+    LLM = "llm"
+
+
+@dataclass(slots=True)
+class PlanProvenance:
+    """Reproducibility metadata without prompts or provider credentials."""
+
+    planner: PlannerKind
+    model: str
+    prompt_version: str
+    policy_version: str
+
+    def __post_init__(self) -> None:
+        if not self.model.strip():
+            raise ValueError("plan provenance model must not be blank")
+        if not self.prompt_version.strip():
+            raise ValueError("plan provenance prompt version must not be blank")
+        if not self.policy_version.strip():
+            raise ValueError("plan provenance policy version must not be blank")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-compatible representation."""
+        return {
+            "planner": self.planner.value,
+            "model": self.model,
+            "prompt_version": self.prompt_version,
+            "policy_version": self.policy_version,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "PlanProvenance":
+        """Restore plan provenance from a JSON-compatible mapping."""
+        return cls(
+            planner=PlannerKind(cast(str, data["planner"])),
+            model=cast(str, data["model"]),
+            prompt_version=cast(str, data["prompt_version"]),
+            policy_version=cast(str, data["policy_version"]),
+        )
+
+
 @dataclass(slots=True)
 class ContentRequirement:
     """Natural-language content intent with optional resolved Segment IDs."""
@@ -179,6 +223,7 @@ class EditPlan:
     brief: EditBrief
     decisions: tuple[EditDecision, ...]
     summary: str
+    provenance: PlanProvenance
     schema_version: int = EDIT_PLAN_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -199,6 +244,7 @@ class EditPlan:
             "brief": self.brief.to_dict(),
             "decisions": [decision.to_dict() for decision in self.decisions],
             "summary": self.summary,
+            "provenance": self.provenance.to_dict(),
         }
 
     @classmethod
@@ -206,12 +252,14 @@ class EditPlan:
         """Restore an edit plan from a JSON-compatible mapping."""
         brief_data = cast(dict[str, object], data["brief"])
         decision_data = cast(list[dict[str, object]], data["decisions"])
+        provenance_data = cast(dict[str, object], data["provenance"])
         return cls(
             brief=EditBrief.from_dict(brief_data),
             decisions=tuple(
                 EditDecision.from_dict(decision) for decision in decision_data
             ),
             summary=cast(str, data["summary"]),
+            provenance=PlanProvenance.from_dict(provenance_data),
             schema_version=cast(int, data["schema_version"]),
         )
 
@@ -284,6 +332,8 @@ __all__ = [
     "EditDecision",
     "EditIntensity",
     "EditPlan",
+    "PlanProvenance",
+    "PlannerKind",
     "ReasonCode",
     "validate_edit_plan",
 ]
