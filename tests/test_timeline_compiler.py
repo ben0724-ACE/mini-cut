@@ -10,8 +10,9 @@ from minicut.edit_plan import (
     PlanProvenance,
     ReasonCode,
 )
+from minicut.media import TimeRange
 from minicut.semantic_segment import SemanticSegment
-from minicut.timeline import resolve_kept_segments
+from minicut.timeline import compile_timeline, resolve_kept_segments
 
 
 def _segment(ordinal: int) -> SemanticSegment:
@@ -79,6 +80,59 @@ class ResolveKeptSegmentsTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "missing"):
             resolve_kept_segments(plan, segments)
+
+
+class CompileTimelineTest(unittest.TestCase):
+    def test_compiles_contiguous_output_ranges_and_exact_total_duration(self) -> None:
+        segment_0 = _segment(0)
+        segment_1 = SemanticSegment(
+            segment_id="segment-1",
+            text="较长内容",
+            start_ms=2_000,
+            end_ms=3_500,
+            utterance_ids=("utterance-1",),
+            word_ids=("word-1",),
+        )
+        segment_2 = SemanticSegment(
+            segment_id="segment-2",
+            text="结尾内容",
+            start_ms=4_000,
+            end_ms=4_800,
+            utterance_ids=("utterance-2",),
+            word_ids=("word-2",),
+        )
+        segments = (segment_2, segment_1, segment_0)
+        plan = _plan(
+            (
+                _decision("segment-2", EditAction.KEEP),
+                _decision("segment-0", EditAction.KEEP),
+                _decision("segment-1", EditAction.KEEP),
+            )
+        )
+
+        timeline = compile_timeline(plan, segments, "asset-1")
+
+        self.assertEqual(
+            tuple(clip.segment_id for clip in timeline.clips),
+            ("segment-0", "segment-1", "segment-2"),
+        )
+        self.assertEqual(
+            tuple(clip.source_range for clip in timeline.clips),
+            (TimeRange(0, 800), TimeRange(2_000, 3_500), TimeRange(4_000, 4_800)),
+        )
+        self.assertEqual(
+            tuple(clip.output_range for clip in timeline.clips),
+            (TimeRange(0, 800), TimeRange(800, 2_300), TimeRange(2_300, 3_100)),
+        )
+        self.assertEqual(timeline.estimated_duration_ms, 3_100)
+        self.assertEqual(compile_timeline(plan, segments, "asset-1"), timeline)
+
+    def test_rejects_blank_source_asset_id(self) -> None:
+        segments = (_segment(0),)
+        plan = _plan((_decision("segment-0", EditAction.KEEP),))
+
+        with self.assertRaisesRegex(ValueError, "asset"):
+            compile_timeline(plan, segments, " ")
 
 
 if __name__ == "__main__":

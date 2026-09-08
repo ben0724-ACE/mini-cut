@@ -129,9 +129,37 @@ def resolve_kept_segments(
     return kept_segments
 
 
+def compile_timeline(
+    plan: EditPlan,
+    segments: tuple[SemanticSegment, ...],
+    source_asset_id: str,
+) -> Timeline:
+    """Compile keep decisions into contiguous output ranges without media I/O."""
+    if not source_asset_id.strip():
+        raise ValueError("timeline source asset ID must not be blank")
+    kept_segments = resolve_kept_segments(plan, segments)
+    clips: list[Clip] = []
+    output_cursor_ms = 0
+    for ordinal, segment in enumerate(kept_segments):
+        source_range = TimeRange(segment.start_ms, segment.end_ms)
+        output_end_ms = output_cursor_ms + source_range.duration_ms
+        clips.append(
+            Clip(
+                clip_id=f"clip:{ordinal}",
+                source_asset_id=source_asset_id,
+                segment_id=segment.segment_id,
+                source_range=source_range,
+                output_range=TimeRange(output_cursor_ms, output_end_ms),
+            )
+        )
+        output_cursor_ms = output_end_ms
+    return Timeline(tuple(clips), output_cursor_ms)
+
+
 __all__ = [
     "TIMELINE_SCHEMA_VERSION",
     "Clip",
     "Timeline",
+    "compile_timeline",
     "resolve_kept_segments",
 ]
