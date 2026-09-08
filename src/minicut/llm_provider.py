@@ -4,6 +4,14 @@ from dataclasses import dataclass
 from typing import Protocol
 
 
+class TextModelProviderError(Exception):
+    """Base failure reported by a concrete text-model adapter."""
+
+
+class TextModelRateLimitError(TextModelProviderError):
+    """Provider rejected a request because its rate limit was reached."""
+
+
 @dataclass(slots=True)
 class TextModelRequest:
     """Provider-neutral prompts for one text generation request."""
@@ -43,4 +51,10 @@ class TextModelProvider(Protocol):
         ...
 
 
-__all__ = ["TextModelProvider", "TextModelRequest", "TextModelResponse"]
+__all__ = [
+    "TextModelProvider",
+    "TextModelProviderError",
+    "TextModelRateLimitError",
+    "TextModelRequest",
+    "TextModelResponse",
+]

@@ -1,5 +1,6 @@
 """LLM-backed structured edit planning with one controlled repair."""
 
+import asyncio
 import json
 from typing import cast
 
@@ -8,6 +9,8 @@ from minicut.errors import ProcessingError
 from minicut.llm_prompt import build_edit_plan_request
 from minicut.llm_provider import (
     TextModelProvider,
+    TextModelProviderError,
+    TextModelRateLimitError,
     TextModelRequest,
     TextModelResponse,
 )
@@ -26,6 +29,18 @@ _DECISION_FIELDS = {
 
 class InvalidModelResponseError(ProcessingError):
     """Raised when model output cannot become a validated EditPlan."""
+
+
+class ModelProviderError(ProcessingError):
+    """Raised when a text-model provider cannot complete a request."""
+
+
+class ModelRateLimitError(ModelProviderError):
+    """Raised when the configured text-model provider is rate limited."""
+
+
+class ModelTimeoutError(ModelProviderError):
+    """Raised when a text-model request exceeds its configured time limit."""
 
 
 def parse_edit_plan_response(content: str, brief: EditBrief) -> EditPlan:
@@ -101,11 +116,39 @@ def _build_repair_request(
 class LlmPlanner:
     """Generate and validate an EditPlan through a text-model provider."""
 
-    def __init__(self, provider: TextModelProvider, model: str) -> None:
+    def __init__(
+        self,
+        provider: TextModelProvider,
+        model: str,
+        *,
+        timeout_seconds: float = 60.0,
+    ) -> None:
         if not model.strip():
             raise ValueError("planner model must not be blank")
+        if timeout_seconds <= 0:
+            raise ValueError("planner timeout must be positive")
         self._provider = provider
         self._model = model
+        self._timeout_seconds = timeout_seconds
+
+    async def _generate(self, request: TextModelRequest) -> TextModelResponse:
+        try:
+            return await asyncio.wait_for(
+                self._provider.generate(request),
+                timeout=self._timeout_seconds,
+            )
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError as error:
+            raise ModelTimeoutError("Text model request timed out.") from error
+        except TextModelRateLimitError as error:
+            raise ModelRateLimitError(
+                "Text model provider rate limit was reached."
+            ) from error
+        except TextModelProviderError as error:
+            raise ModelProviderError("Text model provider request failed.") from error
+        except Exception as error:
+            raise ModelProviderError("Text model provider request failed.") from error
 
     async def plan(
         self,
@@ -114,13 +157,13 @@ class LlmPlanner:
     ) -> EditPlan:
         """Generate a plan, allowing exactly one repair of invalid output."""
         request = build_edit_plan_request(brief, segments, self._model)
-        response = await self._provider.generate(request)
+        response = await self._generate(request)
         try:
             return _validated_plan(response, brief, segments)
         except InvalidModelResponseError:
             repair_request = _build_repair_request(request, response.content)
 
-        repair_response = await self._provider.generate(repair_request)
+        repair_response = await self._generate(repair_request)
         try:
             return _validated_plan(repair_response, brief, segments)
         except InvalidModelResponseError as error:
@@ -129,4 +172,11 @@ class LlmPlanner:
             ) from error
 
 
-__all__ = ["InvalidModelResponseError", "LlmPlanner", "parse_edit_plan_response"]
+__all__ = [
+    "InvalidModelResponseError",
+    "LlmPlanner",
+    "ModelProviderError",
+    "ModelRateLimitError",
+    "ModelTimeoutError",
+    "parse_edit_plan_response",
+]
