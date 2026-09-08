@@ -1,11 +1,24 @@
 """Pure word-level boundary refinements for compiled timelines."""
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from minicut.media import TimeRange
 from minicut.semantic_segment import SemanticSegment
 from minicut.timeline import Clip, Timeline
 from minicut.transcript import Word
+
+
+@dataclass(frozen=True, slots=True)
+class BoundaryPolicy:
+    """Configurable source padding measured in integer milliseconds."""
+
+    head_padding_ms: int = 0
+    tail_padding_ms: int = 0
+
+    def __post_init__(self) -> None:
+        if self.head_padding_ms < 0 or self.tail_padding_ms < 0:
+            raise ValueError("boundary padding must not be negative")
 
 
 def _index_inputs(
@@ -96,4 +109,55 @@ def snap_clip_end_boundaries(
     return _reflow_clips(tuple(refined))
 
 
-__all__ = ["snap_clip_end_boundaries", "snap_clip_start_boundaries"]
+def apply_boundary_padding(
+    timeline: Timeline,
+    policy: BoundaryPolicy,
+    media_duration_ms: int,
+) -> Timeline:
+    """Apply clamped source padding without overlapping adjacent clips."""
+    if media_duration_ms <= 0:
+        raise ValueError("media duration must be positive")
+    for clip in timeline.clips:
+        if clip.source_range.end_ms > media_duration_ms:
+            raise ValueError("clip source range exceeds media duration")
+    for previous, current in zip(timeline.clips, timeline.clips[1:], strict=False):
+        if previous.source_range.end_ms > current.source_range.start_ms:
+            raise ValueError("clip source ranges overlap before padding")
+
+    padded_ranges = [
+        TimeRange(
+            max(0, clip.source_range.start_ms - policy.head_padding_ms),
+            min(media_duration_ms, clip.source_range.end_ms + policy.tail_padding_ms),
+        )
+        for clip in timeline.clips
+    ]
+    for ordinal in range(1, len(padded_ranges)):
+        previous = padded_ranges[ordinal - 1]
+        current = padded_ranges[ordinal]
+        if previous.end_ms <= current.start_ms:
+            continue
+        previous_source = timeline.clips[ordinal - 1].source_range
+        current_source = timeline.clips[ordinal].source_range
+        boundary_ms = (previous_source.end_ms + current_source.start_ms) // 2
+        padded_ranges[ordinal - 1] = TimeRange(previous.start_ms, boundary_ms)
+        padded_ranges[ordinal] = TimeRange(boundary_ms, current.end_ms)
+
+    padded_clips = tuple(
+        Clip(
+            clip.clip_id,
+            clip.source_asset_id,
+            clip.segment_id,
+            source_range,
+            clip.output_range,
+        )
+        for clip, source_range in zip(timeline.clips, padded_ranges, strict=True)
+    )
+    return _reflow_clips(padded_clips)
+
+
+__all__ = [
+    "BoundaryPolicy",
+    "apply_boundary_padding",
+    "snap_clip_end_boundaries",
+    "snap_clip_start_boundaries",
+]

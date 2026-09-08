@@ -4,6 +4,8 @@ from minicut.media import TimeRange
 from minicut.semantic_segment import SemanticSegment
 from minicut.timeline import Clip, Timeline
 from minicut.timeline_boundary import (
+    BoundaryPolicy,
+    apply_boundary_padding,
     snap_clip_end_boundaries,
     snap_clip_start_boundaries,
 )
@@ -144,6 +146,87 @@ class SnapClipEndBoundariesTest(unittest.TestCase):
                 segments,
                 (Word("word-0", "内容", 1_000, 2_000),),
             )
+
+
+class BoundaryPaddingTest(unittest.TestCase):
+    def test_table_driven_padding_clamps_media_and_avoids_overlap(self) -> None:
+        cases = (
+            (
+                "media edges",
+                (TimeRange(100, 500), TimeRange(1_600, 1_900)),
+                BoundaryPolicy(200, 200),
+                2_000,
+                (TimeRange(0, 700), TimeRange(1_400, 2_000)),
+            ),
+            (
+                "padding collision",
+                (TimeRange(100, 500), TimeRange(600, 900)),
+                BoundaryPolicy(200, 200),
+                1_000,
+                (TimeRange(0, 550), TimeRange(550, 1_000)),
+            ),
+            (
+                "available gap",
+                (TimeRange(500, 1_000), TimeRange(1_500, 2_000)),
+                BoundaryPolicy(100, 100),
+                3_000,
+                (TimeRange(400, 1_100), TimeRange(1_400, 2_100)),
+            ),
+        )
+
+        for name, source_ranges, policy, media_duration_ms, expected in cases:
+            with self.subTest(name=name):
+                timeline = Timeline(
+                    tuple(
+                        _clip(
+                            ordinal,
+                            source_range,
+                            TimeRange(ordinal * 400, ordinal * 400 + 400),
+                        )
+                        for ordinal, source_range in enumerate(source_ranges)
+                    ),
+                    800,
+                )
+
+                padded = apply_boundary_padding(timeline, policy, media_duration_ms)
+
+                self.assertEqual(
+                    tuple(clip.source_range for clip in padded.clips), expected
+                )
+                self.assertTrue(
+                    all(
+                        left.source_range.end_ms <= right.source_range.start_ms
+                        for left, right in zip(
+                            padded.clips, padded.clips[1:], strict=False
+                        )
+                    )
+                )
+                self.assertEqual(
+                    padded.estimated_duration_ms,
+                    sum(time_range.duration_ms for time_range in expected),
+                )
+
+    def test_rejects_invalid_policy_media_or_preexisting_overlap(self) -> None:
+        invalid_factories = (
+            lambda: BoundaryPolicy(-1, 0),
+            lambda: BoundaryPolicy(0, -1),
+        )
+        for create_policy in invalid_factories:
+            with self.subTest(create_policy=create_policy):
+                with self.assertRaises(ValueError):
+                    create_policy()
+
+        timeline = Timeline(
+            (
+                _clip(0, TimeRange(100, 600), TimeRange(0, 500)),
+                _clip(1, TimeRange(500, 900), TimeRange(500, 900)),
+            ),
+            900,
+        )
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            apply_boundary_padding(timeline, BoundaryPolicy(100, 100), 1_000)
+        with self.assertRaisesRegex(ValueError, "media duration"):
+            apply_boundary_padding(timeline, BoundaryPolicy(0, 0), 0)
 
 
 if __name__ == "__main__":
