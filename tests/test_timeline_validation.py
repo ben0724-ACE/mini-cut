@@ -1,12 +1,15 @@
 import unittest
 
-from minicut.media import MediaAsset, TimeRange
+from minicut.media import MediaAsset, StreamInfo, StreamType, TimeRange
 from minicut.timeline import Clip, Timeline
 from minicut.timeline_validation import (
+    TimelineTrackRequirements,
     TimelineValidationCode,
     TimelineValidationError,
     inspect_timeline_structure,
+    inspect_timeline_tracks,
     validate_timeline_structure,
+    validate_timeline_tracks,
 )
 
 
@@ -125,6 +128,81 @@ class TimelineStructureValidationTest(unittest.TestCase):
                     expected_code,
                     {issue.code for issue in raised.exception.issues},
                 )
+
+
+class TimelineTrackValidationTest(unittest.TestCase):
+    def test_accepts_audio_only_and_multitrack_video_assets(self) -> None:
+        timeline = _valid_timeline()
+        audio_asset = MediaAsset(
+            "asset-1",
+            "/audio.wav",
+            2_000,
+            (StreamInfo(0, StreamType.AUDIO, "pcm_s16le"),),
+            "test",
+        )
+        multitrack_asset = MediaAsset(
+            "asset-1",
+            "/video.mov",
+            2_000,
+            (
+                StreamInfo(0, StreamType.VIDEO, "h264"),
+                StreamInfo(1, StreamType.AUDIO, "aac"),
+                StreamInfo(2, StreamType.AUDIO, "aac"),
+            ),
+            "test",
+        )
+
+        self.assertEqual(
+            inspect_timeline_tracks(
+                timeline,
+                (audio_asset,),
+                TimelineTrackRequirements(require_audio=True),
+            ),
+            (),
+        )
+        validate_timeline_tracks(
+            timeline,
+            (multitrack_asset,),
+            TimelineTrackRequirements(require_audio=True, require_video=True),
+        )
+
+    def test_reports_missing_required_audio_or_video_track(self) -> None:
+        timeline = _valid_timeline()
+        cases = (
+            (
+                MediaAsset(
+                    "asset-1",
+                    "/silent.mov",
+                    2_000,
+                    (StreamInfo(0, StreamType.VIDEO, "h264"),),
+                    "test",
+                ),
+                TimelineTrackRequirements(require_audio=True, require_video=True),
+                TimelineValidationCode.MISSING_AUDIO_TRACK,
+            ),
+            (
+                MediaAsset(
+                    "asset-1",
+                    "/audio.wav",
+                    2_000,
+                    (StreamInfo(0, StreamType.AUDIO, "pcm_s16le"),),
+                    "test",
+                ),
+                TimelineTrackRequirements(require_video=True),
+                TimelineValidationCode.MISSING_VIDEO_TRACK,
+            ),
+        )
+
+        for asset, requirements, expected_code in cases:
+            with self.subTest(expected_code=expected_code):
+                issues = inspect_timeline_tracks(timeline, (asset,), requirements)
+                self.assertEqual(issues[0].code, expected_code)
+                with self.assertRaises(TimelineValidationError):
+                    validate_timeline_tracks(timeline, (asset,), requirements)
+
+    def test_rejects_empty_track_requirements(self) -> None:
+        with self.assertRaisesRegex(ValueError, "track"):
+            TimelineTrackRequirements()
 
     def test_empty_timeline_and_duplicate_clip_ids_are_hard_errors(self) -> None:
         empty = Timeline((), 0)
