@@ -194,7 +194,47 @@ class AtomicRenderPublicationTest(unittest.TestCase):
 
             self.assertEqual(destination.read_bytes(), b"previous successful render")
             temporary_files = tuple(destination.parent.glob(".result-*.mp4"))
-            self.assertEqual(len(temporary_files), 1)
+            self.assertEqual(temporary_files, ())
+
+    def test_render_failure_cleans_temporary_file_and_preserves_output(self) -> None:
+        with TemporaryDirectory() as directory:
+            destination = Path(directory) / "result.mp4"
+            destination.write_bytes(b"previous successful render")
+            launcher = CapturingLauncher(
+                FakeProcess(return_code=1, stderr="encoder failed"),
+                b"partial render",
+            )
+
+            with self.assertRaisesRegex(RenderFailed, "encoder failed"):
+                FfmpegRenderer(launcher=launcher).render_to_path(
+                    ("ffmpeg", "-y", destination.as_uri()),
+                    destination,
+                    timeout_seconds=5,
+                )
+
+            self.assertEqual(destination.read_bytes(), b"previous successful render")
+            self.assertEqual(tuple(destination.parent.glob(".result-*.mp4")), ())
+
+    def test_cancelled_render_cleans_temporary_file_and_reaps_process(self) -> None:
+        with TemporaryDirectory() as directory:
+            destination = Path(directory) / "result.mp4"
+            process = FakeProcess(running_polls=10)
+            launcher = CapturingLauncher(process, b"partial render")
+            token = CancellationToken()
+            token.cancel()
+
+            with self.assertRaises(RenderCancelled):
+                FfmpegRenderer(launcher=launcher).render_to_path(
+                    ("ffmpeg", "-y", destination.as_uri()),
+                    destination,
+                    timeout_seconds=5,
+                    cancellation=token,
+                )
+
+            self.assertTrue(process.terminated)
+            self.assertEqual(process.wait_calls, [1.0])
+            self.assertFalse(destination.exists())
+            self.assertEqual(tuple(destination.parent.glob(".result-*.mp4")), ())
 
     def test_rejects_command_destination_mismatch_or_missing_directory(self) -> None:
         with TemporaryDirectory() as directory:

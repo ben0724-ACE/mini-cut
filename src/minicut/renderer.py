@@ -209,17 +209,20 @@ class FfmpegRenderer:
         ) as temporary_file:
             temporary_path = Path(temporary_file.name)
         temporary_command = (*command[:-1], temporary_path.as_uri())
-        events = self.execute(
-            temporary_command,
-            timeout_seconds=timeout_seconds,
-            cancellation=cancellation,
-            on_progress=on_progress,
-        )
         try:
-            self.publisher(temporary_path, destination)
-        except OSError as error:
-            raise RenderFailed("Rendered output could not be published.") from error
-        return events
+            events = self.execute(
+                temporary_command,
+                timeout_seconds=timeout_seconds,
+                cancellation=cancellation,
+                on_progress=on_progress,
+            )
+            try:
+                self.publisher(temporary_path, destination)
+            except OSError as error:
+                raise RenderFailed("Rendered output could not be published.") from error
+            return events
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
 
 __all__ = [
