@@ -68,37 +68,50 @@ def _out_time_ms(values: dict[str, str]) -> int:
         return 0
 
 
-def parse_ffmpeg_progress(lines: Iterable[str]) -> tuple[FfmpegProgressEvent, ...]:
-    """Parse zero or more complete progress reports from line-oriented output."""
-    values: dict[str, str] = {}
-    events: list[FfmpegProgressEvent] = []
-    for raw_line in lines:
+class FfmpegProgressParser:
+    """Incrementally assemble line-oriented FFmpeg progress reports."""
+
+    def __init__(self) -> None:
+        self._values: dict[str, str] = {}
+
+    def feed_line(self, raw_line: str) -> FfmpegProgressEvent | None:
+        """Consume one line and return an event when a report is complete."""
         line = raw_line.strip()
         key, separator, value = line.partition("=")
         if separator != "=" or not key:
-            continue
-        values[key] = value
+            return None
+        self._values[key] = value
         if key != "progress":
-            continue
+            return None
         try:
             state = FfmpegProgressState(value)
         except ValueError:
-            continue
-        events.append(
-            FfmpegProgressEvent(
-                out_time_ms=_out_time_ms(values),
-                state=state,
-                frame=_optional_int(values.get("frame")),
-                fps=_optional_float(values.get("fps")),
-                speed=_optional_float(values.get("speed"), suffix="x"),
-            )
+            return None
+        event = FfmpegProgressEvent(
+            out_time_ms=_out_time_ms(self._values),
+            state=state,
+            frame=_optional_int(self._values.get("frame")),
+            fps=_optional_float(self._values.get("fps")),
+            speed=_optional_float(self._values.get("speed"), suffix="x"),
         )
-        values = {}
+        self._values = {}
+        return event
+
+
+def parse_ffmpeg_progress(lines: Iterable[str]) -> tuple[FfmpegProgressEvent, ...]:
+    """Parse zero or more complete progress reports from line-oriented output."""
+    parser = FfmpegProgressParser()
+    events: list[FfmpegProgressEvent] = []
+    for raw_line in lines:
+        event = parser.feed_line(raw_line)
+        if event is not None:
+            events.append(event)
     return tuple(events)
 
 
 __all__ = [
     "FfmpegProgressEvent",
+    "FfmpegProgressParser",
     "FfmpegProgressState",
     "parse_ffmpeg_progress",
 ]
