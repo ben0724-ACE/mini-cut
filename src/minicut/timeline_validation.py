@@ -5,6 +5,7 @@ from enum import StrEnum
 
 from minicut.media import MediaAsset, StreamType
 from minicut.timeline import Clip, Timeline
+from minicut.timeline_postprocess import JumpCutRisk
 
 
 class ValidationSeverity(StrEnum):
@@ -29,6 +30,7 @@ class TimelineValidationCode(StrEnum):
     DURATION_MISMATCH = "duration_mismatch"
     MISSING_AUDIO_TRACK = "missing_audio_track"
     MISSING_VIDEO_TRACK = "missing_video_track"
+    JUMP_CUT_RISK = "jump_cut_risk"
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +57,29 @@ class TimelineValidationIssue:
     def __post_init__(self) -> None:
         if not self.message.strip():
             raise ValueError("timeline validation message must not be blank")
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineDiagnosticSummary:
+    """Render-readiness result containing blocking errors and advisory warnings."""
+
+    clip_count: int
+    estimated_duration_ms: int
+    issues: tuple[TimelineValidationIssue, ...] = ()
+
+    @property
+    def error_count(self) -> int:
+        return sum(issue.severity is ValidationSeverity.ERROR for issue in self.issues)
+
+    @property
+    def warning_count(self) -> int:
+        return sum(
+            issue.severity is ValidationSeverity.WARNING for issue in self.issues
+        )
+
+    @property
+    def can_render(self) -> bool:
+        return self.error_count == 0
 
 
 class TimelineValidationError(ValueError):
@@ -251,14 +276,64 @@ def validate_timeline_tracks(
         raise TimelineValidationError(blocking)
 
 
+def build_timeline_diagnostics(
+    timeline: Timeline,
+    assets: tuple[MediaAsset, ...],
+    requirements: TimelineTrackRequirements,
+    jump_cut_risks: tuple[JumpCutRisk, ...] = (),
+) -> TimelineDiagnosticSummary:
+    """Combine render-blocking validation and non-mutating risk diagnostics."""
+    structural = inspect_timeline_structure(timeline, assets)
+    track = inspect_timeline_tracks(timeline, assets, requirements)
+    warnings = tuple(
+        TimelineValidationIssue(
+            TimelineValidationCode.JUMP_CUT_RISK,
+            risk.explanation,
+            (risk.left_clip_id, risk.right_clip_id),
+            ValidationSeverity.WARNING,
+        )
+        for risk in jump_cut_risks
+    )
+    issues = tuple(dict.fromkeys((*structural, *track, *warnings)))
+    return TimelineDiagnosticSummary(
+        len(timeline.clips),
+        timeline.estimated_duration_ms,
+        issues,
+    )
+
+
+def validate_timeline_for_render(
+    timeline: Timeline,
+    assets: tuple[MediaAsset, ...],
+    requirements: TimelineTrackRequirements,
+    jump_cut_risks: tuple[JumpCutRisk, ...] = (),
+) -> TimelineDiagnosticSummary:
+    """Return diagnostics when renderable, or raise with every hard error."""
+    summary = build_timeline_diagnostics(
+        timeline,
+        assets,
+        requirements,
+        jump_cut_risks,
+    )
+    blocking = tuple(
+        issue for issue in summary.issues if issue.severity is ValidationSeverity.ERROR
+    )
+    if blocking:
+        raise TimelineValidationError(blocking)
+    return summary
+
+
 __all__ = [
+    "TimelineDiagnosticSummary",
     "TimelineValidationCode",
     "TimelineValidationError",
     "TimelineValidationIssue",
     "TimelineTrackRequirements",
     "ValidationSeverity",
+    "build_timeline_diagnostics",
     "inspect_timeline_tracks",
     "inspect_timeline_structure",
     "validate_timeline_tracks",
     "validate_timeline_structure",
+    "validate_timeline_for_render",
 ]

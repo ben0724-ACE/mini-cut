@@ -1,13 +1,18 @@
+import random
 import unittest
 
 from minicut.media import MediaAsset, StreamInfo, StreamType, TimeRange
 from minicut.timeline import Clip, Timeline
+from minicut.timeline_postprocess import JumpCutRisk, TimelineRiskReason
 from minicut.timeline_validation import (
     TimelineTrackRequirements,
     TimelineValidationCode,
     TimelineValidationError,
+    ValidationSeverity,
+    build_timeline_diagnostics,
     inspect_timeline_structure,
     inspect_timeline_tracks,
+    validate_timeline_for_render,
     validate_timeline_structure,
     validate_timeline_tracks,
 )
@@ -220,6 +225,107 @@ class TimelineTrackValidationTest(unittest.TestCase):
                     expected_code,
                     {issue.code for issue in raised.exception.issues},
                 )
+
+
+class TimelineRenderDiagnosticsTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.requirements = TimelineTrackRequirements(require_video=True)
+        self.video_asset = MediaAsset(
+            "asset-1",
+            "/video.mov",
+            2_000,
+            (StreamInfo(0, StreamType.VIDEO, "h264"),),
+            "test",
+        )
+
+    def test_warning_is_reported_without_blocking_or_mutating_timeline(self) -> None:
+        timeline = _valid_timeline()
+        before = timeline.to_dict()
+        risk = JumpCutRisk(
+            TimelineRiskReason.SOURCE_GAP,
+            "clip:0",
+            "clip:1",
+            300,
+            400,
+            "The cut may be visible.",
+        )
+
+        summary = validate_timeline_for_render(
+            timeline,
+            (self.video_asset,),
+            self.requirements,
+            (risk,),
+        )
+
+        self.assertTrue(summary.can_render)
+        self.assertEqual(summary.error_count, 0)
+        self.assertEqual(summary.warning_count, 1)
+        self.assertEqual(summary.clip_count, 2)
+        self.assertEqual(summary.estimated_duration_ms, 900)
+        self.assertEqual(summary.issues[0].severity, ValidationSeverity.WARNING)
+        self.assertEqual(timeline.to_dict(), before)
+
+    def test_hard_errors_are_summarized_and_block_rendering(self) -> None:
+        timeline = Timeline(
+            (_clip(0, TimeRange(1_900, 2_100), TimeRange(0, 200)),),
+            200,
+        )
+
+        summary = build_timeline_diagnostics(
+            timeline,
+            (self.video_asset,),
+            self.requirements,
+        )
+
+        self.assertFalse(summary.can_render)
+        self.assertEqual(summary.error_count, 1)
+        self.assertEqual(
+            summary.issues[0].code,
+            TimelineValidationCode.SOURCE_OUT_OF_RANGE,
+        )
+        with self.assertRaises(TimelineValidationError) as raised:
+            validate_timeline_for_render(
+                timeline,
+                (self.video_asset,),
+                self.requirements,
+            )
+        self.assertEqual(raised.exception.issues, summary.issues)
+
+    def test_generated_invalid_intervals_never_pass_validation(self) -> None:
+        generator = random.Random(20260909)
+
+        for index in range(100):
+            source_start = generator.randint(1_700, 1_999)
+            source_end = generator.randint(2_001, 2_500)
+            duration_ms = source_end - source_start
+            output_start = generator.randint(0, 500)
+            timeline = Timeline(
+                (
+                    _clip(
+                        index,
+                        TimeRange(source_start, source_end),
+                        TimeRange(output_start, output_start + duration_ms),
+                    ),
+                ),
+                output_start + duration_ms,
+            )
+            with self.subTest(index=index):
+                summary = build_timeline_diagnostics(
+                    timeline,
+                    (self.video_asset,),
+                    self.requirements,
+                )
+                self.assertFalse(summary.can_render)
+                self.assertIn(
+                    TimelineValidationCode.SOURCE_OUT_OF_RANGE,
+                    {issue.code for issue in summary.issues},
+                )
+                with self.assertRaises(TimelineValidationError):
+                    validate_timeline_for_render(
+                        timeline,
+                        (self.video_asset,),
+                        self.requirements,
+                    )
 
 
 if __name__ == "__main__":
