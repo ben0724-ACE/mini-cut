@@ -2,6 +2,7 @@ import unittest
 
 from minicut.media import MediaAsset, StreamInfo, StreamType, TimeRange
 from minicut.render_command import (
+    AudioOutputMetadata,
     RenderCommandBuilder,
     RenderEncoding,
     VideoOutputMetadata,
@@ -69,6 +70,10 @@ class SingleClipRenderCommandTest(unittest.TestCase):
                 "yuv420p",
                 "-c:a",
                 "aac",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
                 "file:///output/result.mp4",
             ),
         )
@@ -130,16 +135,18 @@ class MultiClipRenderCommandTest(unittest.TestCase):
             "scale=1920:1080:force_original_aspect_ratio=decrease,"
             "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,"
             "format=yuv420p[v0];"
-            "[0:3]atrim=start=0.100:end=0.500,asetpts=PTS-STARTPTS[a0];"
+            "[0:3]atrim=start=0.100:end=0.500,asetpts=PTS-STARTPTS,"
+            "aresample=48000,aformat=channel_layouts=stereo[a0];"
             "[0:2]trim=start=0.800:end=1.300,setpts=PTS-STARTPTS,"
             "scale=1920:1080:force_original_aspect_ratio=decrease,"
             "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,"
             "format=yuv420p[v1];"
-            "[0:3]atrim=start=0.800:end=1.300,asetpts=PTS-STARTPTS[a1];"
+            "[0:3]atrim=start=0.800:end=1.300,asetpts=PTS-STARTPTS,"
+            "aresample=48000,aformat=channel_layouts=stereo[a1];"
             "[v0][a0][v1][a1]concat=n=2:v=1:a=1[outv][outa]",
         )
         self.assertEqual(
-            command[-11:],
+            command[-15:],
             (
                 "-map",
                 "[outv]",
@@ -151,6 +158,10 @@ class MultiClipRenderCommandTest(unittest.TestCase):
                 "yuv420p",
                 "-c:a",
                 "aac",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
                 "file:///output/result.mp4",
             ),
         )
@@ -186,6 +197,52 @@ class MultiClipRenderCommandTest(unittest.TestCase):
         self.assertIn("[1:4]atrim=start=0.800:end=1.300", graph)
         self.assertTrue(graph.endswith("[a0][a1]concat=n=2:v=0:a=1[outa]"))
         self.assertNotIn("[outv]", command)
+
+    def test_normalizes_audio_sample_rate_and_channel_layout(self) -> None:
+        metadata = AudioOutputMetadata(44_100, "mono")
+
+        command = RenderCommandBuilder().build_multi_clip(
+            _multi_timeline(),
+            (_asset(),),
+            "/output/result.mp4",
+            TimelineTrackRequirements(require_audio=True),
+            audio_metadata=metadata,
+        )
+
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertEqual(graph.count("aresample=44100"), 2)
+        self.assertEqual(graph.count("aformat=channel_layouts=mono"), 2)
+        self.assertEqual(command[-7:-1], ("-c:a", "aac", "-ar", "44100", "-ac", "1"))
+
+    def test_silent_video_can_remain_silent_or_reject_required_audio(self) -> None:
+        silent = MediaAsset(
+            "asset-1",
+            "/media/silent.mov",
+            5_000,
+            (StreamInfo(0, StreamType.VIDEO, "h264"),),
+            "test",
+        )
+
+        command = RenderCommandBuilder().build_multi_clip(
+            _multi_timeline(),
+            (silent,),
+            "/output/result.mp4",
+            TimelineTrackRequirements(require_video=True),
+        )
+        self.assertNotIn("-c:a", command)
+        with self.assertRaisesRegex(ValueError, "blocking validation"):
+            RenderCommandBuilder().build_multi_clip(
+                _multi_timeline(),
+                (silent,),
+                "/output/result.mp4",
+                TimelineTrackRequirements(require_audio=True, require_video=True),
+            )
+
+    def test_rejects_invalid_audio_output_metadata(self) -> None:
+        for sample_rate, layout in ((0, "stereo"), (48_000, "surround")):
+            with self.subTest(sample_rate=sample_rate, layout=layout):
+                with self.assertRaises(ValueError):
+                    AudioOutputMetadata(sample_rate, layout)
 
     def test_normalizes_landscape_portrait_and_fractional_frame_rates(self) -> None:
         scenarios = (

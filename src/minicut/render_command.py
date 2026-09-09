@@ -63,7 +63,26 @@ class RenderEncoding:
             raise ValueError("render encoding values must not be blank")
 
 
+@dataclass(frozen=True, slots=True)
+class AudioOutputMetadata:
+    """Normalized sample rate and channel layout for concat compatibility."""
+
+    sample_rate: int = 48_000
+    channel_layout: str = "stereo"
+
+    def __post_init__(self) -> None:
+        if self.sample_rate <= 0:
+            raise ValueError("audio output sample rate must be positive")
+        if self.channel_layout not in {"mono", "stereo"}:
+            raise ValueError("audio output channel layout must be mono or stereo")
+
+    @property
+    def channel_count(self) -> int:
+        return 1 if self.channel_layout == "mono" else 2
+
+
 _DEFAULT_VIDEO_METADATA = VideoOutputMetadata()
+_DEFAULT_AUDIO_METADATA = AudioOutputMetadata()
 _DEFAULT_ENCODING = RenderEncoding()
 
 
@@ -72,6 +91,7 @@ def _encoding_arguments(
     include_video: bool,
     include_audio: bool,
     encoding: RenderEncoding,
+    audio_metadata: AudioOutputMetadata,
 ) -> tuple[str, ...]:
     arguments: list[str] = []
     if include_video:
@@ -79,7 +99,16 @@ def _encoding_arguments(
             ("-c:v", encoding.video_codec, "-pix_fmt", encoding.pixel_format)
         )
     if include_audio:
-        arguments.extend(("-c:a", encoding.audio_codec))
+        arguments.extend(
+            (
+                "-c:a",
+                encoding.audio_codec,
+                "-ar",
+                str(audio_metadata.sample_rate),
+                "-ac",
+                str(audio_metadata.channel_count),
+            )
+        )
     return tuple(arguments)
 
 
@@ -99,6 +128,7 @@ class RenderCommandBuilder:
         assets: tuple[MediaAsset, ...],
         output_path: str,
         encoding: RenderEncoding = _DEFAULT_ENCODING,
+        audio_metadata: AudioOutputMetadata = _DEFAULT_AUDIO_METADATA,
     ) -> tuple[str, ...]:
         """Build an exact single-clip input-seek command as an argv tuple."""
         if len(timeline.clips) != 1:
@@ -127,6 +157,7 @@ class RenderCommandBuilder:
                 include_video=StreamType.VIDEO in stream_types,
                 include_audio=StreamType.AUDIO in stream_types,
                 encoding=encoding,
+                audio_metadata=audio_metadata,
             ),
             output_url,
         )
@@ -139,6 +170,7 @@ class RenderCommandBuilder:
         requirements: TimelineTrackRequirements,
         video_metadata: VideoOutputMetadata = _DEFAULT_VIDEO_METADATA,
         encoding: RenderEncoding = _DEFAULT_ENCODING,
+        audio_metadata: AudioOutputMetadata = _DEFAULT_AUDIO_METADATA,
     ) -> tuple[str, ...]:
         """Build a trim-and-concat filter graph for two or more clips."""
         if len(timeline.clips) < 2:
@@ -185,7 +217,10 @@ class RenderCommandBuilder:
                 stream_index = _first_stream_index(asset, StreamType.AUDIO)
                 filters.append(
                     f"[{input_index}:{stream_index}]atrim=start={start}:end={end},"
-                    f"asetpts=PTS-STARTPTS[a{clip_index}]"
+                    "asetpts=PTS-STARTPTS,"
+                    f"aresample={audio_metadata.sample_rate},"
+                    f"aformat=channel_layouts={audio_metadata.channel_layout}"
+                    f"[a{clip_index}]"
                 )
                 concat_inputs.append(f"[a{clip_index}]")
 
@@ -207,10 +242,16 @@ class RenderCommandBuilder:
                 include_video=bool(video_outputs),
                 include_audio=bool(audio_outputs),
                 encoding=encoding,
+                audio_metadata=audio_metadata,
             )
         )
         command.append(output_url)
         return tuple(command)
 
 
-__all__ = ["RenderCommandBuilder", "RenderEncoding", "VideoOutputMetadata"]
+__all__ = [
+    "AudioOutputMetadata",
+    "RenderCommandBuilder",
+    "RenderEncoding",
+    "VideoOutputMetadata",
+]
