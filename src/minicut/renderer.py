@@ -4,7 +4,9 @@ import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from queue import Empty, Queue
+from tempfile import NamedTemporaryFile
 from threading import Thread
 from typing import Protocol, TextIO, cast
 
@@ -42,6 +44,7 @@ class RenderProcess(Protocol):
 
 RenderProcessLauncher = Callable[[tuple[str, ...]], RenderProcess]
 RenderProgressReporter = Callable[[FfmpegProgressEvent], None]
+RenderPublisher = Callable[[Path, Path], None]
 
 
 def _launch_process(command: tuple[str, ...]) -> RenderProcess:
@@ -58,6 +61,10 @@ def _launch_process(command: tuple[str, ...]) -> RenderProcess:
 
 def _ignore_progress(event: FfmpegProgressEvent) -> None:
     del event
+
+
+def _publish(source: Path, destination: Path) -> None:
+    source.replace(destination)
 
 
 def _drain(
@@ -95,6 +102,7 @@ class FfmpegRenderer:
     launcher: RenderProcessLauncher = _launch_process
     clock: Callable[[], float] = time.monotonic
     poll_interval_seconds: float = 0.02
+    publisher: RenderPublisher = _publish
 
     def __post_init__(self) -> None:
         if self.poll_interval_seconds <= 0:
@@ -177,6 +185,42 @@ class FfmpegRenderer:
             raise RenderFailed(f"FFmpeg render failed: {_error_summary(stderr_lines)}")
         return tuple(events)
 
+    def render_to_path(
+        self,
+        command: tuple[str, ...],
+        output_path: str | Path,
+        *,
+        timeout_seconds: float,
+        cancellation: CancellationToken | None = None,
+        on_progress: RenderProgressReporter = _ignore_progress,
+    ) -> tuple[FfmpegProgressEvent, ...]:
+        """Render to a same-directory temporary file, then atomically publish it."""
+        destination = Path(output_path).absolute()
+        if not command or command[-1] != destination.as_uri():
+            raise ValueError("render command output does not match publish destination")
+        if not destination.parent.is_dir():
+            raise ValueError("render output directory does not exist")
+
+        with NamedTemporaryFile(
+            prefix=f".{destination.stem}-",
+            suffix=destination.suffix,
+            dir=destination.parent,
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+        temporary_command = (*command[:-1], temporary_path.as_uri())
+        events = self.execute(
+            temporary_command,
+            timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
+            on_progress=on_progress,
+        )
+        try:
+            self.publisher(temporary_path, destination)
+        except OSError as error:
+            raise RenderFailed("Rendered output could not be published.") from error
+        return events
+
 
 __all__ = [
     "FfmpegRenderer",
@@ -185,5 +229,6 @@ __all__ = [
     "RenderProcess",
     "RenderProcessLauncher",
     "RenderProgressReporter",
+    "RenderPublisher",
     "RenderTimeout",
 ]

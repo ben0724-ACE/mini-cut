@@ -1,7 +1,10 @@
 import subprocess
 import unittest
 from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import TextIO
+from urllib.parse import unquote, urlparse
 
 from minicut.render_progress import FfmpegProgressEvent
 from minicut.renderer import (
@@ -54,12 +57,16 @@ class FakeProcess:
 
 
 class CapturingLauncher:
-    def __init__(self, process: FakeProcess) -> None:
+    def __init__(self, process: FakeProcess, output_data: bytes | None = None) -> None:
         self.process = process
+        self.output_data = output_data
         self.command: tuple[str, ...] | None = None
 
     def __call__(self, command: tuple[str, ...]) -> FakeProcess:
         self.command = command
+        if self.output_data is not None:
+            output_path = Path(unquote(urlparse(command[-1]).path))
+            output_path.write_bytes(self.output_data)
         return self.process
 
 
@@ -142,6 +149,73 @@ class FfmpegRendererTest(unittest.TestCase):
                 ("ffmpeg", "file:///output.mp4"),
                 timeout_seconds=5,
             )
+
+
+class AtomicRenderPublicationTest(unittest.TestCase):
+    def test_renders_in_destination_directory_then_atomically_replaces_output(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            destination = Path(directory) / "result.mp4"
+            destination.write_bytes(b"previous successful render")
+            launcher = CapturingLauncher(FakeProcess(), b"new complete render")
+
+            FfmpegRenderer(launcher=launcher).render_to_path(
+                ("ffmpeg", "-y", destination.as_uri()),
+                destination,
+                timeout_seconds=5,
+            )
+
+            assert launcher.command is not None
+            temporary_path = Path(unquote(urlparse(launcher.command[-1]).path))
+            self.assertEqual(temporary_path.parent, destination.parent)
+            self.assertEqual(temporary_path.suffix, ".mp4")
+            self.assertNotEqual(temporary_path, destination)
+            self.assertEqual(destination.read_bytes(), b"new complete render")
+            self.assertFalse(temporary_path.exists())
+
+    def test_publish_failure_preserves_existing_successful_output(self) -> None:
+        with TemporaryDirectory() as directory:
+            destination = Path(directory) / "result.mp4"
+            destination.write_bytes(b"previous successful render")
+            launcher = CapturingLauncher(FakeProcess(), b"new complete render")
+
+            def fail_publish(source: Path, target: Path) -> None:
+                del source, target
+                raise OSError("simulated replace failure")
+
+            renderer = FfmpegRenderer(launcher=launcher, publisher=fail_publish)
+            with self.assertRaisesRegex(RenderFailed, "published"):
+                renderer.render_to_path(
+                    ("ffmpeg", "-y", destination.as_uri()),
+                    destination,
+                    timeout_seconds=5,
+                )
+
+            self.assertEqual(destination.read_bytes(), b"previous successful render")
+            temporary_files = tuple(destination.parent.glob(".result-*.mp4"))
+            self.assertEqual(len(temporary_files), 1)
+
+    def test_rejects_command_destination_mismatch_or_missing_directory(self) -> None:
+        with TemporaryDirectory() as directory:
+            destination = Path(directory) / "result.mp4"
+            renderer = FfmpegRenderer(launcher=CapturingLauncher(FakeProcess()))
+            cases = (
+                (("ffmpeg", "file:///different.mp4"), destination, "does not match"),
+                (
+                    ("ffmpeg", (destination.parent / "missing/out.mp4").as_uri()),
+                    destination.parent / "missing/out.mp4",
+                    "does not exist",
+                ),
+            )
+            for command, output_path, message in cases:
+                with self.subTest(message=message):
+                    with self.assertRaisesRegex(ValueError, message):
+                        renderer.render_to_path(
+                            command,
+                            output_path,
+                            timeout_seconds=5,
+                        )
 
 
 if __name__ == "__main__":
