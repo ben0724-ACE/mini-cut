@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from fractions import Fraction
+from pathlib import Path
 
 from minicut.media import MediaAsset, StreamType
 from minicut.timeline import Timeline
@@ -13,6 +14,12 @@ from minicut.timeline_validation import (
 
 def _seconds(milliseconds: int) -> str:
     return f"{milliseconds / 1000:.3f}"
+
+
+def _local_file_url(path: str, *, label: str) -> str:
+    if not path or "\0" in path:
+        raise ValueError(f"{label} path must be a valid local path")
+    return Path(path).absolute().as_uri()
 
 
 def _first_stream_index(asset: MediaAsset, stream_type: StreamType) -> int:
@@ -96,8 +103,7 @@ class RenderCommandBuilder:
         """Build an exact single-clip input-seek command as an argv tuple."""
         if len(timeline.clips) != 1:
             raise ValueError("single-clip render requires exactly one clip")
-        if not output_path:
-            raise ValueError("render output path must not be empty")
+        output_url = _local_file_url(output_path, label="render output")
 
         clip = timeline.clips[0]
         matching_assets = tuple(
@@ -114,7 +120,7 @@ class RenderCommandBuilder:
             "-ss",
             _seconds(clip.source_range.start_ms),
             "-i",
-            asset.source_path,
+            _local_file_url(asset.source_path, label="media source"),
             "-t",
             _seconds(clip.source_range.duration_ms),
             *_encoding_arguments(
@@ -122,7 +128,7 @@ class RenderCommandBuilder:
                 include_audio=StreamType.AUDIO in stream_types,
                 encoding=encoding,
             ),
-            output_path,
+            output_url,
         )
 
     def build_multi_clip(
@@ -137,8 +143,7 @@ class RenderCommandBuilder:
         """Build a trim-and-concat filter graph for two or more clips."""
         if len(timeline.clips) < 2:
             raise ValueError("multi-clip render requires at least two clips")
-        if not output_path:
-            raise ValueError("render output path must not be empty")
+        output_url = _local_file_url(output_path, label="render output")
         validate_timeline_for_render(timeline, assets, requirements)
 
         assets_by_id = {asset.asset_id: asset for asset in assets}
@@ -150,7 +155,11 @@ class RenderCommandBuilder:
         }
         command: list[str] = [self.executable, "-nostdin", "-y"]
         for asset_id in referenced_asset_ids:
-            command.extend(("-i", assets_by_id[asset_id].source_path))
+            source_url = _local_file_url(
+                assets_by_id[asset_id].source_path,
+                label="media source",
+            )
+            command.extend(("-i", source_url))
 
         filters: list[str] = []
         concat_inputs: list[str] = []
@@ -200,7 +209,7 @@ class RenderCommandBuilder:
                 encoding=encoding,
             )
         )
-        command.append(output_path)
+        command.append(output_url)
         return tuple(command)
 
 

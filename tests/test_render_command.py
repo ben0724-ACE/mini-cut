@@ -60,7 +60,7 @@ class SingleClipRenderCommandTest(unittest.TestCase):
                 "-ss",
                 "1.234",
                 "-i",
-                "/media/input.mov",
+                "file:///media/input.mov",
                 "-t",
                 "2.345",
                 "-c:v",
@@ -69,7 +69,7 @@ class SingleClipRenderCommandTest(unittest.TestCase):
                 "yuv420p",
                 "-c:a",
                 "aac",
-                "/output/result.mp4",
+                "file:///output/result.mp4",
             ),
         )
         self.assertIsInstance(command, tuple)
@@ -121,7 +121,8 @@ class MultiClipRenderCommandTest(unittest.TestCase):
 
         graph = command[command.index("-filter_complex") + 1]
         self.assertEqual(
-            command[:5], ("ffmpeg", "-nostdin", "-y", "-i", asset.source_path)
+            command[:5],
+            ("ffmpeg", "-nostdin", "-y", "-i", "file:///media/input.mov"),
         )
         self.assertEqual(
             graph,
@@ -150,7 +151,7 @@ class MultiClipRenderCommandTest(unittest.TestCase):
                 "yuv420p",
                 "-c:a",
                 "aac",
-                "/output/result.mp4",
+                "file:///output/result.mp4",
             ),
         )
 
@@ -264,6 +265,65 @@ class MultiClipRenderCommandTest(unittest.TestCase):
                 "/output/result.mp4",
                 TimelineTrackRequirements(require_video=True),
             )
+
+
+class RenderPathSafetyTest(unittest.TestCase):
+    def test_encodes_spaces_unicode_metacharacters_and_leading_dash(self) -> None:
+        asset = _asset()
+        asset.source_path = "/media/采访 take [draft];$().mov"
+        output_path = "/output/-report 结果;$(touch nope).mp4"
+
+        command = RenderCommandBuilder().build_single_clip(
+            Timeline((_clip(0, 100, 500),), 400),
+            (asset,),
+            output_path,
+        )
+
+        source_argument = command[command.index("-i") + 1]
+        output_argument = command[-1]
+        self.assertEqual(
+            source_argument,
+            "file:///media/%E9%87%87%E8%AE%BF%20take%20%5Bdraft%5D%3B%24%28%29.mov",
+        )
+        self.assertEqual(
+            output_argument,
+            "file:///output/-report%20%E7%BB%93%E6%9E%9C%3B%24%28touch%20nope%29.mp4",
+        )
+        self.assertNotIn("-report", command)
+        self.assertNotIn("touch", command)
+
+    def test_converts_protocol_like_and_relative_paths_to_local_file_urls(self) -> None:
+        asset = _asset()
+        asset.source_path = "concat:one.mov|two.mov"
+
+        command = RenderCommandBuilder().build_single_clip(
+            Timeline((_clip(0, 100, 500),), 400),
+            (asset,),
+            "relative output.mp4",
+        )
+
+        source_argument = command[command.index("-i") + 1]
+        self.assertTrue(source_argument.startswith("file://"))
+        self.assertIn("concat%3Aone.mov%7Ctwo.mov", source_argument)
+        self.assertTrue(command[-1].startswith("file://"))
+
+    def test_rejects_empty_or_nul_paths(self) -> None:
+        timeline = Timeline((_clip(0, 100, 500),), 400)
+        cases = (
+            ("", "/output/result.mp4"),
+            ("/media/input.mov", "bad\0name.mp4"),
+        )
+
+        for source_path, output_path in cases:
+            with self.subTest(source_path=source_path, output_path=output_path):
+                asset = _asset()
+                asset.source_path = source_path
+                with self.assertRaisesRegex(ValueError, "local path"):
+                    RenderCommandBuilder().build_single_clip(
+                        timeline,
+                        (asset,),
+                        output_path,
+                    )
 
 
 if __name__ == "__main__":
