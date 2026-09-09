@@ -2,6 +2,7 @@ import unittest
 
 from minicut.media import MediaAsset, StreamInfo, StreamType, TimeRange
 from minicut.render_command import (
+    AudioFade,
     AudioOutputMetadata,
     RenderCommandBuilder,
     RenderEncoding,
@@ -243,6 +244,51 @@ class MultiClipRenderCommandTest(unittest.TestCase):
             with self.subTest(sample_rate=sample_rate, layout=layout):
                 with self.assertRaises(ValueError):
                     AudioOutputMetadata(sample_rate, layout)
+
+    def test_optional_audio_fades_are_applied_and_clamped_per_clip(self) -> None:
+        timeline = _multi_timeline()
+        timeline.clips[0].source_range = TimeRange(100, 140)
+        timeline.clips[0].output_range = TimeRange(0, 40)
+        timeline.clips[1].output_range = TimeRange(40, 540)
+        timeline.estimated_duration_ms = 540
+
+        command = RenderCommandBuilder().build_multi_clip(
+            timeline,
+            (_asset(),),
+            "/output/result.mp4",
+            TimelineTrackRequirements(require_audio=True),
+            audio_fade=AudioFade(30),
+        )
+
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertIn("afade=t=in:st=0:d=0.020", graph)
+        self.assertIn("afade=t=out:st=0.020:d=0.020", graph)
+        self.assertIn("afade=t=in:st=0:d=0.030", graph)
+        self.assertIn("afade=t=out:st=0.470:d=0.030", graph)
+
+    def test_audio_fade_defaults_off_and_rejects_negative_duration(self) -> None:
+        command = RenderCommandBuilder().build_multi_clip(
+            _multi_timeline(),
+            (_asset(),),
+            "/output/result.mp4",
+            TimelineTrackRequirements(require_audio=True),
+        )
+        self.assertNotIn("afade", command[command.index("-filter_complex") + 1])
+        with self.assertRaisesRegex(ValueError, "fade"):
+            AudioFade(-1)
+
+    def test_single_clip_supports_the_same_optional_audio_fade(self) -> None:
+        command = RenderCommandBuilder().build_single_clip(
+            Timeline((_clip(0, 100, 500),), 400),
+            (_asset(),),
+            "/output/result.mp4",
+            audio_fade=AudioFade(25),
+        )
+
+        self.assertEqual(
+            command[command.index("-af") + 1],
+            "afade=t=in:st=0:d=0.025,afade=t=out:st=0.375:d=0.025",
+        )
 
     def test_normalizes_landscape_portrait_and_fractional_frame_rates(self) -> None:
         scenarios = (

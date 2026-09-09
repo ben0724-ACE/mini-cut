@@ -81,9 +81,35 @@ class AudioOutputMetadata:
         return 1 if self.channel_layout == "mono" else 2
 
 
+@dataclass(frozen=True, slots=True)
+class AudioFade:
+    """Optional symmetric fade applied at each audio clip boundary."""
+
+    duration_ms: int = 0
+
+    def __post_init__(self) -> None:
+        if self.duration_ms < 0:
+            raise ValueError("audio fade duration must not be negative")
+
+
 _DEFAULT_VIDEO_METADATA = VideoOutputMetadata()
 _DEFAULT_AUDIO_METADATA = AudioOutputMetadata()
+_DEFAULT_AUDIO_FADE = AudioFade()
 _DEFAULT_ENCODING = RenderEncoding()
+
+
+def _audio_fade_filters(
+    clip_duration_ms: int, audio_fade: AudioFade
+) -> tuple[str, ...]:
+    duration_ms = min(audio_fade.duration_ms, clip_duration_ms // 2)
+    if duration_ms == 0:
+        return ()
+    fade_duration = _seconds(duration_ms)
+    fade_out_start = _seconds(clip_duration_ms - duration_ms)
+    return (
+        f"afade=t=in:st=0:d={fade_duration}",
+        f"afade=t=out:st={fade_out_start}:d={fade_duration}",
+    )
 
 
 def _encoding_arguments(
@@ -129,6 +155,7 @@ class RenderCommandBuilder:
         output_path: str,
         encoding: RenderEncoding = _DEFAULT_ENCODING,
         audio_metadata: AudioOutputMetadata = _DEFAULT_AUDIO_METADATA,
+        audio_fade: AudioFade = _DEFAULT_AUDIO_FADE,
     ) -> tuple[str, ...]:
         """Build an exact single-clip input-seek command as an argv tuple."""
         if len(timeline.clips) != 1:
@@ -143,6 +170,14 @@ class RenderCommandBuilder:
             raise ValueError("clip must reference exactly one known media asset")
         asset = matching_assets[0]
         stream_types = {stream.stream_type for stream in asset.streams}
+        audio_filters = (
+            _audio_fade_filters(clip.source_range.duration_ms, audio_fade)
+            if StreamType.AUDIO in stream_types
+            else ()
+        )
+        audio_filter_arguments = (
+            ("-af", ",".join(audio_filters)) if audio_filters else ()
+        )
         return (
             self.executable,
             "-nostdin",
@@ -153,6 +188,7 @@ class RenderCommandBuilder:
             _local_file_url(asset.source_path, label="media source"),
             "-t",
             _seconds(clip.source_range.duration_ms),
+            *audio_filter_arguments,
             *_encoding_arguments(
                 include_video=StreamType.VIDEO in stream_types,
                 include_audio=StreamType.AUDIO in stream_types,
@@ -171,6 +207,7 @@ class RenderCommandBuilder:
         video_metadata: VideoOutputMetadata = _DEFAULT_VIDEO_METADATA,
         encoding: RenderEncoding = _DEFAULT_ENCODING,
         audio_metadata: AudioOutputMetadata = _DEFAULT_AUDIO_METADATA,
+        audio_fade: AudioFade = _DEFAULT_AUDIO_FADE,
     ) -> tuple[str, ...]:
         """Build a trim-and-concat filter graph for two or more clips."""
         if len(timeline.clips) < 2:
@@ -215,13 +252,17 @@ class RenderCommandBuilder:
                 concat_inputs.append(f"[v{clip_index}]")
             if requirements.require_audio:
                 stream_index = _first_stream_index(asset, StreamType.AUDIO)
-                filters.append(
+                audio_filters = [
                     f"[{input_index}:{stream_index}]atrim=start={start}:end={end},"
                     "asetpts=PTS-STARTPTS,"
                     f"aresample={audio_metadata.sample_rate},"
                     f"aformat=channel_layouts={audio_metadata.channel_layout}"
-                    f"[a{clip_index}]"
-                )
+                ]
+                fades = _audio_fade_filters(clip.source_range.duration_ms, audio_fade)
+                if fades:
+                    audio_filters.append("," + ",".join(fades))
+                audio_filters.append(f"[a{clip_index}]")
+                filters.append("".join(audio_filters))
                 concat_inputs.append(f"[a{clip_index}]")
 
         video_outputs = 1 if requirements.require_video else 0
@@ -250,6 +291,7 @@ class RenderCommandBuilder:
 
 
 __all__ = [
+    "AudioFade",
     "AudioOutputMetadata",
     "RenderCommandBuilder",
     "RenderEncoding",
