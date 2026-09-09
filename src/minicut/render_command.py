@@ -1,6 +1,7 @@
 """Pure FFmpeg command construction from validated timelines."""
 
 from dataclasses import dataclass
+from fractions import Fraction
 
 from minicut.media import MediaAsset, StreamType
 from minicut.timeline import Timeline
@@ -21,6 +22,61 @@ def _first_stream_index(asset: MediaAsset, stream_type: StreamType) -> int:
 
 
 @dataclass(frozen=True, slots=True)
+class VideoOutputMetadata:
+    """Normalized output geometry and frame rate for concat compatibility."""
+
+    width: int = 1920
+    height: int = 1080
+    frame_rate: str = "30"
+
+    def __post_init__(self) -> None:
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("video output dimensions must be positive")
+        if self.width % 2 or self.height % 2:
+            raise ValueError("video output dimensions must be even")
+        try:
+            frame_rate = Fraction(self.frame_rate)
+        except (ValueError, ZeroDivisionError) as error:
+            raise ValueError("video output frame rate must be valid") from error
+        if frame_rate <= 0:
+            raise ValueError("video output frame rate must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class RenderEncoding:
+    """Explicit codecs and pixel format for the reliable render path."""
+
+    video_codec: str = "libx264"
+    audio_codec: str = "aac"
+    pixel_format: str = "yuv420p"
+
+    def __post_init__(self) -> None:
+        values = (self.video_codec, self.audio_codec, self.pixel_format)
+        if any(not value.strip() for value in values):
+            raise ValueError("render encoding values must not be blank")
+
+
+_DEFAULT_VIDEO_METADATA = VideoOutputMetadata()
+_DEFAULT_ENCODING = RenderEncoding()
+
+
+def _encoding_arguments(
+    *,
+    include_video: bool,
+    include_audio: bool,
+    encoding: RenderEncoding,
+) -> tuple[str, ...]:
+    arguments: list[str] = []
+    if include_video:
+        arguments.extend(
+            ("-c:v", encoding.video_codec, "-pix_fmt", encoding.pixel_format)
+        )
+    if include_audio:
+        arguments.extend(("-c:a", encoding.audio_codec))
+    return tuple(arguments)
+
+
+@dataclass(frozen=True, slots=True)
 class RenderCommandBuilder:
     """Build FFmpeg argv without invoking a shell or process."""
 
@@ -35,6 +91,7 @@ class RenderCommandBuilder:
         timeline: Timeline,
         assets: tuple[MediaAsset, ...],
         output_path: str,
+        encoding: RenderEncoding = _DEFAULT_ENCODING,
     ) -> tuple[str, ...]:
         """Build an exact single-clip input-seek command as an argv tuple."""
         if len(timeline.clips) != 1:
@@ -49,6 +106,7 @@ class RenderCommandBuilder:
         if len(matching_assets) != 1:
             raise ValueError("clip must reference exactly one known media asset")
         asset = matching_assets[0]
+        stream_types = {stream.stream_type for stream in asset.streams}
         return (
             self.executable,
             "-nostdin",
@@ -59,6 +117,11 @@ class RenderCommandBuilder:
             asset.source_path,
             "-t",
             _seconds(clip.source_range.duration_ms),
+            *_encoding_arguments(
+                include_video=StreamType.VIDEO in stream_types,
+                include_audio=StreamType.AUDIO in stream_types,
+                encoding=encoding,
+            ),
             output_path,
         )
 
@@ -68,6 +131,8 @@ class RenderCommandBuilder:
         assets: tuple[MediaAsset, ...],
         output_path: str,
         requirements: TimelineTrackRequirements,
+        video_metadata: VideoOutputMetadata = _DEFAULT_VIDEO_METADATA,
+        encoding: RenderEncoding = _DEFAULT_ENCODING,
     ) -> tuple[str, ...]:
         """Build a trim-and-concat filter graph for two or more clips."""
         if len(timeline.clips) < 2:
@@ -98,7 +163,13 @@ class RenderCommandBuilder:
                 stream_index = _first_stream_index(asset, StreamType.VIDEO)
                 filters.append(
                     f"[{input_index}:{stream_index}]trim=start={start}:end={end},"
-                    f"setpts=PTS-STARTPTS[v{clip_index}]"
+                    f"setpts=PTS-STARTPTS,"
+                    f"scale={video_metadata.width}:{video_metadata.height}:"
+                    "force_original_aspect_ratio=decrease,"
+                    f"pad={video_metadata.width}:{video_metadata.height}:"
+                    "(ow-iw)/2:(oh-ih)/2,setsar=1,"
+                    f"fps={video_metadata.frame_rate},"
+                    f"format={encoding.pixel_format}[v{clip_index}]"
                 )
                 concat_inputs.append(f"[v{clip_index}]")
             if requirements.require_audio:
@@ -122,8 +193,15 @@ class RenderCommandBuilder:
             command.extend(("-map", "[outv]"))
         if audio_outputs:
             command.extend(("-map", "[outa]"))
+        command.extend(
+            _encoding_arguments(
+                include_video=bool(video_outputs),
+                include_audio=bool(audio_outputs),
+                encoding=encoding,
+            )
+        )
         command.append(output_path)
         return tuple(command)
 
 
-__all__ = ["RenderCommandBuilder"]
+__all__ = ["RenderCommandBuilder", "RenderEncoding", "VideoOutputMetadata"]

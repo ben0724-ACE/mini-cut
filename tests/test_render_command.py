@@ -1,7 +1,11 @@
 import unittest
 
 from minicut.media import MediaAsset, StreamInfo, StreamType, TimeRange
-from minicut.render_command import RenderCommandBuilder
+from minicut.render_command import (
+    RenderCommandBuilder,
+    RenderEncoding,
+    VideoOutputMetadata,
+)
 from minicut.timeline import Clip, Timeline
 from minicut.timeline_validation import TimelineTrackRequirements
 
@@ -59,6 +63,12 @@ class SingleClipRenderCommandTest(unittest.TestCase):
                 "/media/input.mov",
                 "-t",
                 "2.345",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
                 "/output/result.mp4",
             ),
         )
@@ -115,15 +125,33 @@ class MultiClipRenderCommandTest(unittest.TestCase):
         )
         self.assertEqual(
             graph,
-            "[0:2]trim=start=0.100:end=0.500,setpts=PTS-STARTPTS[v0];"
+            "[0:2]trim=start=0.100:end=0.500,setpts=PTS-STARTPTS,"
+            "scale=1920:1080:force_original_aspect_ratio=decrease,"
+            "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,"
+            "format=yuv420p[v0];"
             "[0:3]atrim=start=0.100:end=0.500,asetpts=PTS-STARTPTS[a0];"
-            "[0:2]trim=start=0.800:end=1.300,setpts=PTS-STARTPTS[v1];"
+            "[0:2]trim=start=0.800:end=1.300,setpts=PTS-STARTPTS,"
+            "scale=1920:1080:force_original_aspect_ratio=decrease,"
+            "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,"
+            "format=yuv420p[v1];"
             "[0:3]atrim=start=0.800:end=1.300,asetpts=PTS-STARTPTS[a1];"
             "[v0][a0][v1][a1]concat=n=2:v=1:a=1[outv][outa]",
         )
         self.assertEqual(
-            command[-5:],
-            ("-map", "[outv]", "-map", "[outa]", "/output/result.mp4"),
+            command[-11:],
+            (
+                "-map",
+                "[outv]",
+                "-map",
+                "[outa]",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "/output/result.mp4",
+            ),
         )
 
     def test_adds_each_distinct_source_once_and_builds_audio_only_graph(self) -> None:
@@ -157,6 +185,66 @@ class MultiClipRenderCommandTest(unittest.TestCase):
         self.assertIn("[1:4]atrim=start=0.800:end=1.300", graph)
         self.assertTrue(graph.endswith("[a0][a1]concat=n=2:v=0:a=1[outa]"))
         self.assertNotIn("[outv]", command)
+
+    def test_normalizes_landscape_portrait_and_fractional_frame_rates(self) -> None:
+        scenarios = (
+            (
+                VideoOutputMetadata(1920, 1080, "30000/1001"),
+                "scale=1920:1080",
+                "fps=30000/1001",
+            ),
+            (VideoOutputMetadata(1080, 1920, "25"), "scale=1080:1920", "fps=25"),
+        )
+
+        for metadata, expected_scale, expected_fps in scenarios:
+            with self.subTest(metadata=metadata):
+                command = RenderCommandBuilder().build_multi_clip(
+                    _multi_timeline(),
+                    (_asset(),),
+                    "/output/result.mp4",
+                    TimelineTrackRequirements(require_video=True),
+                    metadata,
+                )
+                graph = command[command.index("-filter_complex") + 1]
+                self.assertIn(expected_scale, graph)
+                self.assertIn(expected_fps, graph)
+                self.assertIn("setsar=1", graph)
+
+    def test_silent_video_omits_audio_map_and_codec(self) -> None:
+        silent = MediaAsset(
+            "asset-1",
+            "/media/silent.mov",
+            5_000,
+            (StreamInfo(0, StreamType.VIDEO, "hevc"),),
+            "test",
+        )
+
+        command = RenderCommandBuilder().build_multi_clip(
+            _multi_timeline(),
+            (silent,),
+            "/output/result.mp4",
+            TimelineTrackRequirements(require_video=True),
+            encoding=RenderEncoding(),
+        )
+
+        self.assertIn("-c:v", command)
+        self.assertIn("-pix_fmt", command)
+        self.assertNotIn("-c:a", command)
+        self.assertNotIn("[outa]", command)
+
+    def test_rejects_invalid_output_metadata_and_encoding(self) -> None:
+        invalid_metadata = (
+            (0, 1080, "30"),
+            (1921, 1080, "30"),
+            (1920, 1080, "0"),
+            (1920, 1080, "not-a-rate"),
+        )
+        for width, height, frame_rate in invalid_metadata:
+            with self.subTest((width, height, frame_rate)):
+                with self.assertRaises(ValueError):
+                    VideoOutputMetadata(width, height, frame_rate)
+        with self.assertRaisesRegex(ValueError, "encoding"):
+            RenderEncoding(video_codec=" ")
 
     def test_rejects_single_clip_and_invalid_timeline_before_building(self) -> None:
         with self.assertRaisesRegex(ValueError, "at least two clips"):
