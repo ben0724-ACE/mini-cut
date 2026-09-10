@@ -27,6 +27,9 @@ from minicut.application import (
     PlanOperation,
     PlanProjectUseCase,
     PlanRequest,
+    PreviewTimelineOperation,
+    PreviewTimelineRequest,
+    PreviewTimelineUseCase,
     ReadPlanOperation,
     ReadPlanRequest,
     ReadPlanResult,
@@ -127,6 +130,22 @@ class PlanVersionsResponse(BaseModel):
     asset_id: str
     current_revision: int
     revisions: list[int]
+
+
+class PreviewClipResponse(BaseModel):
+    clip_id: str
+    segment_ids: list[str]
+    source_start_ms: int
+    source_end_ms: int
+    output_start_ms: int
+    output_end_ms: int
+
+
+class PreviewTimelineResponse(BaseModel):
+    asset_id: str
+    plan_revision: int
+    estimated_duration_ms: int
+    clips: list[PreviewClipResponse]
 
 
 def _job_path(project_directory: Path, task_id: str) -> Path:
@@ -280,6 +299,7 @@ def create_app(
     render: RenderOperation | None = None,
     read_plan: ReadPlanOperation | None = None,
     modify_plan: ModifyPlanOperation | None = None,
+    preview_timeline: PreviewTimelineOperation | None = None,
 ) -> FastAPI:
     """Create an API instance bound to one local projects directory."""
     root = projects_root.absolute()
@@ -290,6 +310,7 @@ def create_app(
     renderer = render or RenderProjectUseCase()
     plan_reader = read_plan or ReadPlanUseCase()
     plan_modifier = modify_plan or ModifyPlanUseCase()
+    preview_compiler = preview_timeline or PreviewTimelineUseCase()
     api = FastAPI(title="MiniCut local API", version="0.1.0")
 
     def inspect(project_id: str) -> InspectResult:
@@ -617,6 +638,37 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
         return _plan_response(read_plan_result(project_id, asset_id))
 
+    @api.get(
+        "/api/projects/{project_id}/plans/{asset_id}/preview",
+        response_model=PreviewTimelineResponse,
+    )
+    def get_preview_timeline(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        asset_id: str,
+    ) -> PreviewTimelineResponse:
+        try:
+            result = preview_compiler.execute(
+                PreviewTimelineRequest(root / project_id, asset_id)
+            )
+        except (MiniCutError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return PreviewTimelineResponse(
+            asset_id=result.asset_id,
+            plan_revision=result.plan_revision,
+            estimated_duration_ms=result.timeline.estimated_duration_ms,
+            clips=[
+                PreviewClipResponse(
+                    clip_id=clip.clip_id,
+                    segment_ids=list(clip.segment_ids),
+                    source_start_ms=clip.source_range.start_ms,
+                    source_end_ms=clip.source_range.end_ms,
+                    output_start_ms=clip.output_range.start_ms,
+                    output_end_ms=clip.output_range.end_ms,
+                )
+                for clip in result.timeline.clips
+            ],
+        )
+
     range_header = Header(alias="Range")
 
     @api.get("/api/projects/{project_id}/media/source/{asset_id}")
@@ -672,6 +724,8 @@ __all__ = [
     "PlanDetailResponse",
     "PlanSegmentResponse",
     "PlanVersionsResponse",
+    "PreviewClipResponse",
+    "PreviewTimelineResponse",
     "ProjectSummaryResponse",
     "TaskResponse",
     "app",

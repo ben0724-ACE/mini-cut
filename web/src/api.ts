@@ -20,6 +20,22 @@ export interface PlanDetail {
   segments: PlanSegment[];
 }
 
+export interface PreviewClip {
+  clip_id: string;
+  segment_ids: string[];
+  source_start_ms: number;
+  source_end_ms: number;
+  output_start_ms: number;
+  output_end_ms: number;
+}
+
+export interface PreviewTimeline {
+  asset_id: string;
+  plan_revision: number;
+  estimated_duration_ms: number;
+  clips: PreviewClip[];
+}
+
 export class ApiError extends Error {}
 
 export async function getPlan(
@@ -64,4 +80,17 @@ export async function modifyPlan(
     throw new ApiError(payload?.detail ?? `修改失败（${response.status}）`);
   }
   return (await response.json()) as PlanDetail;
+}
+
+export async function getPreviewTimeline(
+  projectId: string,
+  assetId: string,
+  signal?: AbortSignal,
+): Promise<PreviewTimeline> {
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(assetId)}/preview`,
+    { signal },
+  );
+  if (!response.ok) throw new ApiError(`无法生成预览（${response.status}）`);
+  return (await response.json()) as PreviewTimeline;
 }

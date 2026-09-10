@@ -43,7 +43,7 @@ from minicut.semantic_segmentation import (
 )
 from minicut.subtitle import build_readable_cues, map_retained_words, render_srt
 from minicut.text_normalization import normalize_transcript_words
-from minicut.timeline import compile_timeline
+from minicut.timeline import Timeline, compile_timeline
 from minicut.timeline_validation import (
     TimelineTrackRequirements,
     validate_timeline_for_render,
@@ -661,6 +661,36 @@ class ReadPlanUseCase:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class PreviewTimelineRequest:
+    project_directory: Path
+    asset_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewTimelineResult:
+    asset_id: str
+    plan_revision: int
+    timeline: Timeline
+
+
+class PreviewTimelineOperation(Protocol):
+    def execute(self, request: PreviewTimelineRequest) -> PreviewTimelineResult: ...
+
+
+class PreviewTimelineUseCase:
+    """Compile the same deterministic timeline used by formal rendering."""
+
+    def execute(self, request: PreviewTimelineRequest) -> PreviewTimelineResult:
+        ProjectRepository(request.project_directory).read()
+        plan, segments = _read_plan_artifact(
+            request.project_directory, request.asset_id
+        )
+        timeline = compile_timeline(plan, segments, request.asset_id)
+        revision = _read_plan_revision(request.project_directory, request.asset_id)
+        return PreviewTimelineResult(request.asset_id, revision, timeline)
+
+
 def _read_plan_revision(project_directory: Path, asset_id: str) -> int:
     path = project_directory / ".minicut" / "plans" / f"{asset_id}.json"
     try:
@@ -1090,6 +1120,10 @@ __all__ = [
     "PlanProjectUseCase",
     "PlanRequest",
     "PlanResult",
+    "PreviewTimelineOperation",
+    "PreviewTimelineRequest",
+    "PreviewTimelineResult",
+    "PreviewTimelineUseCase",
     "ReadPlanOperation",
     "ReadPlanRequest",
     "ReadPlanResult",

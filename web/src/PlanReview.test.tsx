@@ -1,7 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { PlanDetail } from "./api";
+import type { PlanDetail, PreviewTimeline } from "./api";
 import { PlanReview } from "./PlanReview";
 
 const plan: PlanDetail = {
@@ -18,9 +18,19 @@ const plan: PlanDetail = {
   ],
 };
 
+const preview: PreviewTimeline = {
+  asset_id: "asset-1",
+  plan_revision: 2,
+  estimated_duration_ms: 1_600,
+  clips: [
+    { clip_id: "clip:0", segment_ids: ["s1"], source_start_ms: 0, source_end_ms: 1_000, output_start_ms: 0, output_end_ms: 1_000 },
+    { clip_id: "clip:1", segment_ids: ["s3"], source_start_ms: 2_000, source_end_ms: 2_600, output_start_ms: 1_000, output_end_ms: 1_600 },
+  ],
+};
+
 describe("PlanReview", () => {
   it("shows keep/delete decisions, reasons and counts", () => {
-    render(<PlanReview initialPlan={plan} saveDecision={vi.fn()} mediaUrl="/media" />);
+    render(<PlanReview initialPlan={plan} initialPreview={preview} saveDecision={vi.fn()} mediaUrl="/media" />);
     expect(screen.getByText("核心观点")).toBeInTheDocument();
     expect(screen.getByText("重复内容")).toBeInTheDocument();
     expect(screen.getByText(/承载主要信息/)).toBeInTheDocument();
@@ -36,14 +46,17 @@ describe("PlanReview", () => {
     const saveDecision = vi
       .fn()
       .mockResolvedValueOnce({
-        ...plan,
-        revision: 3,
-        segments: plan.segments.map((segment) =>
-          segment.segment_id === "s2" ? { ...segment, action: "keep" } : segment,
-        ),
+        plan: {
+          ...plan,
+          revision: 3,
+          segments: plan.segments.map((segment) =>
+            segment.segment_id === "s2" ? { ...segment, action: "keep" } : segment,
+          ),
+        },
+        preview,
       })
-      .mockResolvedValueOnce(plan);
-    render(<PlanReview initialPlan={plan} saveDecision={saveDecision} mediaUrl="/media" />);
+      .mockResolvedValueOnce({ plan, preview });
+    render(<PlanReview initialPlan={plan} initialPreview={preview} saveDecision={saveDecision} mediaUrl="/media" />);
 
     await user.click(screen.getByRole("button", { name: "恢复此段" }));
     expect(saveDecision).toHaveBeenLastCalledWith("s2", "keep");
@@ -60,17 +73,20 @@ describe("PlanReview", () => {
   it("seeks from text and supports keyboard editing and playback", async () => {
     const user = userEvent.setup();
     const saveDecision = vi.fn().mockResolvedValue({
-      ...plan,
-      revision: 3,
-      segments: plan.segments.map((segment) =>
-        segment.segment_id === "s1"
-          ? { ...segment, action: "delete" as const }
-          : segment,
-      ),
+      plan: {
+        ...plan,
+        revision: 3,
+        segments: plan.segments.map((segment) =>
+          segment.segment_id === "s1"
+            ? { ...segment, action: "delete" as const }
+            : segment,
+        ),
+      },
+      preview,
     });
     const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
     render(
-      <PlanReview initialPlan={plan} saveDecision={saveDecision} mediaUrl="/media" />,
+      <PlanReview initialPlan={plan} initialPreview={preview} saveDecision={saveDecision} mediaUrl="/media" />,
     );
     const video = screen.getByText("浏览器无法播放这个视频。") as HTMLVideoElement;
 
@@ -85,5 +101,18 @@ describe("PlanReview", () => {
     await user.keyboard(" ");
     expect(video.currentTime).toBe(1.2);
     expect(play).toHaveBeenCalledOnce();
+  });
+
+  it("plays a low-cost preview by skipping deleted source ranges", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+    render(<PlanReview initialPlan={plan} initialPreview={preview} saveDecision={vi.fn()} mediaUrl="/media" />);
+    const video = screen.getByText("浏览器无法播放这个视频。") as HTMLVideoElement;
+
+    await user.click(screen.getByRole("button", { name: "从头播放粗剪预览" }));
+    expect(video.currentTime).toBe(0);
+    video.currentTime = 1.1;
+    fireEvent.timeUpdate(video);
+    expect(video.currentTime).toBe(2);
   });
 });

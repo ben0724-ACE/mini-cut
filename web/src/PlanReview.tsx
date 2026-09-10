@@ -1,12 +1,13 @@
 import { useRef, useState } from "react";
-import type { PlanDetail } from "./api";
+import type { PlanDetail, PreviewTimeline } from "./api";
 
 interface PlanReviewProps {
   initialPlan: PlanDetail;
+  initialPreview: PreviewTimeline;
   saveDecision: (
     segmentId: string,
     action: "keep" | "delete",
-  ) => Promise<PlanDetail>;
+  ) => Promise<{ plan: PlanDetail; preview: PreviewTimeline }>;
   mediaUrl: string;
 }
 
@@ -30,13 +31,20 @@ interface UndoEntry {
   previousAction: "keep" | "delete";
 }
 
-export function PlanReview({ initialPlan, saveDecision, mediaUrl }: PlanReviewProps) {
+export function PlanReview({
+  initialPlan,
+  initialPreview,
+  saveDecision,
+  mediaUrl,
+}: PlanReviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const initialDuration = useRef(estimatedDuration(initialPlan));
   const [plan, setPlan] = useState(initialPlan);
+  const [preview, setPreview] = useState(initialPreview);
   const [undoStack, setUndoStack] = useState<UndoEntry[]>([]);
   const [pendingSegment, setPendingSegment] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [previewing, setPreviewing] = useState(false);
   const kept = plan.segments.filter((segment) => segment.action === "keep").length;
   const deleted = plan.segments.length - kept;
   const duration = estimatedDuration(plan);
@@ -53,7 +61,8 @@ export function PlanReview({ initialPlan, saveDecision, mediaUrl }: PlanReviewPr
     setError("");
     try {
       const updated = await saveDecision(segmentId, action);
-      setPlan(updated);
+      setPlan(updated.plan);
+      setPreview(updated.preview);
       if (remember) {
         setUndoStack((entries) => [
           ...entries,
@@ -88,6 +97,30 @@ export function PlanReview({ initialPlan, saveDecision, mediaUrl }: PlanReviewPr
     else video.pause();
   };
 
+  const startPreview = () => {
+    const first = preview.clips[0];
+    if (!first || !videoRef.current) return;
+    videoRef.current.currentTime = first.source_start_ms / 1000;
+    setPreviewing(true);
+    void videoRef.current.play();
+  };
+
+  const followPreviewTimeline = () => {
+    const video = videoRef.current;
+    if (!previewing || !video) return;
+    const sourceMs = video.currentTime * 1000;
+    const clipIndex = preview.clips.findIndex(
+      (clip) => sourceMs >= clip.source_start_ms && sourceMs < clip.source_end_ms,
+    );
+    if (clipIndex >= 0) return;
+    const next = preview.clips.find((clip) => clip.source_start_ms > sourceMs);
+    if (next) video.currentTime = next.source_start_ms / 1000;
+    else {
+      video.pause();
+      setPreviewing(false);
+    }
+  };
+
   return (
     <section aria-labelledby="plan-title">
       <header className="plan-header">
@@ -112,7 +145,17 @@ export function PlanReview({ initialPlan, saveDecision, mediaUrl }: PlanReviewPr
             : `${durationChange > 0 ? "+" : "−"}${formatDuration(durationChange)}`}
         </span>
       </div>
-      <video ref={videoRef} className="player" controls preload="metadata" src={mediaUrl}>
+      <button type="button" className="preview-button" onClick={startPreview}>
+        从头播放粗剪预览
+      </button>
+      <video
+        ref={videoRef}
+        className="player"
+        controls
+        preload="metadata"
+        src={mediaUrl}
+        onTimeUpdate={followPreviewTimeline}
+      >
         浏览器无法播放这个视频。
       </video>
       <p className="keyboard-help">聚焦片段后：K 保留，D 删除，空格播放或暂停。</p>
