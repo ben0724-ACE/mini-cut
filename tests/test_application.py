@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from typing import cast
 
 from minicut.application import (
+    EditCancelled,
     EditProgressEvent,
     EditProjectUseCase,
     EditRequest,
@@ -12,12 +13,16 @@ from minicut.application import (
     InspectRequest,
     PlanProjectUseCase,
     PlanRequest,
+    PlanResult,
     RenderProjectUseCase,
     RenderRequest,
+    RenderResult,
     TranscribeProjectUseCase,
     TranscribeRequest,
+    TranscribeResult,
 )
 from minicut.edit_plan import EditBrief, EditIntensity, EditPlan
+from minicut.errors import ProcessingError
 from minicut.media import MediaAsset, StreamInfo, StreamType
 from minicut.project import ProjectManifest, ProjectRepository
 from minicut.rule_planner import RulePlanner
@@ -27,6 +32,7 @@ from minicut.transcription_cache import (
     TranscriptCacheRepository,
     TranscriptionCacheKey,
 )
+from minicut.transcription_task import CancellationToken
 
 
 class TranscribeProjectUseCaseTest(unittest.TestCase):
@@ -146,7 +152,9 @@ class FakeTimelineRenderer:
         output_path: str | Path,
         *,
         timeout_seconds: float,
+        cancellation: CancellationToken | None = None,
     ) -> object:
+        del cancellation
         self.calls.append((command, Path(output_path), timeout_seconds))
         return object()
 
@@ -344,9 +352,13 @@ class EditProjectUseCaseTest(unittest.TestCase):
                     output_path: str | Path,
                     *,
                     timeout_seconds: float,
+                    cancellation: CancellationToken | None = None,
                 ) -> object:
                     super().render_to_path(
-                        command, output_path, timeout_seconds=timeout_seconds
+                        command,
+                        output_path,
+                        timeout_seconds=timeout_seconds,
+                        cancellation=cancellation,
                     )
                     Path(output_path).write_bytes(b"video")
                     return object()
@@ -396,6 +408,131 @@ class EditProjectUseCaseTest(unittest.TestCase):
             )
             self.assertEqual(progress[5].estimated_duration_ms, 400)
             self.assertTrue(all(event.reused for event in progress[7::2]))
+
+    def test_cancelled_before_first_stage_calls_no_service(self) -> None:
+        token = CancellationToken()
+        token.cancel()
+        calls = 0
+        progress: list[EditProgressEvent] = []
+
+        class UnexpectedTranscribe:
+            def execute(self, request: TranscribeRequest) -> TranscribeResult:
+                nonlocal calls
+                del request
+                calls += 1
+                raise AssertionError("transcribe must not run")
+
+        request = EditRequest(
+            Path("/project"),
+            Path("/media/input.mov"),
+            "mlx",
+            "large-v3-turbo",
+            "zh",
+            500,
+            EditIntensity.BALANCED,
+            "concise",
+            "rule",
+            Path("/output.mp4"),
+            30,
+            progress.append,
+            token,
+        )
+
+        with self.assertRaises(EditCancelled):
+            EditProjectUseCase(transcribe=UnexpectedTranscribe()).execute(request)
+
+        self.assertEqual(calls, 0)
+        self.assertEqual(progress[-1], EditProgressEvent("transcribe", "cancelled"))
+
+    def test_retry_reuses_transcript_completed_before_plan_failure(self) -> None:
+        with TemporaryDirectory() as directory:
+            project_directory = Path(directory)
+            ProjectRepository(project_directory).create(ProjectManifest("demo"))
+            asset = MediaAsset(
+                "asset-1",
+                "/media/input.mov",
+                1_000,
+                (StreamInfo(0, StreamType.AUDIO, "aac"),),
+                "fingerprint",
+            )
+            transcript = Transcript(
+                "transcript-1",
+                TranscriptSource("asset-1", "mlx-whisper", "large-v3-turbo"),
+                "zh",
+                (Word("w1", "内容", 0, 400),),
+            )
+            transcription_calls = 0
+
+            def importer(
+                repository: ProjectRepository, source_path: str | Path
+            ) -> MediaAsset:
+                del source_path
+                return repository.add_asset(asset)
+
+            def transcriber(
+                asset: MediaAsset, request: TranscribeRequest
+            ) -> Transcript:
+                nonlocal transcription_calls
+                del asset, request
+                transcription_calls += 1
+                return transcript
+
+            class FailOncePlan:
+                def __init__(self) -> None:
+                    self.calls = 0
+
+                def execute(self, request: PlanRequest) -> PlanResult:
+                    self.calls += 1
+                    if self.calls == 1:
+                        raise ProcessingError("planner unavailable")
+                    return PlanResult(request.asset_id, 1, 0, Path("plan.json"))
+
+            class SuccessfulRender:
+                def __init__(self) -> None:
+                    self.calls = 0
+
+                def execute(self, request: RenderRequest) -> RenderResult:
+                    self.calls += 1
+                    return RenderResult(
+                        request.output_path,
+                        request.output_path.with_suffix(".srt"),
+                        400,
+                    )
+
+            plan = FailOncePlan()
+            render = SuccessfulRender()
+            progress: list[EditProgressEvent] = []
+            use_case = EditProjectUseCase(
+                transcribe=TranscribeProjectUseCase(
+                    importer=importer, transcriber=transcriber
+                ),
+                plan=plan,
+                render=render,
+            )
+            request = EditRequest(
+                project_directory,
+                Path("/media/input.mov"),
+                "mlx",
+                "large-v3-turbo",
+                "zh",
+                500,
+                EditIntensity.BALANCED,
+                "concise",
+                "rule",
+                project_directory / "result.mp4",
+                30,
+                progress.append,
+            )
+
+            with self.assertRaisesRegex(ProcessingError, "planner unavailable"):
+                use_case.execute(request)
+            result = use_case.execute(request)
+
+            self.assertEqual(transcription_calls, 1)
+            self.assertEqual(plan.calls, 2)
+            self.assertEqual(render.calls, 1)
+            self.assertIn("transcribe", result.reused_stages)
+            self.assertIn(EditProgressEvent("plan", "failed"), progress)
 
 
 if __name__ == "__main__":

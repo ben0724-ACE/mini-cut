@@ -2,11 +2,13 @@
 
 import argparse
 import json
+import signal
 import sys
 import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType
 from typing import TextIO, cast
 
 from minicut.application import (
@@ -32,6 +34,7 @@ from minicut.application import (
 )
 from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError
+from minicut.transcription_task import CancellationToken
 
 
 def _positive_int(value: str) -> int:
@@ -155,22 +158,33 @@ def main(
         if parsed.command == "edit":
             if active_services.edit is None:
                 raise AssertionError("Edit service is not configured")
-            result = active_services.edit.execute(
-                EditRequest(
-                    cast(Path, parsed.project_directory),
-                    cast(Path, parsed.source_path),
-                    cast(str, parsed.provider),
-                    cast(str, parsed.model),
-                    cast(str, parsed.language),
-                    cast(int, parsed.target_ms),
-                    EditIntensity(cast(str, parsed.intensity)),
-                    cast(str, parsed.style),
-                    cast(str, parsed.planner),
-                    cast(Path, parsed.output),
-                    float(cast(int, parsed.timeout)),
-                    lambda event: print(_format_edit_progress(event), file=stdout),
+            cancellation = CancellationToken()
+
+            def cancel_edit(signal_number: int, frame: FrameType | None) -> None:
+                del signal_number, frame
+                cancellation.cancel()
+
+            previous_handler = signal.signal(signal.SIGINT, cancel_edit)
+            try:
+                result = active_services.edit.execute(
+                    EditRequest(
+                        cast(Path, parsed.project_directory),
+                        cast(Path, parsed.source_path),
+                        cast(str, parsed.provider),
+                        cast(str, parsed.model),
+                        cast(str, parsed.language),
+                        cast(int, parsed.target_ms),
+                        EditIntensity(cast(str, parsed.intensity)),
+                        cast(str, parsed.style),
+                        cast(str, parsed.planner),
+                        cast(Path, parsed.output),
+                        float(cast(int, parsed.timeout)),
+                        lambda event: print(_format_edit_progress(event), file=stdout),
+                        cancellation,
+                    )
                 )
-            )
+            finally:
+                signal.signal(signal.SIGINT, previous_handler)
             print(
                 f"Edited asset {result.asset_id} to {result.output_path}.", file=stdout
             )

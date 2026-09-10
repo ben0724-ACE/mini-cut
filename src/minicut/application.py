@@ -10,7 +10,7 @@ from typing import Protocol, cast
 
 from minicut.deepseek_provider import create_deepseek_planner_from_env
 from minicut.edit_plan import EditBrief, EditIntensity, EditPlan
-from minicut.errors import ProcessingError, UserInputError
+from minicut.errors import MiniCutError, ProcessingError, UserInputError
 from minicut.importer import import_media
 from minicut.media import MediaAsset, StreamType
 from minicut.mlx_whisper import (
@@ -47,6 +47,7 @@ from minicut.transcription_cache import (
     cache_key_for_mlx,
     cache_key_for_open_source_whisper,
 )
+from minicut.transcription_task import CancellationToken
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,6 +349,7 @@ class RenderRequest:
     asset_id: str
     output_path: Path
     timeout_seconds: float
+    cancellation: CancellationToken | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,6 +371,7 @@ class TimelineRenderer(Protocol):
         output_path: str | Path,
         *,
         timeout_seconds: float,
+        cancellation: CancellationToken | None = None,
     ) -> object: ...
 
 
@@ -463,6 +466,7 @@ class RenderProjectUseCase:
             command,
             request.output_path,
             timeout_seconds=request.timeout_seconds,
+            cancellation=request.cancellation,
         )
         mapped_words = map_retained_words(timeline, segments, transcript.words)
         cues = build_readable_cues(mapped_words, timeline.estimated_duration_ms)
@@ -530,6 +534,7 @@ class EditRequest:
     output_path: Path
     timeout_seconds: float
     on_progress: "EditProgressReporter" = lambda event: None
+    cancellation: CancellationToken | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -541,6 +546,10 @@ class EditProgressEvent:
 
 
 EditProgressReporter = Callable[[EditProgressEvent], None]
+
+
+class EditCancelled(ProcessingError):
+    """Raised when the one-command workflow observes cancellation."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -569,40 +578,79 @@ class EditProjectUseCase:
         self._render = render or RenderProjectUseCase()
 
     def execute(self, request: EditRequest) -> EditResult:
+        def check_cancelled(stage: str) -> None:
+            if request.cancellation is not None and request.cancellation.is_cancelled:
+                request.on_progress(EditProgressEvent(stage, "cancelled"))
+                raise EditCancelled("Edit workflow was cancelled")
+
         request.on_progress(EditProgressEvent("transcribe", "running"))
-        transcribed = self._transcribe.execute(
-            TranscribeRequest(
-                request.project_directory,
-                request.source_path,
-                request.provider,
-                request.model,
-                request.language,
+        check_cancelled("transcribe")
+        try:
+            transcribed = self._transcribe.execute(
+                TranscribeRequest(
+                    request.project_directory,
+                    request.source_path,
+                    request.provider,
+                    request.model,
+                    request.language,
+                )
             )
-        )
+            check_cancelled("transcribe")
+        except EditCancelled:
+            raise
+        except MiniCutError as error:
+            if request.cancellation is not None and request.cancellation.is_cancelled:
+                request.on_progress(EditProgressEvent("transcribe", "cancelled"))
+                raise EditCancelled("Edit workflow was cancelled") from error
+            request.on_progress(EditProgressEvent("transcribe", "failed"))
+            raise
         request.on_progress(
             EditProgressEvent("transcribe", "succeeded", transcribed.reused)
         )
         request.on_progress(EditProgressEvent("plan", "running"))
-        planned = self._plan.execute(
-            PlanRequest(
-                request.project_directory,
-                transcribed.asset_id,
-                request.target_duration_ms,
-                request.intensity,
-                request.style,
-                request.planner,
+        check_cancelled("plan")
+        try:
+            planned = self._plan.execute(
+                PlanRequest(
+                    request.project_directory,
+                    transcribed.asset_id,
+                    request.target_duration_ms,
+                    request.intensity,
+                    request.style,
+                    request.planner,
+                )
             )
-        )
+            check_cancelled("plan")
+        except EditCancelled:
+            raise
+        except MiniCutError as error:
+            if request.cancellation is not None and request.cancellation.is_cancelled:
+                request.on_progress(EditProgressEvent("plan", "cancelled"))
+                raise EditCancelled("Edit workflow was cancelled") from error
+            request.on_progress(EditProgressEvent("plan", "failed"))
+            raise
         request.on_progress(EditProgressEvent("plan", "succeeded", planned.reused))
         request.on_progress(EditProgressEvent("render", "running"))
-        rendered = self._render.execute(
-            RenderRequest(
-                request.project_directory,
-                transcribed.asset_id,
-                request.output_path,
-                request.timeout_seconds,
+        check_cancelled("render")
+        try:
+            rendered = self._render.execute(
+                RenderRequest(
+                    request.project_directory,
+                    transcribed.asset_id,
+                    request.output_path,
+                    request.timeout_seconds,
+                    request.cancellation,
+                )
             )
-        )
+            check_cancelled("render")
+        except EditCancelled:
+            raise
+        except MiniCutError as error:
+            if request.cancellation is not None and request.cancellation.is_cancelled:
+                request.on_progress(EditProgressEvent("render", "cancelled"))
+                raise EditCancelled("Edit workflow was cancelled") from error
+            request.on_progress(EditProgressEvent("render", "failed"))
+            raise
         request.on_progress(
             EditProgressEvent(
                 "render",
@@ -732,6 +780,7 @@ class InspectProjectUseCase:
 
 
 __all__ = [
+    "EditCancelled",
     "EditOperation",
     "EditProgressEvent",
     "EditProgressReporter",

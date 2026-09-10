@@ -48,6 +48,16 @@ minicut inspect ./my-project --asset-id <asset-id>
 
 Use `--planner rule` for deterministic local planning. DeepSeek planning sends structured transcript text to the configured API, but never sends the original media.
 
+The same stages can be run in one resumable command:
+
+```bash
+minicut edit ./my-project ./input.mov \
+  --provider mlx --model large-v3-turbo \
+  --target-ms 60000 --planner deepseek --output ./result.mp4
+```
+
+Re-running the same command reuses valid transcription, plan, and render artifacts. Press Ctrl-C to request cooperative cancellation; completed artifacts remain available for the next run.
+
 ## Development
 
 Create or update the local environment, then run the complete quality gate:
