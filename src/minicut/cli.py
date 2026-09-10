@@ -11,6 +11,7 @@ from typing import TextIO, cast
 
 from minicut.application import (
     EditOperation,
+    EditProgressEvent,
     EditProjectUseCase,
     EditRequest,
     InitProjectOperation,
@@ -38,6 +39,16 @@ def _positive_int(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("value must be a positive integer")
     return parsed
+
+
+def _format_edit_progress(event: EditProgressEvent) -> str:
+    detail = "reused" if event.reused else event.status
+    duration = (
+        ""
+        if event.estimated_duration_ms is None
+        else f"; estimated output {event.estimated_duration_ms} ms"
+    )
+    return f"[{event.stage}] {detail}{duration}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +168,7 @@ def main(
                     cast(str, parsed.planner),
                     cast(Path, parsed.output),
                     float(cast(int, parsed.timeout)),
+                    lambda event: print(_format_edit_progress(event), file=stdout),
                 )
             )
             print(

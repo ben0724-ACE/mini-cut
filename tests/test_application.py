@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from typing import cast
 
 from minicut.application import (
+    EditProgressEvent,
     EditProjectUseCase,
     EditRequest,
     InspectProjectUseCase,
@@ -351,6 +352,7 @@ class EditProjectUseCaseTest(unittest.TestCase):
                     return object()
 
             renderer = PublishingRenderer()
+            progress: list[EditProgressEvent] = []
             use_case = EditProjectUseCase(
                 transcribe=TranscribeProjectUseCase(
                     importer=importer, transcriber=transcriber
@@ -370,6 +372,7 @@ class EditProjectUseCaseTest(unittest.TestCase):
                 "rule",
                 output_path,
                 30,
+                progress.append,
             )
 
             first = use_case.execute(request)
@@ -380,6 +383,19 @@ class EditProjectUseCaseTest(unittest.TestCase):
             self.assertEqual(transcription_calls, 1)
             self.assertEqual(planning_calls, 1)
             self.assertEqual(len(renderer.calls), 1)
+            self.assertEqual(
+                [(event.stage, event.status) for event in progress[:6]],
+                [
+                    ("transcribe", "running"),
+                    ("transcribe", "succeeded"),
+                    ("plan", "running"),
+                    ("plan", "succeeded"),
+                    ("render", "running"),
+                    ("render", "succeeded"),
+                ],
+            )
+            self.assertEqual(progress[5].estimated_duration_ms, 400)
+            self.assertTrue(all(event.reused for event in progress[7::2]))
 
 
 if __name__ == "__main__":

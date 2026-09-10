@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from minicut.application import (
+    EditProgressEvent,
     EditRequest,
     EditResult,
     InitProjectRequest,
@@ -332,6 +333,9 @@ class FakeEdit:
 
     def execute(self, request: EditRequest) -> EditResult:
         self.requests.append(request)
+        request.on_progress(EditProgressEvent("transcribe", "running"))
+        request.on_progress(EditProgressEvent("transcribe", "succeeded", True))
+        request.on_progress(EditProgressEvent("render", "succeeded", False, 900))
         return EditResult(
             "asset-1",
             request.output_path,
@@ -368,6 +372,9 @@ class EditCommandTest(unittest.TestCase):
         self.assertEqual(len(fake.requests), 1)
         self.assertEqual(fake.requests[0].target_duration_ms, 60_000)
         self.assertIn("Edited asset asset-1", output.getvalue())
+        self.assertIn("[transcribe] running", output.getvalue())
+        self.assertIn("[transcribe] reused", output.getvalue())
+        self.assertIn("[render] succeeded; estimated output 900 ms", output.getvalue())
 
 
 if __name__ == "__main__":

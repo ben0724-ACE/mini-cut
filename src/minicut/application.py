@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -528,6 +529,18 @@ class EditRequest:
     planner: str
     output_path: Path
     timeout_seconds: float
+    on_progress: "EditProgressReporter" = lambda event: None
+
+
+@dataclass(frozen=True, slots=True)
+class EditProgressEvent:
+    stage: str
+    status: str
+    reused: bool = False
+    estimated_duration_ms: int | None = None
+
+
+EditProgressReporter = Callable[[EditProgressEvent], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -556,6 +569,7 @@ class EditProjectUseCase:
         self._render = render or RenderProjectUseCase()
 
     def execute(self, request: EditRequest) -> EditResult:
+        request.on_progress(EditProgressEvent("transcribe", "running"))
         transcribed = self._transcribe.execute(
             TranscribeRequest(
                 request.project_directory,
@@ -565,6 +579,10 @@ class EditProjectUseCase:
                 request.language,
             )
         )
+        request.on_progress(
+            EditProgressEvent("transcribe", "succeeded", transcribed.reused)
+        )
+        request.on_progress(EditProgressEvent("plan", "running"))
         planned = self._plan.execute(
             PlanRequest(
                 request.project_directory,
@@ -575,12 +593,22 @@ class EditProjectUseCase:
                 request.planner,
             )
         )
+        request.on_progress(EditProgressEvent("plan", "succeeded", planned.reused))
+        request.on_progress(EditProgressEvent("render", "running"))
         rendered = self._render.execute(
             RenderRequest(
                 request.project_directory,
                 transcribed.asset_id,
                 request.output_path,
                 request.timeout_seconds,
+            )
+        )
+        request.on_progress(
+            EditProgressEvent(
+                "render",
+                "succeeded",
+                rendered.reused,
+                rendered.duration_ms,
             )
         )
         reused = tuple(
@@ -705,6 +733,8 @@ class InspectProjectUseCase:
 
 __all__ = [
     "EditOperation",
+    "EditProgressEvent",
+    "EditProgressReporter",
     "EditProjectUseCase",
     "EditRequest",
     "EditResult",
