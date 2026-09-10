@@ -20,7 +20,9 @@ def build_edit_plan_request(
     """Build a stable request that exposes no source media timestamps."""
     validate_segment_context_dependencies(segments)
     actions = ", ".join(action.value for action in EditAction)
-    reasons = ", ".join(reason.value for reason in ReasonCode)
+    reasons = ", ".join(
+        reason.value for reason in ReasonCode if reason is not ReasonCode.USER_REMOVED
+    )
     system_prompt = (
         "Return one JSON object with keys summary and decisions. "
         "Return exactly one decision for every ID in allowed_segment_ids and never "

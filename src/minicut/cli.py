@@ -151,6 +151,8 @@ def main(
     modify_parser.add_argument("--asset-id", required=True)
     modify_parser.add_argument("--restore", action="append", default=[])
     modify_parser.add_argument("--delete", action="append", default=[])
+    modify_parser.add_argument("--output", type=Path)
+    modify_parser.add_argument("--timeout", type=_positive_int, default=600)
     parsed = parser.parse_args(argv)
     if parsed.command is None:
         return 0
@@ -221,6 +223,8 @@ def main(
                     cast(str, parsed.asset_id),
                     tuple(cast(list[str], parsed.restore)),
                     tuple(cast(list[str], parsed.delete)),
+                    cast(Path | None, parsed.output),
+                    float(cast(int, parsed.timeout)),
                 )
             )
             print(
@@ -228,6 +232,11 @@ def main(
                 f"{result.deleted_segments} deleted segments.",
                 file=stdout,
             )
+            if result.output_path is not None:
+                print(
+                    f"Rendered revision {result.revision} to {result.output_path}.",
+                    file=stdout,
+                )
             return 0
         if parsed.command == "transcribe":
             if active_services.transcribe is None:

@@ -349,6 +349,7 @@ class PlanProjectUseCase:
         _write_json(
             artifact_path,
             {
+                "revision": 1,
                 "asset_id": request.asset_id,
                 "segments": [segment.to_dict() for segment in segments],
                 "plan": plan.to_dict(),
@@ -403,6 +404,8 @@ class ModifyPlanRequest:
     asset_id: str
     restore_segment_ids: tuple[str, ...] = ()
     delete_segment_ids: tuple[str, ...] = ()
+    output_path: Path | None = None
+    timeout_seconds: float = 600
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,6 +415,10 @@ class ModifyPlanResult:
     deleted_segments: int
     artifact_path: Path
     summary_path: Path
+    revision: int = 1
+    history_paths: tuple[Path, ...] = ()
+    output_path: Path | None = None
+    duration_ms: int | None = None
 
 
 class ModifyPlanOperation(Protocol):
@@ -419,6 +426,9 @@ class ModifyPlanOperation(Protocol):
 
 
 class ModifyPlanUseCase:
+    def __init__(self, *, render: "RenderOperation | None" = None) -> None:
+        self._render = render or RenderProjectUseCase()
+
     def execute(self, request: ModifyPlanRequest) -> ModifyPlanResult:
         restore_ids = request.restore_segment_ids
         delete_ids = request.delete_segment_ids
@@ -430,6 +440,8 @@ class ModifyPlanUseCase:
             raise UserInputError("Segment modifications must not contain duplicates")
         if set(restore_ids) & set(delete_ids):
             raise UserInputError("A Segment cannot be restored and deleted together")
+        if request.timeout_seconds <= 0:
+            raise UserInputError("Render timeout must be positive")
         ProjectRepository(request.project_directory).read()
         plan, segments = _read_plan_artifact(
             request.project_directory, request.asset_id
@@ -482,24 +494,61 @@ class ModifyPlanUseCase:
             / f"{request.asset_id}.json"
         )
         summary_path = artifact_path.with_suffix(".txt")
-        _write_json(
-            artifact_path,
-            {
-                "asset_id": request.asset_id,
-                "segments": [segment.to_dict() for segment in segments],
-                "plan": revised.to_dict(),
-            },
+        current_revision = _read_plan_revision(
+            request.project_directory, request.asset_id
         )
+        history_directory = (
+            request.project_directory
+            / ".minicut"
+            / "plans"
+            / f"{request.asset_id}-history"
+        )
+        original_payload = {
+            "revision": current_revision,
+            "asset_id": request.asset_id,
+            "segments": [segment.to_dict() for segment in segments],
+            "plan": plan.to_dict(),
+        }
+        original_history = history_directory / f"{current_revision:04d}.json"
+        if not original_history.exists():
+            _write_json(original_history, original_payload)
+        changed = revised != plan
+        revision = current_revision + 1 if changed else current_revision
+        revised_payload = {
+            "revision": revision,
+            "asset_id": request.asset_id,
+            "segments": [segment.to_dict() for segment in segments],
+            "plan": revised.to_dict(),
+        }
+        if changed:
+            _write_json(artifact_path, revised_payload)
+        revised_history = history_directory / f"{revision:04d}.json"
+        if not revised_history.exists():
+            _write_json(revised_history, revised_payload)
         _write_text(
             summary_path, _render_plan_summary(request.asset_id, revised, segments)
         )
         kept = sum(decision.action is EditAction.KEEP for decision in decisions)
+        rendered = None
+        if request.output_path is not None:
+            rendered = self._render.execute(
+                RenderRequest(
+                    request.project_directory,
+                    request.asset_id,
+                    request.output_path,
+                    request.timeout_seconds,
+                )
+            )
         return ModifyPlanResult(
             request.asset_id,
             kept,
             len(decisions) - kept,
             artifact_path,
             summary_path,
+            revision,
+            tuple(sorted(history_directory.glob("*.json"))),
+            None if rendered is None else rendered.output_path,
+            None if rendered is None else rendered.duration_ms,
         )
 
 
@@ -552,6 +601,18 @@ def _read_plan_artifact(
         raise UserInputError("Edit plan artifact is invalid") from error
 
 
+def _read_plan_revision(project_directory: Path, asset_id: str) -> int:
+    path = project_directory / ".minicut" / "plans" / f"{asset_id}.json"
+    try:
+        payload = cast(dict[str, object], json.loads(path.read_text(encoding="utf-8")))
+        revision = payload.get("revision", 1)
+        if type(revision) is not int or revision <= 0:
+            raise ValueError("invalid revision")
+        return revision
+    except (OSError, TypeError, UnicodeError, ValueError) as error:
+        raise UserInputError("Edit plan artifact is invalid") from error
+
+
 class RenderProjectUseCase:
     def __init__(
         self,
@@ -579,6 +640,7 @@ class RenderProjectUseCase:
             request.project_directory, request.asset_id
         )
         timeline = compile_timeline(plan, segments, request.asset_id)
+        plan_revision = _read_plan_revision(request.project_directory, request.asset_id)
         subtitle_path = request.output_path.with_suffix(".srt")
         render_record_path = (
             request.project_directory
@@ -598,6 +660,7 @@ class RenderProjectUseCase:
             request.output_path,
             subtitle_path,
             timeline.estimated_duration_ms,
+            plan_revision,
         ):
             return RenderResult(
                 request.output_path.absolute(),
@@ -644,6 +707,7 @@ class RenderProjectUseCase:
                 "output_path": str(request.output_path.absolute()),
                 "subtitle_path": str(subtitle_path.absolute()),
                 "duration_ms": timeline.estimated_duration_ms,
+                "plan_revision": plan_revision,
             },
         )
         return RenderResult(
@@ -659,6 +723,7 @@ def _can_reuse_render(
     output_path: Path,
     subtitle_path: Path,
     duration_ms: int,
+    plan_revision: int,
 ) -> bool:
     if (
         not record_path.is_file()
@@ -674,6 +739,7 @@ def _can_reuse_render(
             record["output_path"] == str(output_path.absolute())
             and record["subtitle_path"] == str(subtitle_path.absolute())
             and record["duration_ms"] == duration_ms
+            and record.get("plan_revision") == plan_revision
             and record_path.stat().st_mtime_ns >= plan_path.stat().st_mtime_ns
         )
     except (KeyError, OSError, TypeError, UnicodeError, ValueError):

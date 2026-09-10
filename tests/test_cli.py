@@ -386,7 +386,15 @@ class FakeModifyPlan:
     def execute(self, request: ModifyPlanRequest) -> ModifyPlanResult:
         self.requests.append(request)
         return ModifyPlanResult(
-            request.asset_id, 2, 1, Path("plan.json"), Path("plan.txt")
+            request.asset_id,
+            2,
+            1,
+            Path("plan.json"),
+            Path("plan.txt"),
+            2,
+            (Path("0001.json"), Path("0002.json")),
+            request.output_path,
+            900,
         )
 
 
@@ -405,6 +413,8 @@ class ModifyPlanCommandTest(unittest.TestCase):
                 "segment-2",
                 "--delete",
                 "segment-1",
+                "--output",
+                "/exports/revised.mp4",
             ],
             services=CliServices(FakeInitProject(), modify_plan=fake),
             output_stream=output,
@@ -414,7 +424,9 @@ class ModifyPlanCommandTest(unittest.TestCase):
         self.assertEqual(len(fake.requests), 1)
         self.assertEqual(fake.requests[0].restore_segment_ids, ("segment-2",))
         self.assertEqual(fake.requests[0].delete_segment_ids, ("segment-1",))
+        self.assertEqual(fake.requests[0].output_path, Path("/exports/revised.mp4"))
         self.assertIn("2 kept and 1 deleted", output.getvalue())
+        self.assertIn("Rendered revision 2", output.getvalue())
 
 
 if __name__ == "__main__":

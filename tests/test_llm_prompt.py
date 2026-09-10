@@ -87,6 +87,7 @@ class EditPlanPromptTest(unittest.TestCase):
         self.assertIn("keep", first.system_prompt)
         self.assertIn("delete", first.system_prompt)
         self.assertIn("JSON", first.system_prompt)
+        self.assertNotIn("user_removed", first.system_prompt)
 
 
 if __name__ == "__main__":

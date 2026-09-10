@@ -306,7 +306,19 @@ class ModifyPlanUseCaseTest(unittest.TestCase):
     def test_restores_and_deletes_known_segments_without_a_planner(self) -> None:
         with TemporaryDirectory() as directory:
             project_directory = Path(directory)
-            ProjectRepository(project_directory).create(ProjectManifest("demo"))
+            asset = MediaAsset(
+                "asset-1",
+                "/media/input.mov",
+                1_000,
+                (
+                    StreamInfo(0, StreamType.VIDEO, "h264"),
+                    StreamInfo(1, StreamType.AUDIO, "aac"),
+                ),
+                "fingerprint",
+            )
+            ProjectRepository(project_directory).create(
+                ProjectManifest("demo", (asset,))
+            )
             transcript = Transcript(
                 "transcript-1",
                 TranscriptSource("asset-1", "mlx-whisper", "large-v3-turbo"),
@@ -346,12 +358,36 @@ class ModifyPlanUseCaseTest(unittest.TestCase):
             first_id = cast(str, segments[0]["segment_id"])
             second_id = cast(str, segments[1]["segment_id"])
 
-            result = ModifyPlanUseCase().execute(
+            class PublishingRenderer(FakeTimelineRenderer):
+                def render_to_path(
+                    self,
+                    command: tuple[str, ...],
+                    output_path: str | Path,
+                    *,
+                    timeout_seconds: float,
+                    cancellation: CancellationToken | None = None,
+                ) -> object:
+                    super().render_to_path(
+                        command,
+                        output_path,
+                        timeout_seconds=timeout_seconds,
+                        cancellation=cancellation,
+                    )
+                    Path(output_path).write_bytes(b"video")
+                    return object()
+
+            renderer = PublishingRenderer()
+            render = RenderProjectUseCase(renderer=renderer)
+            output_path = project_directory / "revised.mp4"
+            render.execute(RenderRequest(project_directory, "asset-1", output_path, 30))
+
+            result = ModifyPlanUseCase(render=render).execute(
                 ModifyPlanRequest(
                     project_directory,
                     "asset-1",
                     (second_id,),
                     (first_id,),
+                    output_path,
                 )
             )
 
@@ -370,6 +406,26 @@ class ModifyPlanUseCaseTest(unittest.TestCase):
             self.assertEqual(actions[first_id], EditAction.DELETE)
             self.assertEqual(actions[second_id], EditAction.KEEP)
             self.assertIn("Restored by user", result.summary_path.read_text())
+            self.assertEqual(result.revision, 2)
+            self.assertEqual(len(result.history_paths), 2)
+            original_history = cast(
+                dict[str, object],
+                json.loads(result.history_paths[0].read_text(encoding="utf-8")),
+            )
+            revised_history = cast(
+                dict[str, object],
+                json.loads(result.history_paths[1].read_text(encoding="utf-8")),
+            )
+            original_plan = EditPlan.from_dict(
+                cast(dict[str, object], original_history["plan"])
+            )
+            history_plan = EditPlan.from_dict(
+                cast(dict[str, object], revised_history["plan"])
+            )
+            self.assertNotEqual(original_plan.decisions, history_plan.decisions)
+            self.assertEqual(len(renderer.calls), 2)
+            self.assertEqual(result.output_path, output_path)
+            self.assertEqual(result.duration_ms, 300)
 
     def test_rejects_conflicting_segment_actions_without_overwriting_plan(self) -> None:
         with TemporaryDirectory() as directory:
@@ -378,14 +434,26 @@ class ModifyPlanUseCaseTest(unittest.TestCase):
             plan_path.parent.mkdir(parents=True)
             plan_path.write_text("original", encoding="utf-8")
 
+            class UnexpectedRender:
+                def __init__(self) -> None:
+                    self.calls = 0
+
+                def execute(self, request: RenderRequest) -> RenderResult:
+                    del request
+                    self.calls += 1
+                    raise AssertionError("invalid plan must not render")
+
+            render = UnexpectedRender()
+
             with self.assertRaisesRegex(UserInputError, "cannot be restored"):
-                ModifyPlanUseCase().execute(
+                ModifyPlanUseCase(render=render).execute(
                     ModifyPlanRequest(
                         project_directory, "asset-1", ("segment-1",), ("segment-1",)
                     )
                 )
 
             self.assertEqual(plan_path.read_text(encoding="utf-8"), "original")
+            self.assertEqual(render.calls, 0)
 
 
 class EditProjectUseCaseTest(unittest.TestCase):

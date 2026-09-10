@@ -58,6 +58,16 @@ minicut edit ./my-project ./input.mov \
 
 Re-running the same command reuses valid transcription, plan, and render artifacts. Press Ctrl-C to request cooperative cancellation; completed artifacts remain available for the next run.
 
+Review `.minicut/plans/<asset-id>.txt`, then override decisions without another model call:
+
+```bash
+minicut plan-edit ./my-project --asset-id <asset-id> \
+  --restore <segment-id> --delete <segment-id> \
+  --output ./result-revised.mp4
+```
+
+Plan revisions are retained under `.minicut/plans/<asset-id>-history/`. A valid change increments the plan revision and forces timeline recompilation and rendering for the requested output.
+
 ## Development
 
 Create or update the local environment, then run the complete quality gate:
