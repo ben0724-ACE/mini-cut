@@ -37,4 +37,9 @@ h1 { font-size: clamp(2rem, 6vw, 4rem); margin: 0; }
 .reason { color: #746e63; font-size: 0.9rem; margin-bottom: 0; }
 button { margin-top: 12px; border: 1px solid #b8afa1; border-radius: 8px; padding: 8px 12px; background: #fff; color: inherit; cursor: pointer; }
 button:disabled { cursor: wait; opacity: 0.55; }
+.export-panel { margin-top: 32px; padding: 22px; border-radius: 14px; background: #fffdf9; }
+.export-panel label { display: grid; gap: 6px; color: #665f55; }
+.export-panel input { max-width: 320px; border: 1px solid #b8afa1; border-radius: 8px; padding: 9px 11px; font: inherit; }
+.downloads { margin-top: 14px; }
+.downloads a { display: inline-block; margin-right: 16px; color: #2359b8; font-weight: 700; }
 @media (max-width: 600px) { .plan-header { flex-direction: column; } }

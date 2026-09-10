@@ -4,6 +4,7 @@ import {
   getPlan,
   getPreviewTimeline,
   modifyPlan,
+  renderAndWait,
   type PlanDetail,
   type PreviewTimeline,
 } from "./api";
@@ -46,6 +47,7 @@ export function App() {
         initialPlan={plan}
         initialPreview={preview}
         mediaUrl={`/api/projects/${encodeURIComponent(projectId)}/media/source/${encodeURIComponent(assetId)}`}
+        renderVideo={(outputName) => renderAndWait(projectId, assetId, outputName)}
         saveDecision={async (segmentId, action) => {
           const updatedPlan = await modifyPlan(
             projectId,

@@ -47,6 +47,19 @@ export interface JumpCutRisk {
 
 export class ApiError extends Error {}
 
+export interface RenderDownload {
+  media_url: string;
+  subtitle_url: string;
+  duration_ms: number;
+}
+
+interface TaskStatus {
+  task_id: string;
+  status: "pending" | "running" | "succeeded" | "failed";
+  result: { duration_ms?: number } | null;
+  error: string | null;
+}
+
 export async function getPlan(
   projectId: string,
   assetId: string,
@@ -102,4 +115,49 @@ export async function getPreviewTimeline(
   );
   if (!response.ok) throw new ApiError(`无法生成预览（${response.status}）`);
   return (await response.json()) as PreviewTimeline;
+}
+
+const wait = (milliseconds: number) =>
+  new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+
+export async function renderAndWait(
+  projectId: string,
+  assetId: string,
+  outputName: string,
+): Promise<RenderDownload> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(outputName)) {
+    throw new ApiError("输出文件名只能包含字母、数字、点、下划线和连字符");
+  }
+  const project = encodeURIComponent(projectId);
+  const taskId = globalThis.crypto.randomUUID();
+  const submitted = await fetch(`/api/projects/${project}/tasks/render`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": taskId,
+    },
+    body: JSON.stringify({ asset_id: assetId, output_name: outputName }),
+  });
+  if (!submitted.ok) throw new ApiError(`无法提交渲染任务（${submitted.status}）`);
+
+  let task = (await submitted.json()) as TaskStatus;
+  while (task.status === "pending" || task.status === "running") {
+    await wait(500);
+    const response = await fetch(`/api/projects/${project}/tasks/${taskId}`);
+    if (!response.ok) throw new ApiError(`无法查询渲染进度（${response.status}）`);
+    task = (await response.json()) as TaskStatus;
+  }
+  if (task.status === "failed") throw new ApiError(task.error ?? "渲染失败");
+  if (typeof task.result?.duration_ms !== "number") {
+    throw new ApiError("渲染任务没有返回有效结果");
+  }
+  const encodedOutput = encodeURIComponent(outputName);
+  const subtitleName = outputName.includes(".")
+    ? outputName.replace(/\.[^.]+$/, ".srt")
+    : `${outputName}.srt`;
+  return {
+    media_url: `/api/projects/${project}/media/exports/${encodedOutput}`,
+    subtitle_url: `/api/projects/${project}/media/exports/${encodeURIComponent(subtitleName)}`,
+    duration_ms: task.result.duration_ms,
+  };
 }

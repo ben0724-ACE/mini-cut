@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { PlanDetail, PreviewTimeline } from "./api";
+import type { PlanDetail, PreviewTimeline, RenderDownload } from "./api";
 
 interface PlanReviewProps {
   initialPlan: PlanDetail;
@@ -9,6 +9,7 @@ interface PlanReviewProps {
     action: "keep" | "delete",
   ) => Promise<{ plan: PlanDetail; preview: PreviewTimeline }>;
   mediaUrl: string;
+  renderVideo: (outputName: string) => Promise<RenderDownload>;
 }
 
 const formatTime = (milliseconds: number) =>
@@ -36,6 +37,7 @@ export function PlanReview({
   initialPreview,
   saveDecision,
   mediaUrl,
+  renderVideo,
 }: PlanReviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const initialDuration = useRef(estimatedDuration(initialPlan));
@@ -45,6 +47,10 @@ export function PlanReview({
   const [pendingSegment, setPendingSegment] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [previewing, setPreviewing] = useState(false);
+  const [outputName, setOutputName] = useState("result.mp4");
+  const [rendering, setRendering] = useState(false);
+  const [renderError, setRenderError] = useState("");
+  const [download, setDownload] = useState<RenderDownload | null>(null);
   const kept = plan.segments.filter((segment) => segment.action === "keep").length;
   const deleted = plan.segments.length - kept;
   const duration = estimatedDuration(plan);
@@ -118,6 +124,19 @@ export function PlanReview({
     else {
       video.pause();
       setPreviewing(false);
+    }
+  };
+
+  const render = async () => {
+    setRendering(true);
+    setRenderError("");
+    setDownload(null);
+    try {
+      setDownload(await renderVideo(outputName));
+    } catch (reason) {
+      setRenderError(reason instanceof Error ? reason.message : "正式渲染失败");
+    } finally {
+      setRendering(false);
     }
   };
 
@@ -227,6 +246,29 @@ export function PlanReview({
           </li>
         ))}
       </ol>
+      <section className="export-panel" aria-labelledby="export-title">
+        <h2 id="export-title">正式导出</h2>
+        <label>
+          输出文件名
+          <input
+            value={outputName}
+            onChange={(event) => setOutputName(event.target.value)}
+            pattern="[A-Za-z0-9][A-Za-z0-9._-]*"
+            disabled={rendering}
+          />
+        </label>
+        <button type="button" onClick={() => void render()} disabled={rendering || !outputName}>
+          {rendering ? "正在渲染…" : renderError ? "重试正式渲染" : "开始正式渲染"}
+        </button>
+        {renderError && <p role="alert">{renderError}</p>}
+        {download && (
+          <div role="status" className="downloads">
+            <p>渲染完成 · {formatDuration(download.duration_ms)}</p>
+            <a href={download.media_url} download>下载视频</a>
+            <a href={download.subtitle_url} download>下载字幕</a>
+          </div>
+        )}
+      </section>
     </section>
   );
 }

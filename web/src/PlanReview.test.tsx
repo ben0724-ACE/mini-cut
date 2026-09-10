@@ -33,7 +33,7 @@ const preview: PreviewTimeline = {
 
 describe("PlanReview", () => {
   it("shows keep/delete decisions, reasons and counts", () => {
-    render(<PlanReview initialPlan={plan} initialPreview={preview} saveDecision={vi.fn()} mediaUrl="/media" />);
+    render(<PlanReview initialPlan={plan} initialPreview={preview} saveDecision={vi.fn()} mediaUrl="/media" renderVideo={vi.fn()} />);
     expect(screen.getByText("核心观点")).toBeInTheDocument();
     expect(screen.getByText("重复内容")).toBeInTheDocument();
     expect(screen.getByText(/承载主要信息/)).toBeInTheDocument();
@@ -61,7 +61,7 @@ describe("PlanReview", () => {
         preview,
       })
       .mockResolvedValueOnce({ plan, preview });
-    render(<PlanReview initialPlan={plan} initialPreview={preview} saveDecision={saveDecision} mediaUrl="/media" />);
+    render(<PlanReview initialPlan={plan} initialPreview={preview} saveDecision={saveDecision} mediaUrl="/media" renderVideo={vi.fn()} />);
 
     await user.click(screen.getByRole("button", { name: "恢复此段" }));
     expect(saveDecision).toHaveBeenLastCalledWith("s2", "keep");
@@ -91,7 +91,7 @@ describe("PlanReview", () => {
     });
     const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
     render(
-      <PlanReview initialPlan={plan} initialPreview={preview} saveDecision={saveDecision} mediaUrl="/media" />,
+      <PlanReview initialPlan={plan} initialPreview={preview} saveDecision={saveDecision} mediaUrl="/media" renderVideo={vi.fn()} />,
     );
     const video = screen.getByText("浏览器无法播放这个视频。") as HTMLVideoElement;
 
@@ -111,7 +111,7 @@ describe("PlanReview", () => {
   it("plays a low-cost preview by skipping deleted source ranges", async () => {
     const user = userEvent.setup();
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
-    render(<PlanReview initialPlan={plan} initialPreview={preview} saveDecision={vi.fn()} mediaUrl="/media" />);
+    render(<PlanReview initialPlan={plan} initialPreview={preview} saveDecision={vi.fn()} mediaUrl="/media" renderVideo={vi.fn()} />);
     const video = screen.getByText("浏览器无法播放这个视频。") as HTMLVideoElement;
 
     await user.click(screen.getByRole("button", { name: "从头播放粗剪预览" }));
@@ -119,5 +119,40 @@ describe("PlanReview", () => {
     video.currentTime = 1.1;
     fireEvent.timeUpdate(video);
     expect(video.currentTime).toBe(2);
+  });
+
+  it("shows render failures, retries, and exposes controlled downloads", async () => {
+    const user = userEvent.setup();
+    const renderVideo = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("编码失败"))
+      .mockResolvedValueOnce({
+        media_url: "/api/projects/demo/media/exports/result.mp4",
+        subtitle_url: "/api/projects/demo/media/exports/result.srt",
+        duration_ms: 1_600,
+      });
+    render(
+      <PlanReview
+        initialPlan={plan}
+        initialPreview={preview}
+        saveDecision={vi.fn()}
+        mediaUrl="/media"
+        renderVideo={renderVideo}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "开始正式渲染" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("编码失败");
+
+    await user.click(screen.getByRole("button", { name: "重试正式渲染" }));
+    expect(renderVideo).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("link", { name: "下载视频" })).toHaveAttribute(
+      "href",
+      "/api/projects/demo/media/exports/result.mp4",
+    );
+    expect(screen.getByRole("link", { name: "下载字幕" })).toHaveAttribute(
+      "href",
+      "/api/projects/demo/media/exports/result.srt",
+    );
   });
 });

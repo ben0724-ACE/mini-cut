@@ -86,7 +86,7 @@ npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173/?project=<project-id>&asset=<asset-id>`. The review screen shows every keep/delete decision and its reason, seeks the source video from transcript segments, persists restore/delete changes, supports undo, and updates the estimated output duration. With a segment focused, use `K` to keep, `D` to delete, and Space to play or pause.
+Open `http://127.0.0.1:5173/?project=<project-id>&asset=<asset-id>`. The review screen shows every keep/delete decision and its reason, previews the compiled cut without rendering, marks cut points and jump-cut risks, persists restore/delete changes, supports undo, and updates the estimated output duration. It can then start a formal render and download the project-owned video and subtitle. With a segment focused, use `K` to keep, `D` to delete, and Space to play or pause.
 
 ## Development
 
