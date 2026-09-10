@@ -12,6 +12,9 @@ from minicut.application import (
     InitProjectOperation,
     InitProjectRequest,
     InitProjectUseCase,
+    TranscribeOperation,
+    TranscribeProjectUseCase,
+    TranscribeRequest,
 )
 from minicut.errors import MiniCutError
 
@@ -21,10 +24,14 @@ class CliServices:
     """Injectable application use cases available to CLI handlers."""
 
     init_project: InitProjectOperation
+    transcribe: TranscribeOperation | None = None
 
 
 def _default_services() -> CliServices:
-    return CliServices(init_project=InitProjectUseCase())
+    return CliServices(
+        init_project=InitProjectUseCase(),
+        transcribe=TranscribeProjectUseCase(),
+    )
 
 
 def main(
@@ -44,6 +51,16 @@ def main(
     init_parser = commands.add_parser("init", help="Initialize a MiniCut project.")
     init_parser.add_argument("project_directory", type=Path)
     init_parser.add_argument("--project-id", required=True)
+    transcribe_parser = commands.add_parser(
+        "transcribe", help="Transcribe media into the project."
+    )
+    transcribe_parser.add_argument("project_directory", type=Path)
+    transcribe_parser.add_argument("source_path", type=Path)
+    transcribe_parser.add_argument(
+        "--provider", choices=("mlx", "whisper"), required=True
+    )
+    transcribe_parser.add_argument("--model", required=True)
+    transcribe_parser.add_argument("--language", default="zh")
     parsed = parser.parse_args(argv)
     if parsed.command is None:
         return 0
@@ -59,6 +76,23 @@ def main(
             )
             result = active_services.init_project.execute(request)
             print(f"Initialized project {result.project_id}.", file=stdout)
+            return 0
+        if parsed.command == "transcribe":
+            if active_services.transcribe is None:
+                raise AssertionError("Transcribe service is not configured")
+            result = active_services.transcribe.execute(
+                TranscribeRequest(
+                    cast(Path, parsed.project_directory),
+                    cast(Path, parsed.source_path),
+                    cast(str, parsed.provider),
+                    cast(str, parsed.model),
+                    cast(str, parsed.language),
+                )
+            )
+            print(
+                f"Transcribed {result.word_count} words for asset {result.asset_id}.",
+                file=stdout,
+            )
             return 0
         raise AssertionError(f"Unhandled CLI command: {parsed.command}")
 

@@ -4,7 +4,12 @@ from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from minicut.application import InitProjectRequest, InitProjectResult
+from minicut.application import (
+    InitProjectRequest,
+    InitProjectResult,
+    TranscribeRequest,
+    TranscribeResult,
+)
 from minicut.cli import CliServices, main, run_cli
 from minicut.errors import UserInputError
 
@@ -98,6 +103,59 @@ class InitCommandTest(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertTrue((project_directory / "manifest.json").is_file())
+
+
+class FakeTranscribe:
+    def __init__(self) -> None:
+        self.requests: list[TranscribeRequest] = []
+
+    def execute(self, request: TranscribeRequest) -> TranscribeResult:
+        self.requests.append(request)
+        return TranscribeResult("transcript-1", "asset-1", 42)
+
+
+class TranscribeCommandTest(unittest.TestCase):
+    def test_calls_one_transcribe_use_case_and_reports_word_count(self) -> None:
+        fake = FakeTranscribe()
+        output = StringIO()
+
+        exit_code = main(
+            [
+                "transcribe",
+                "/projects/demo",
+                "/media/input.mov",
+                "--provider",
+                "mlx",
+                "--model",
+                "large-v3-turbo",
+            ],
+            services=CliServices(FakeInitProject(), fake),
+            output_stream=output,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(fake.requests), 1)
+        self.assertEqual(fake.requests[0].provider, "mlx")
+        self.assertEqual(fake.requests[0].language, "zh")
+        self.assertEqual(output.getvalue(), "Transcribed 42 words for asset asset-1.\n")
+
+    def test_invalid_provider_exits_before_service_call(self) -> None:
+        fake = FakeTranscribe()
+        with self.assertRaises(SystemExit) as raised:
+            main(
+                [
+                    "transcribe",
+                    "/projects/demo",
+                    "/media/input.mov",
+                    "--provider",
+                    "invalid",
+                    "--model",
+                    "small",
+                ],
+                services=CliServices(FakeInitProject(), fake),
+            )
+        self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(fake.requests, [])
 
 
 if __name__ == "__main__":
