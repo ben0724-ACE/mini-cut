@@ -11,6 +11,8 @@ from minicut.application import (
     EditRequest,
     InspectProjectUseCase,
     InspectRequest,
+    ModifyPlanRequest,
+    ModifyPlanUseCase,
     PlanProjectUseCase,
     PlanRequest,
     PlanResult,
@@ -21,8 +23,8 @@ from minicut.application import (
     TranscribeRequest,
     TranscribeResult,
 )
-from minicut.edit_plan import EditBrief, EditIntensity, EditPlan
-from minicut.errors import ProcessingError
+from minicut.edit_plan import EditAction, EditBrief, EditIntensity, EditPlan
+from minicut.errors import ProcessingError, UserInputError
 from minicut.media import MediaAsset, StreamInfo, StreamType
 from minicut.project import ProjectManifest, ProjectRepository
 from minicut.rule_planner import RulePlanner
@@ -298,6 +300,92 @@ class InspectProjectUseCaseTest(unittest.TestCase):
                 if path.is_file()
             }
             self.assertEqual(after, before)
+
+
+class ModifyPlanUseCaseTest(unittest.TestCase):
+    def test_restores_and_deletes_known_segments_without_a_planner(self) -> None:
+        with TemporaryDirectory() as directory:
+            project_directory = Path(directory)
+            ProjectRepository(project_directory).create(ProjectManifest("demo"))
+            transcript = Transcript(
+                "transcript-1",
+                TranscriptSource("asset-1", "mlx-whisper", "large-v3-turbo"),
+                "zh",
+                (
+                    Word("w1", "内容", 0, 400),
+                    Word("w2", "嗯", 500, 800),
+                ),
+                (
+                    Utterance("u1", "内容", 0, 400, ("w1",)),
+                    Utterance("u2", "嗯", 500, 800, ("w2",)),
+                ),
+            )
+            TranscriptCacheRepository(
+                project_directory / ".minicut/transcripts/asset-1.json"
+            ).write(
+                TranscriptionCacheKey(
+                    "fingerprint", "mlx-whisper", "large-v3-turbo", "zh", None
+                ),
+                transcript,
+            )
+            planned = PlanProjectUseCase().execute(
+                PlanRequest(
+                    project_directory,
+                    "asset-1",
+                    1_000,
+                    EditIntensity.BALANCED,
+                    "concise",
+                    "rule",
+                )
+            )
+            payload = cast(
+                dict[str, object],
+                json.loads(planned.artifact_path.read_text(encoding="utf-8")),
+            )
+            segments = cast(list[dict[str, object]], payload["segments"])
+            first_id = cast(str, segments[0]["segment_id"])
+            second_id = cast(str, segments[1]["segment_id"])
+
+            result = ModifyPlanUseCase().execute(
+                ModifyPlanRequest(
+                    project_directory,
+                    "asset-1",
+                    (second_id,),
+                    (first_id,),
+                )
+            )
+
+            self.assertEqual((result.kept_segments, result.deleted_segments), (1, 1))
+            revised_payload = cast(
+                dict[str, object],
+                json.loads(result.artifact_path.read_text(encoding="utf-8")),
+            )
+            revised_plan = EditPlan.from_dict(
+                cast(dict[str, object], revised_payload["plan"])
+            )
+            actions = {
+                decision.segment_id: decision.action
+                for decision in revised_plan.decisions
+            }
+            self.assertEqual(actions[first_id], EditAction.DELETE)
+            self.assertEqual(actions[second_id], EditAction.KEEP)
+            self.assertIn("Restored by user", result.summary_path.read_text())
+
+    def test_rejects_conflicting_segment_actions_without_overwriting_plan(self) -> None:
+        with TemporaryDirectory() as directory:
+            project_directory = Path(directory)
+            plan_path = project_directory / ".minicut/plans/asset-1.json"
+            plan_path.parent.mkdir(parents=True)
+            plan_path.write_text("original", encoding="utf-8")
+
+            with self.assertRaisesRegex(UserInputError, "cannot be restored"):
+                ModifyPlanUseCase().execute(
+                    ModifyPlanRequest(
+                        project_directory, "asset-1", ("segment-1",), ("segment-1",)
+                    )
+                )
+
+            self.assertEqual(plan_path.read_text(encoding="utf-8"), "original")
 
 
 class EditProjectUseCaseTest(unittest.TestCase):

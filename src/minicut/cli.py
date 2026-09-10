@@ -22,6 +22,9 @@ from minicut.application import (
     InspectOperation,
     InspectProjectUseCase,
     InspectRequest,
+    ModifyPlanOperation,
+    ModifyPlanRequest,
+    ModifyPlanUseCase,
     PlanOperation,
     PlanProjectUseCase,
     PlanRequest,
@@ -64,6 +67,7 @@ class CliServices:
     render: RenderOperation | None = None
     inspect: InspectOperation | None = None
     edit: EditOperation | None = None
+    modify_plan: ModifyPlanOperation | None = None
 
 
 def _default_services() -> CliServices:
@@ -74,6 +78,7 @@ def _default_services() -> CliServices:
         render=RenderProjectUseCase(),
         inspect=InspectProjectUseCase(),
         edit=EditProjectUseCase(),
+        modify_plan=ModifyPlanUseCase(),
     )
 
 
@@ -139,6 +144,13 @@ def main(
     edit_parser.add_argument("--planner", choices=("rule", "deepseek"), default="rule")
     edit_parser.add_argument("--output", required=True, type=Path)
     edit_parser.add_argument("--timeout", type=_positive_int, default=600)
+    modify_parser = commands.add_parser(
+        "plan-edit", help="Restore or delete planned Segments."
+    )
+    modify_parser.add_argument("project_directory", type=Path)
+    modify_parser.add_argument("--asset-id", required=True)
+    modify_parser.add_argument("--restore", action="append", default=[])
+    modify_parser.add_argument("--delete", action="append", default=[])
     parsed = parser.parse_args(argv)
     if parsed.command is None:
         return 0
@@ -199,6 +211,23 @@ def main(
                 )
             )
             print(json.dumps(result.to_dict(), ensure_ascii=False), file=stdout)
+            return 0
+        if parsed.command == "plan-edit":
+            if active_services.modify_plan is None:
+                raise AssertionError("Modify plan service is not configured")
+            result = active_services.modify_plan.execute(
+                ModifyPlanRequest(
+                    cast(Path, parsed.project_directory),
+                    cast(str, parsed.asset_id),
+                    tuple(cast(list[str], parsed.restore)),
+                    tuple(cast(list[str], parsed.delete)),
+                )
+            )
+            print(
+                f"Updated plan: {result.kept_segments} kept and "
+                f"{result.deleted_segments} deleted segments.",
+                file=stdout,
+            )
             return 0
         if parsed.command == "transcribe":
             if active_services.transcribe is None:

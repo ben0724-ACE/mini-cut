@@ -3,13 +3,21 @@
 import asyncio
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Protocol, cast
 
 from minicut.deepseek_provider import create_deepseek_planner_from_env
-from minicut.edit_plan import EditBrief, EditIntensity, EditPlan
+from minicut.edit_plan import (
+    EditAction,
+    EditBrief,
+    EditDecision,
+    EditIntensity,
+    EditPlan,
+    ReasonCode,
+    validate_edit_plan,
+)
 from minicut.errors import MiniCutError, ProcessingError, UserInputError
 from minicut.importer import import_media
 from minicut.media import MediaAsset, StreamType
@@ -387,6 +395,112 @@ def _render_plan_summary(
             )
         )
     return "\n".join(lines).rstrip() + "\n"
+
+
+@dataclass(frozen=True, slots=True)
+class ModifyPlanRequest:
+    project_directory: Path
+    asset_id: str
+    restore_segment_ids: tuple[str, ...] = ()
+    delete_segment_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ModifyPlanResult:
+    asset_id: str
+    kept_segments: int
+    deleted_segments: int
+    artifact_path: Path
+    summary_path: Path
+
+
+class ModifyPlanOperation(Protocol):
+    def execute(self, request: ModifyPlanRequest) -> ModifyPlanResult: ...
+
+
+class ModifyPlanUseCase:
+    def execute(self, request: ModifyPlanRequest) -> ModifyPlanResult:
+        restore_ids = request.restore_segment_ids
+        delete_ids = request.delete_segment_ids
+        if not restore_ids and not delete_ids:
+            raise UserInputError("At least one Segment must be restored or deleted")
+        if len(set(restore_ids)) != len(restore_ids) or len(set(delete_ids)) != len(
+            delete_ids
+        ):
+            raise UserInputError("Segment modifications must not contain duplicates")
+        if set(restore_ids) & set(delete_ids):
+            raise UserInputError("A Segment cannot be restored and deleted together")
+        ProjectRepository(request.project_directory).read()
+        plan, segments = _read_plan_artifact(
+            request.project_directory, request.asset_id
+        )
+        known_ids = {segment.segment_id for segment in segments}
+        if (set(restore_ids) | set(delete_ids)) - known_ids:
+            raise UserInputError("Plan modification references an unknown Segment ID")
+        restore_set = set(restore_ids)
+        delete_set = set(delete_ids)
+        decisions = tuple(
+            (
+                EditDecision(
+                    decision.segment_id,
+                    EditAction.KEEP,
+                    ReasonCode.USER_REQUIRED,
+                    1.0,
+                    "Restored by user.",
+                    tuple(dict.fromkeys((*decision.labels, "user_override"))),
+                )
+                if decision.segment_id in restore_set
+                else EditDecision(
+                    decision.segment_id,
+                    EditAction.DELETE,
+                    ReasonCode.USER_REMOVED,
+                    1.0,
+                    "Deleted by user.",
+                    tuple(dict.fromkeys((*decision.labels, "user_override"))),
+                )
+                if decision.segment_id in delete_set
+                else decision
+            )
+            for decision in plan.decisions
+        )
+        revised = replace(
+            plan,
+            decisions=decisions,
+            summary=(
+                f"User revised plan: {len(restore_ids)} restored, "
+                f"{len(delete_ids)} deleted."
+            ),
+        )
+        try:
+            validate_edit_plan(revised, segments)
+        except ValueError as error:
+            raise UserInputError(f"Plan modification is invalid: {error}") from error
+        artifact_path = (
+            request.project_directory
+            / ".minicut"
+            / "plans"
+            / f"{request.asset_id}.json"
+        )
+        summary_path = artifact_path.with_suffix(".txt")
+        _write_json(
+            artifact_path,
+            {
+                "asset_id": request.asset_id,
+                "segments": [segment.to_dict() for segment in segments],
+                "plan": revised.to_dict(),
+            },
+        )
+        _write_text(
+            summary_path, _render_plan_summary(request.asset_id, revised, segments)
+        )
+        kept = sum(decision.action is EditAction.KEEP for decision in decisions)
+        return ModifyPlanResult(
+            request.asset_id,
+            kept,
+            len(decisions) - kept,
+            artifact_path,
+            summary_path,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -838,6 +952,10 @@ __all__ = [
     "InspectRequest",
     "InspectResult",
     "InspectedAsset",
+    "ModifyPlanOperation",
+    "ModifyPlanRequest",
+    "ModifyPlanResult",
+    "ModifyPlanUseCase",
     "InitProjectOperation",
     "InitProjectRequest",
     "InitProjectResult",

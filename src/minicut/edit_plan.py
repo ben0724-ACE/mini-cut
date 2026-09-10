@@ -32,6 +32,7 @@ class ReasonCode(StrEnum):
     """Machine-readable explanations for edit decisions."""
 
     USER_REQUIRED = "user_required"
+    USER_REMOVED = "user_removed"
     CONTENT = "content"
     SILENCE = "silence"
     FILLER = "filler"

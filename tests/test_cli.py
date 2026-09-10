@@ -13,6 +13,8 @@ from minicut.application import (
     InspectedAsset,
     InspectRequest,
     InspectResult,
+    ModifyPlanRequest,
+    ModifyPlanResult,
     PlanRequest,
     PlanResult,
     RenderRequest,
@@ -375,6 +377,44 @@ class EditCommandTest(unittest.TestCase):
         self.assertIn("[transcribe] running", output.getvalue())
         self.assertIn("[transcribe] reused", output.getvalue())
         self.assertIn("[render] succeeded; estimated output 900 ms", output.getvalue())
+
+
+class FakeModifyPlan:
+    def __init__(self) -> None:
+        self.requests: list[ModifyPlanRequest] = []
+
+    def execute(self, request: ModifyPlanRequest) -> ModifyPlanResult:
+        self.requests.append(request)
+        return ModifyPlanResult(
+            request.asset_id, 2, 1, Path("plan.json"), Path("plan.txt")
+        )
+
+
+class ModifyPlanCommandTest(unittest.TestCase):
+    def test_calls_one_modify_use_case_with_segment_actions(self) -> None:
+        fake = FakeModifyPlan()
+        output = StringIO()
+
+        exit_code = main(
+            [
+                "plan-edit",
+                "/projects/demo",
+                "--asset-id",
+                "asset-1",
+                "--restore",
+                "segment-2",
+                "--delete",
+                "segment-1",
+            ],
+            services=CliServices(FakeInitProject(), modify_plan=fake),
+            output_stream=output,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(fake.requests), 1)
+        self.assertEqual(fake.requests[0].restore_segment_ids, ("segment-2",))
+        self.assertEqual(fake.requests[0].delete_segment_ids, ("segment-1",))
+        self.assertIn("2 kept and 1 deleted", output.getvalue())
 
 
 if __name__ == "__main__":
