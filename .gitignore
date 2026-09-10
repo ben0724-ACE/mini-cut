@@ -29,6 +29,9 @@ venv/
 build/
 dist/
 node_modules/
+*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
 tmp/
 cache/
 artifacts/
