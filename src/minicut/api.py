@@ -19,9 +19,16 @@ from minicut.application import (
     InspectProjectUseCase,
     InspectRequest,
     InspectResult,
+    ModifyPlanOperation,
+    ModifyPlanRequest,
+    ModifyPlanUseCase,
     PlanOperation,
     PlanProjectUseCase,
     PlanRequest,
+    ReadPlanOperation,
+    ReadPlanRequest,
+    ReadPlanResult,
+    ReadPlanUseCase,
     RenderOperation,
     RenderProjectUseCase,
     RenderRequest,
@@ -84,6 +91,41 @@ class TaskResponse(BaseModel):
     error: str | None = None
 
 
+class PlanSegmentResponse(BaseModel):
+    segment_id: str
+    text: str
+    start_ms: int
+    end_ms: int
+    action: str
+    reason: str
+    confidence: float
+    explanation: str
+
+
+class PlanDetailResponse(BaseModel):
+    asset_id: str
+    revision: int
+    available_revisions: list[int]
+    summary: str
+    target_duration_ms: int
+    intensity: str
+    style: str
+    segments: list[PlanSegmentResponse]
+
+
+class ModifyPlanBody(BaseModel):
+    restore_segment_ids: list[str] = Field(default_factory=list)
+    delete_segment_ids: list[str] = Field(default_factory=list)
+    output_name: SafeFileName | None = None
+    timeout_seconds: float = Field(default=600, gt=0)
+
+
+class PlanVersionsResponse(BaseModel):
+    asset_id: str
+    current_revision: int
+    revisions: list[int]
+
+
 def _job_path(project_directory: Path, task_id: str) -> Path:
     return project_directory / ".minicut" / "jobs" / f"{task_id}.json"
 
@@ -131,6 +173,32 @@ def _task_response(payload: dict[str, object]) -> TaskResponse:
     return TaskResponse.model_validate(payload)
 
 
+def _plan_response(result: ReadPlanResult) -> PlanDetailResponse:
+    decisions = {decision.segment_id: decision for decision in result.plan.decisions}
+    return PlanDetailResponse(
+        asset_id=result.asset_id,
+        revision=result.revision,
+        available_revisions=list(result.available_revisions),
+        summary=result.plan.summary,
+        target_duration_ms=result.plan.brief.target_duration_ms,
+        intensity=result.plan.brief.intensity.value,
+        style=result.plan.brief.style,
+        segments=[
+            PlanSegmentResponse(
+                segment_id=segment.segment_id,
+                text=segment.text,
+                start_ms=segment.start_ms,
+                end_ms=segment.end_ms,
+                action=decisions[segment.segment_id].action.value,
+                reason=decisions[segment.segment_id].reason.value,
+                confidence=decisions[segment.segment_id].confidence,
+                explanation=decisions[segment.segment_id].explanation,
+            )
+            for segment in result.segments
+        ],
+    )
+
+
 def create_app(
     projects_root: Path,
     *,
@@ -139,6 +207,8 @@ def create_app(
     transcribe: TranscribeOperation | None = None,
     plan: PlanOperation | None = None,
     render: RenderOperation | None = None,
+    read_plan: ReadPlanOperation | None = None,
+    modify_plan: ModifyPlanOperation | None = None,
 ) -> FastAPI:
     """Create an API instance bound to one local projects directory."""
     root = projects_root.absolute()
@@ -147,11 +217,23 @@ def create_app(
     transcriber = transcribe or TranscribeProjectUseCase()
     planner = plan or PlanProjectUseCase()
     renderer = render or RenderProjectUseCase()
+    plan_reader = read_plan or ReadPlanUseCase()
+    plan_modifier = modify_plan or ModifyPlanUseCase()
     api = FastAPI(title="MiniCut local API", version="0.1.0")
 
     def inspect(project_id: str) -> InspectResult:
         try:
             return inspector.execute(InspectRequest(root / project_id))
+        except MiniCutError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    def read_plan_result(
+        project_id: str, asset_id: str, revision: int | None = None
+    ) -> ReadPlanResult:
+        try:
+            return plan_reader.execute(
+                ReadPlanRequest(root / project_id, asset_id, revision)
+            )
         except MiniCutError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -397,6 +479,73 @@ def create_app(
         inspect(project_id)
         return _task_response(_read_job(_job_path(root / project_id, task_id)))
 
+    @api.get(
+        "/api/projects/{project_id}/plans/{asset_id}",
+        response_model=PlanDetailResponse,
+    )
+    def get_plan(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        asset_id: str,
+    ) -> PlanDetailResponse:
+        return _plan_response(read_plan_result(project_id, asset_id))
+
+    @api.get(
+        "/api/projects/{project_id}/plans/{asset_id}/versions",
+        response_model=PlanVersionsResponse,
+    )
+    def list_plan_versions(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        asset_id: str,
+    ) -> PlanVersionsResponse:
+        result = read_plan_result(project_id, asset_id)
+        return PlanVersionsResponse(
+            asset_id=asset_id,
+            current_revision=result.revision,
+            revisions=list(result.available_revisions),
+        )
+
+    @api.get(
+        "/api/projects/{project_id}/plans/{asset_id}/versions/{revision}",
+        response_model=PlanDetailResponse,
+    )
+    def get_plan_version(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        asset_id: str,
+        revision: int,
+    ) -> PlanDetailResponse:
+        return _plan_response(read_plan_result(project_id, asset_id, revision))
+
+    @api.patch(
+        "/api/projects/{project_id}/plans/{asset_id}",
+        response_model=PlanDetailResponse,
+    )
+    def modify_current_plan(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        asset_id: str,
+        body: ModifyPlanBody,
+    ) -> PlanDetailResponse:
+        output_path = (
+            None
+            if body.output_name is None
+            else root / project_id / "exports" / body.output_name
+        )
+        if output_path is not None:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            plan_modifier.execute(
+                ModifyPlanRequest(
+                    root / project_id,
+                    asset_id,
+                    tuple(body.restore_segment_ids),
+                    tuple(body.delete_segment_ids),
+                    output_path,
+                    body.timeout_seconds,
+                )
+            )
+        except MiniCutError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return _plan_response(read_plan_result(project_id, asset_id))
+
     return api
 
 
@@ -415,6 +564,9 @@ def main() -> None:
 __all__ = [
     "ProjectCreateBody",
     "ProjectDetailResponse",
+    "PlanDetailResponse",
+    "PlanSegmentResponse",
+    "PlanVersionsResponse",
     "ProjectSummaryResponse",
     "TaskResponse",
     "app",

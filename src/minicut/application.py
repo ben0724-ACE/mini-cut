@@ -588,6 +588,12 @@ def _read_plan_artifact(
     project_directory: Path, asset_id: str
 ) -> tuple[EditPlan, tuple[SemanticSegment, ...]]:
     path = project_directory / ".minicut" / "plans" / f"{asset_id}.json"
+    return _read_plan_file(path, asset_id)
+
+
+def _read_plan_file(
+    path: Path, asset_id: str
+) -> tuple[EditPlan, tuple[SemanticSegment, ...]]:
     if not path.is_file():
         raise UserInputError("Edit plan artifact does not exist")
     try:
@@ -599,6 +605,60 @@ def _read_plan_artifact(
         return plan, tuple(SemanticSegment.from_dict(item) for item in segment_data)
     except (KeyError, OSError, TypeError, UnicodeError, ValueError) as error:
         raise UserInputError("Edit plan artifact is invalid") from error
+
+
+@dataclass(frozen=True, slots=True)
+class ReadPlanRequest:
+    project_directory: Path
+    asset_id: str
+    revision: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ReadPlanResult:
+    asset_id: str
+    revision: int
+    available_revisions: tuple[int, ...]
+    plan: EditPlan
+    segments: tuple[SemanticSegment, ...]
+
+
+class ReadPlanOperation(Protocol):
+    def execute(self, request: ReadPlanRequest) -> ReadPlanResult: ...
+
+
+class ReadPlanUseCase:
+    def execute(self, request: ReadPlanRequest) -> ReadPlanResult:
+        ProjectRepository(request.project_directory).read()
+        plans_directory = request.project_directory / ".minicut" / "plans"
+        current_path = plans_directory / f"{request.asset_id}.json"
+        current_revision = _read_plan_revision(
+            request.project_directory, request.asset_id
+        )
+        history_directory = plans_directory / f"{request.asset_id}-history"
+        available = tuple(
+            sorted(
+                int(path.stem)
+                for path in history_directory.glob("*.json")
+                if path.stem.isdigit()
+            )
+        )
+        revision = current_revision if request.revision is None else request.revision
+        if revision <= 0:
+            raise UserInputError("Plan revision must be positive")
+        if revision == current_revision:
+            path = current_path
+        else:
+            path = history_directory / f"{revision:04d}.json"
+        plan, segments = _read_plan_file(path, request.asset_id)
+        revisions = tuple(sorted(set((*available, current_revision))))
+        return ReadPlanResult(
+            request.asset_id,
+            revision,
+            revisions,
+            plan,
+            segments,
+        )
 
 
 def _read_plan_revision(project_directory: Path, asset_id: str) -> int:
@@ -1030,6 +1090,10 @@ __all__ = [
     "PlanProjectUseCase",
     "PlanRequest",
     "PlanResult",
+    "ReadPlanOperation",
+    "ReadPlanRequest",
+    "ReadPlanResult",
+    "ReadPlanUseCase",
     "RenderOperation",
     "RenderProjectUseCase",
     "RenderRequest",
