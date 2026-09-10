@@ -5,6 +5,8 @@ from tempfile import TemporaryDirectory
 from typing import cast
 
 from minicut.application import (
+    InspectProjectUseCase,
+    InspectRequest,
     PlanProjectUseCase,
     PlanRequest,
     RenderProjectUseCase,
@@ -207,6 +209,72 @@ class RenderProjectUseCaseTest(unittest.TestCase):
                 result.subtitle_path.read_text(encoding="utf-8"),
                 "1\n00:00:00,000 --> 00:00:00,400\n内容\n",
             )
+
+
+class InspectProjectUseCaseTest(unittest.TestCase):
+    def test_reports_artifacts_without_modifying_project(self) -> None:
+        with TemporaryDirectory() as directory:
+            project_directory = Path(directory)
+            asset = MediaAsset(
+                "asset-1",
+                "/media/input.mov",
+                1_000,
+                (StreamInfo(0, StreamType.AUDIO, "aac"),),
+                "fingerprint",
+            )
+            ProjectRepository(project_directory).create(
+                ProjectManifest("demo", (asset,))
+            )
+            transcript = Transcript(
+                "transcript-1",
+                TranscriptSource("asset-1", "mlx-whisper", "large-v3-turbo"),
+                "zh",
+                (Word("w1", "内容", 0, 400),),
+                (Utterance("u1", "内容", 0, 400, ("w1",)),),
+            )
+            TranscriptCacheRepository(
+                project_directory / ".minicut/transcripts/asset-1.json"
+            ).write(
+                TranscriptionCacheKey(
+                    "fingerprint", "mlx-whisper", "large-v3-turbo", "zh", None
+                ),
+                transcript,
+            )
+            PlanProjectUseCase().execute(
+                PlanRequest(
+                    project_directory,
+                    "asset-1",
+                    500,
+                    EditIntensity.BALANCED,
+                    "concise",
+                    "rule",
+                )
+            )
+            before = {
+                path.relative_to(project_directory): path.read_bytes()
+                for path in project_directory.rglob("*")
+                if path.is_file()
+            }
+
+            result = InspectProjectUseCase().execute(
+                InspectRequest(project_directory, "asset-1")
+            )
+
+            self.assertEqual(result.project_id, "demo")
+            self.assertEqual(result.asset_ids, ("asset-1",))
+            self.assertIsNotNone(result.selected_asset)
+            selected = result.selected_asset
+            assert selected is not None
+            self.assertEqual(selected.transcript_word_count, 1)
+            self.assertEqual(
+                (selected.kept_segments, selected.deleted_segments), (1, 0)
+            )
+            after = {
+                path.relative_to(project_directory): path.read_bytes()
+                for path in project_directory.rglob("*")
+                if path.is_file()
+            }
+            self.assertEqual(after, before)
 
 
 if __name__ == "__main__":

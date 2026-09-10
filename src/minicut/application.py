@@ -425,7 +425,114 @@ class RenderProjectUseCase:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class InspectRequest:
+    project_directory: Path
+    asset_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InspectedAsset:
+    asset_id: str
+    source_path: str
+    duration_ms: int
+    has_transcript: bool
+    transcript_word_count: int | None
+    has_plan: bool
+    kept_segments: int | None
+    deleted_segments: int | None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "asset_id": self.asset_id,
+            "source_path": self.source_path,
+            "duration_ms": self.duration_ms,
+            "has_transcript": self.has_transcript,
+            "transcript_word_count": self.transcript_word_count,
+            "has_plan": self.has_plan,
+            "kept_segments": self.kept_segments,
+            "deleted_segments": self.deleted_segments,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class InspectResult:
+    project_id: str
+    asset_ids: tuple[str, ...]
+    selected_asset: InspectedAsset | None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "project_id": self.project_id,
+            "asset_count": len(self.asset_ids),
+            "asset_ids": list(self.asset_ids),
+            "selected_asset": (
+                None if self.selected_asset is None else self.selected_asset.to_dict()
+            ),
+        }
+
+
+class InspectOperation(Protocol):
+    def execute(self, request: InspectRequest) -> InspectResult: ...
+
+
+class InspectProjectUseCase:
+    def execute(self, request: InspectRequest) -> InspectResult:
+        manifest = ProjectRepository(request.project_directory).read()
+        asset_ids = tuple(asset.asset_id for asset in manifest.assets)
+        if request.asset_id is None:
+            return InspectResult(manifest.project_id, asset_ids, None)
+        assets = tuple(
+            asset for asset in manifest.assets if asset.asset_id == request.asset_id
+        )
+        if len(assets) != 1:
+            raise UserInputError("Project asset does not exist")
+        asset = assets[0]
+        transcript_path = (
+            request.project_directory
+            / ".minicut"
+            / "transcripts"
+            / f"{asset.asset_id}.json"
+        )
+        transcript = (
+            _read_cached_transcript(request.project_directory, asset.asset_id)
+            if transcript_path.is_file()
+            else None
+        )
+        plan_path = (
+            request.project_directory / ".minicut" / "plans" / f"{asset.asset_id}.json"
+        )
+        plan = (
+            _read_plan_artifact(request.project_directory, asset.asset_id)[0]
+            if plan_path.is_file()
+            else None
+        )
+        kept_segments = None
+        deleted_segments = None
+        if plan is not None:
+            kept_segments = sum(
+                decision.action.value == "keep" for decision in plan.decisions
+            )
+            deleted_segments = len(plan.decisions) - kept_segments
+        selected = InspectedAsset(
+            asset.asset_id,
+            asset.source_path,
+            asset.duration_ms,
+            transcript is not None,
+            None if transcript is None else len(transcript.words),
+            plan is not None,
+            kept_segments,
+            deleted_segments,
+        )
+        return InspectResult(manifest.project_id, asset_ids, selected)
+
+
 __all__ = [
+    "InspectOperation",
+    "InspectProjectUseCase",
+    "InspectRequest",
+    "InspectResult",
+    "InspectedAsset",
     "InitProjectOperation",
     "InitProjectRequest",
     "InitProjectResult",

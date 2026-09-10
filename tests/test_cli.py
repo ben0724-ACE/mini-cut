@@ -7,6 +7,9 @@ from tempfile import TemporaryDirectory
 from minicut.application import (
     InitProjectRequest,
     InitProjectResult,
+    InspectedAsset,
+    InspectRequest,
+    InspectResult,
     PlanRequest,
     PlanResult,
     RenderRequest,
@@ -272,6 +275,53 @@ class RenderCommandTest(unittest.TestCase):
             )
         self.assertEqual(raised.exception.code, 2)
         self.assertEqual(fake.requests, [])
+
+
+class FakeInspect:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.requests: list[InspectRequest] = []
+
+    def execute(self, request: InspectRequest) -> InspectResult:
+        self.requests.append(request)
+        if self.fail:
+            raise UserInputError("Project asset does not exist")
+        return InspectResult(
+            "demo",
+            ("asset-1",),
+            InspectedAsset("asset-1", "/media/input.mov", 1_000, True, 5, True, 3, 1),
+        )
+
+
+class InspectCommandTest(unittest.TestCase):
+    def test_calls_one_inspect_use_case_and_prints_json(self) -> None:
+        fake = FakeInspect()
+        output = StringIO()
+
+        exit_code = main(
+            ["inspect", "/projects/demo", "--asset-id", "asset-1"],
+            services=CliServices(FakeInitProject(), inspect=fake),
+            output_stream=output,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(fake.requests), 1)
+        self.assertEqual(fake.requests[0].asset_id, "asset-1")
+        self.assertIn('"transcript_word_count": 5', output.getvalue())
+
+    def test_domain_error_returns_one_after_one_service_call(self) -> None:
+        fake = FakeInspect(fail=True)
+        errors = StringIO()
+
+        exit_code = main(
+            ["inspect", "/projects/demo", "--asset-id", "missing"],
+            services=CliServices(FakeInitProject(), inspect=fake),
+            error_stream=errors,
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(len(fake.requests), 1)
+        self.assertEqual(errors.getvalue(), "error: Project asset does not exist\n")
 
 
 if __name__ == "__main__":

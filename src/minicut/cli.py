@@ -1,6 +1,7 @@
 """Command-line entry point for MiniCut."""
 
 import argparse
+import json
 import sys
 import traceback
 from collections.abc import Callable, Sequence
@@ -12,6 +13,9 @@ from minicut.application import (
     InitProjectOperation,
     InitProjectRequest,
     InitProjectUseCase,
+    InspectOperation,
+    InspectProjectUseCase,
+    InspectRequest,
     PlanOperation,
     PlanProjectUseCase,
     PlanRequest,
@@ -41,6 +45,7 @@ class CliServices:
     transcribe: TranscribeOperation | None = None
     plan: PlanOperation | None = None
     render: RenderOperation | None = None
+    inspect: InspectOperation | None = None
 
 
 def _default_services() -> CliServices:
@@ -49,6 +54,7 @@ def _default_services() -> CliServices:
         transcribe=TranscribeProjectUseCase(),
         plan=PlanProjectUseCase(),
         render=RenderProjectUseCase(),
+        inspect=InspectProjectUseCase(),
     )
 
 
@@ -95,6 +101,9 @@ def main(
     render_parser.add_argument("--asset-id", required=True)
     render_parser.add_argument("--output", required=True, type=Path)
     render_parser.add_argument("--timeout", type=_positive_int, default=600)
+    inspect_parser = commands.add_parser("inspect", help="Inspect project artifacts.")
+    inspect_parser.add_argument("project_directory", type=Path)
+    inspect_parser.add_argument("--asset-id")
     parsed = parser.parse_args(argv)
     if parsed.command is None:
         return 0
@@ -110,6 +119,17 @@ def main(
             )
             result = active_services.init_project.execute(request)
             print(f"Initialized project {result.project_id}.", file=stdout)
+            return 0
+        if parsed.command == "inspect":
+            if active_services.inspect is None:
+                raise AssertionError("Inspect service is not configured")
+            result = active_services.inspect.execute(
+                InspectRequest(
+                    cast(Path, parsed.project_directory),
+                    cast(str | None, parsed.asset_id),
+                )
+            )
+            print(json.dumps(result.to_dict(), ensure_ascii=False), file=stdout)
             return 0
         if parsed.command == "transcribe":
             if active_services.transcribe is None:
