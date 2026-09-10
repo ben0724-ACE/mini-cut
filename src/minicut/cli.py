@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import TextIO, cast
 
 from minicut.application import (
+    EditOperation,
+    EditProjectUseCase,
+    EditRequest,
     InitProjectOperation,
     InitProjectRequest,
     InitProjectUseCase,
@@ -46,6 +49,7 @@ class CliServices:
     plan: PlanOperation | None = None
     render: RenderOperation | None = None
     inspect: InspectOperation | None = None
+    edit: EditOperation | None = None
 
 
 def _default_services() -> CliServices:
@@ -55,6 +59,7 @@ def _default_services() -> CliServices:
         plan=PlanProjectUseCase(),
         render=RenderProjectUseCase(),
         inspect=InspectProjectUseCase(),
+        edit=EditProjectUseCase(),
     )
 
 
@@ -104,6 +109,22 @@ def main(
     inspect_parser = commands.add_parser("inspect", help="Inspect project artifacts.")
     inspect_parser.add_argument("project_directory", type=Path)
     inspect_parser.add_argument("--asset-id")
+    edit_parser = commands.add_parser("edit", help="Run the complete edit workflow.")
+    edit_parser.add_argument("project_directory", type=Path)
+    edit_parser.add_argument("source_path", type=Path)
+    edit_parser.add_argument("--provider", choices=("mlx", "whisper"), required=True)
+    edit_parser.add_argument("--model", required=True)
+    edit_parser.add_argument("--language", default="zh")
+    edit_parser.add_argument("--target-ms", required=True, type=_positive_int)
+    edit_parser.add_argument(
+        "--intensity",
+        choices=tuple(intensity.value for intensity in EditIntensity),
+        default=EditIntensity.BALANCED.value,
+    )
+    edit_parser.add_argument("--style", default="concise")
+    edit_parser.add_argument("--planner", choices=("rule", "deepseek"), default="rule")
+    edit_parser.add_argument("--output", required=True, type=Path)
+    edit_parser.add_argument("--timeout", type=_positive_int, default=600)
     parsed = parser.parse_args(argv)
     if parsed.command is None:
         return 0
@@ -119,6 +140,28 @@ def main(
             )
             result = active_services.init_project.execute(request)
             print(f"Initialized project {result.project_id}.", file=stdout)
+            return 0
+        if parsed.command == "edit":
+            if active_services.edit is None:
+                raise AssertionError("Edit service is not configured")
+            result = active_services.edit.execute(
+                EditRequest(
+                    cast(Path, parsed.project_directory),
+                    cast(Path, parsed.source_path),
+                    cast(str, parsed.provider),
+                    cast(str, parsed.model),
+                    cast(str, parsed.language),
+                    cast(int, parsed.target_ms),
+                    EditIntensity(cast(str, parsed.intensity)),
+                    cast(str, parsed.style),
+                    cast(str, parsed.planner),
+                    cast(Path, parsed.output),
+                    float(cast(int, parsed.timeout)),
+                )
+            )
+            print(
+                f"Edited asset {result.asset_id} to {result.output_path}.", file=stdout
+            )
             return 0
         if parsed.command == "inspect":
             if active_services.inspect is None:

@@ -96,6 +96,7 @@ class TranscribeResult:
     transcript_id: str
     asset_id: str
     word_count: int
+    reused: bool = False
 
 
 class TranscribeOperation(Protocol):
@@ -161,11 +162,12 @@ class TranscribeProjectUseCase:
 
         key = _transcription_key(asset, request)
         transcript = cache.read(key)
+        reused = transcript is not None
         if transcript is None:
             transcript = self._transcriber(asset, request)
             cache.write(key, transcript)
         return TranscribeResult(
-            transcript.transcript_id, asset.asset_id, len(transcript.words)
+            transcript.transcript_id, asset.asset_id, len(transcript.words), reused
         )
 
 
@@ -185,6 +187,7 @@ class PlanResult:
     kept_segments: int
     deleted_segments: int
     artifact_path: Path
+    reused: bool = False
 
 
 class PlanOperation(Protocol):
@@ -275,6 +278,37 @@ class PlanProjectUseCase:
         if not request.asset_id.strip() or not request.style.strip():
             raise UserInputError("Asset ID and style must not be blank")
         ProjectRepository(request.project_directory).read()
+        artifact_path = (
+            request.project_directory
+            / ".minicut"
+            / "plans"
+            / f"{request.asset_id}.json"
+        )
+        if artifact_path.is_file():
+            existing_plan, _ = _read_plan_artifact(
+                request.project_directory, request.asset_id
+            )
+            expected_planner = (
+                "llm" if request.planner == "deepseek" else request.planner
+            )
+            brief = existing_plan.brief
+            if (
+                brief.target_duration_ms == request.target_duration_ms
+                and brief.intensity == request.intensity
+                and brief.style == request.style
+                and existing_plan.provenance.planner.value == expected_planner
+            ):
+                kept = sum(
+                    decision.action.value == "keep"
+                    for decision in existing_plan.decisions
+                )
+                return PlanResult(
+                    request.asset_id,
+                    kept,
+                    len(existing_plan.decisions) - kept,
+                    artifact_path,
+                    True,
+                )
         transcript = _read_cached_transcript(
             request.project_directory, request.asset_id
         )
@@ -290,12 +324,6 @@ class PlanProjectUseCase:
             language=transcript.language,
         )
         plan = self._planner(request, brief, segments)
-        artifact_path = (
-            request.project_directory
-            / ".minicut"
-            / "plans"
-            / f"{request.asset_id}.json"
-        )
         _write_json(
             artifact_path,
             {
@@ -326,6 +354,7 @@ class RenderResult:
     output_path: Path
     subtitle_path: Path
     duration_ms: int
+    reused: bool = False
 
 
 class RenderOperation(Protocol):
@@ -386,6 +415,32 @@ class RenderProjectUseCase:
             request.project_directory, request.asset_id
         )
         timeline = compile_timeline(plan, segments, request.asset_id)
+        subtitle_path = request.output_path.with_suffix(".srt")
+        render_record_path = (
+            request.project_directory
+            / ".minicut"
+            / "renders"
+            / f"{request.asset_id}.json"
+        )
+        plan_path = (
+            request.project_directory
+            / ".minicut"
+            / "plans"
+            / f"{request.asset_id}.json"
+        )
+        if _can_reuse_render(
+            render_record_path,
+            plan_path,
+            request.output_path,
+            subtitle_path,
+            timeline.estimated_duration_ms,
+        ):
+            return RenderResult(
+                request.output_path.absolute(),
+                subtitle_path.absolute(),
+                timeline.estimated_duration_ms,
+                True,
+            )
         stream_types = {stream.stream_type for stream in asset.streams}
         requirements = TimelineTrackRequirements(
             require_audio=StreamType.AUDIO in stream_types,
@@ -410,7 +465,6 @@ class RenderProjectUseCase:
         )
         mapped_words = map_retained_words(timeline, segments, transcript.words)
         cues = build_readable_cues(mapped_words, timeline.estimated_duration_ms)
-        subtitle_path = request.output_path.with_suffix(".srt")
         try:
             _write_text(
                 subtitle_path,
@@ -418,10 +472,132 @@ class RenderProjectUseCase:
             )
         except OSError as error:
             raise ProcessingError("Subtitle output could not be written") from error
+        _write_json(
+            render_record_path,
+            {
+                "asset_id": request.asset_id,
+                "output_path": str(request.output_path.absolute()),
+                "subtitle_path": str(subtitle_path.absolute()),
+                "duration_ms": timeline.estimated_duration_ms,
+            },
+        )
         return RenderResult(
             request.output_path.absolute(),
             subtitle_path.absolute(),
             timeline.estimated_duration_ms,
+        )
+
+
+def _can_reuse_render(
+    record_path: Path,
+    plan_path: Path,
+    output_path: Path,
+    subtitle_path: Path,
+    duration_ms: int,
+) -> bool:
+    if (
+        not record_path.is_file()
+        or not output_path.is_file()
+        or not subtitle_path.is_file()
+    ):
+        return False
+    try:
+        record = cast(
+            dict[str, object], json.loads(record_path.read_text(encoding="utf-8"))
+        )
+        return (
+            record["output_path"] == str(output_path.absolute())
+            and record["subtitle_path"] == str(subtitle_path.absolute())
+            and record["duration_ms"] == duration_ms
+            and record_path.stat().st_mtime_ns >= plan_path.stat().st_mtime_ns
+        )
+    except (KeyError, OSError, TypeError, UnicodeError, ValueError):
+        return False
+
+
+@dataclass(frozen=True, slots=True)
+class EditRequest:
+    project_directory: Path
+    source_path: Path
+    provider: str
+    model: str
+    language: str
+    target_duration_ms: int
+    intensity: EditIntensity
+    style: str
+    planner: str
+    output_path: Path
+    timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class EditResult:
+    asset_id: str
+    output_path: Path
+    subtitle_path: Path
+    duration_ms: int
+    reused_stages: tuple[str, ...]
+
+
+class EditOperation(Protocol):
+    def execute(self, request: EditRequest) -> EditResult: ...
+
+
+class EditProjectUseCase:
+    def __init__(
+        self,
+        *,
+        transcribe: TranscribeOperation | None = None,
+        plan: PlanOperation | None = None,
+        render: RenderOperation | None = None,
+    ) -> None:
+        self._transcribe = transcribe or TranscribeProjectUseCase()
+        self._plan = plan or PlanProjectUseCase()
+        self._render = render or RenderProjectUseCase()
+
+    def execute(self, request: EditRequest) -> EditResult:
+        transcribed = self._transcribe.execute(
+            TranscribeRequest(
+                request.project_directory,
+                request.source_path,
+                request.provider,
+                request.model,
+                request.language,
+            )
+        )
+        planned = self._plan.execute(
+            PlanRequest(
+                request.project_directory,
+                transcribed.asset_id,
+                request.target_duration_ms,
+                request.intensity,
+                request.style,
+                request.planner,
+            )
+        )
+        rendered = self._render.execute(
+            RenderRequest(
+                request.project_directory,
+                transcribed.asset_id,
+                request.output_path,
+                request.timeout_seconds,
+            )
+        )
+        reused = tuple(
+            stage
+            for stage, was_reused in (
+                ("transcribe", transcribed.reused),
+                ("plan", planned.reused),
+                ("render", rendered.reused),
+            )
+            if was_reused
+        )
+        return EditResult(
+            transcribed.asset_id,
+            rendered.output_path,
+            rendered.subtitle_path,
+            rendered.duration_ms,
+            reused,
         )
 
 
@@ -528,6 +704,10 @@ class InspectProjectUseCase:
 
 
 __all__ = [
+    "EditOperation",
+    "EditProjectUseCase",
+    "EditRequest",
+    "EditResult",
     "InspectOperation",
     "InspectProjectUseCase",
     "InspectRequest",

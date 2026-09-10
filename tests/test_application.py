@@ -5,6 +5,8 @@ from tempfile import TemporaryDirectory
 from typing import cast
 
 from minicut.application import (
+    EditProjectUseCase,
+    EditRequest,
     InspectProjectUseCase,
     InspectRequest,
     PlanProjectUseCase,
@@ -14,9 +16,11 @@ from minicut.application import (
     TranscribeProjectUseCase,
     TranscribeRequest,
 )
-from minicut.edit_plan import EditIntensity
+from minicut.edit_plan import EditBrief, EditIntensity, EditPlan
 from minicut.media import MediaAsset, StreamInfo, StreamType
 from minicut.project import ProjectManifest, ProjectRepository
+from minicut.rule_planner import RulePlanner
+from minicut.semantic_segment import SemanticSegment
 from minicut.transcript import Transcript, TranscriptSource, Utterance, Word
 from minicut.transcription_cache import (
     TranscriptCacheRepository,
@@ -74,7 +78,9 @@ class TranscribeProjectUseCaseTest(unittest.TestCase):
             first = use_case.execute(request)
             second = use_case.execute(request)
 
-            self.assertEqual(first, second)
+            self.assertFalse(first.reused)
+            self.assertTrue(second.reused)
+            self.assertEqual(first.transcript_id, second.transcript_id)
             self.assertEqual(first.word_count, 1)
             self.assertEqual(transcription_calls, 1)
 
@@ -275,6 +281,105 @@ class InspectProjectUseCaseTest(unittest.TestCase):
                 if path.is_file()
             }
             self.assertEqual(after, before)
+
+
+class EditProjectUseCaseTest(unittest.TestCase):
+    def test_runs_all_stages_then_reuses_their_artifacts(self) -> None:
+        with TemporaryDirectory() as directory:
+            project_directory = Path(directory)
+            ProjectRepository(project_directory).create(ProjectManifest("demo"))
+            asset = MediaAsset(
+                "asset-1",
+                "/media/input.mov",
+                1_000,
+                (
+                    StreamInfo(0, StreamType.VIDEO, "h264"),
+                    StreamInfo(1, StreamType.AUDIO, "aac"),
+                ),
+                "fingerprint",
+            )
+            transcript = Transcript(
+                "transcript-1",
+                TranscriptSource("asset-1", "mlx-whisper", "large-v3-turbo"),
+                "zh",
+                (Word("w1", "内容", 0, 400),),
+                (Utterance("u1", "内容", 0, 400, ("w1",)),),
+            )
+            transcription_calls = 0
+            planning_calls = 0
+
+            def importer(
+                repository: ProjectRepository, source_path: str | Path
+            ) -> MediaAsset:
+                del source_path
+                return repository.add_asset(asset)
+
+            def transcriber(
+                asset: MediaAsset, request: TranscribeRequest
+            ) -> Transcript:
+                nonlocal transcription_calls
+                del asset, request
+                transcription_calls += 1
+                return transcript
+
+            def planner(
+                request: PlanRequest,
+                brief: EditBrief,
+                segments: tuple[SemanticSegment, ...],
+            ) -> EditPlan:
+                nonlocal planning_calls
+                del request
+                planning_calls += 1
+                return RulePlanner().plan(brief, segments)
+
+            renderer = FakeTimelineRenderer()
+            output_path = project_directory / "exports/result.mp4"
+            output_path.parent.mkdir()
+
+            class PublishingRenderer(FakeTimelineRenderer):
+                def render_to_path(
+                    self,
+                    command: tuple[str, ...],
+                    output_path: str | Path,
+                    *,
+                    timeout_seconds: float,
+                ) -> object:
+                    super().render_to_path(
+                        command, output_path, timeout_seconds=timeout_seconds
+                    )
+                    Path(output_path).write_bytes(b"video")
+                    return object()
+
+            renderer = PublishingRenderer()
+            use_case = EditProjectUseCase(
+                transcribe=TranscribeProjectUseCase(
+                    importer=importer, transcriber=transcriber
+                ),
+                plan=PlanProjectUseCase(planner=planner),
+                render=RenderProjectUseCase(renderer=renderer),
+            )
+            request = EditRequest(
+                project_directory,
+                Path("/media/input.mov"),
+                "mlx",
+                "large-v3-turbo",
+                "zh",
+                500,
+                EditIntensity.BALANCED,
+                "concise",
+                "rule",
+                output_path,
+                30,
+            )
+
+            first = use_case.execute(request)
+            second = use_case.execute(request)
+
+            self.assertEqual(first.reused_stages, ())
+            self.assertEqual(second.reused_stages, ("transcribe", "plan", "render"))
+            self.assertEqual(transcription_calls, 1)
+            self.assertEqual(planning_calls, 1)
+            self.assertEqual(len(renderer.calls), 1)
 
 
 if __name__ == "__main__":

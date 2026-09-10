@@ -5,6 +5,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from minicut.application import (
+    EditRequest,
+    EditResult,
     InitProjectRequest,
     InitProjectResult,
     InspectedAsset,
@@ -322,6 +324,50 @@ class InspectCommandTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertEqual(len(fake.requests), 1)
         self.assertEqual(errors.getvalue(), "error: Project asset does not exist\n")
+
+
+class FakeEdit:
+    def __init__(self) -> None:
+        self.requests: list[EditRequest] = []
+
+    def execute(self, request: EditRequest) -> EditResult:
+        self.requests.append(request)
+        return EditResult(
+            "asset-1",
+            request.output_path,
+            request.output_path.with_suffix(".srt"),
+            900,
+            (),
+        )
+
+
+class EditCommandTest(unittest.TestCase):
+    def test_calls_one_edit_use_case(self) -> None:
+        fake = FakeEdit()
+        output = StringIO()
+
+        exit_code = main(
+            [
+                "edit",
+                "/projects/demo",
+                "/media/input.mov",
+                "--provider",
+                "mlx",
+                "--model",
+                "large-v3-turbo",
+                "--target-ms",
+                "60000",
+                "--output",
+                "/exports/result.mp4",
+            ],
+            services=CliServices(FakeInitProject(), edit=fake),
+            output_stream=output,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(fake.requests), 1)
+        self.assertEqual(fake.requests[0].target_duration_ms, 60_000)
+        self.assertIn("Edited asset asset-1", output.getvalue())
 
 
 if __name__ == "__main__":
