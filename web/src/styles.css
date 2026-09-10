@@ -15,6 +15,10 @@ h1 { font-size: clamp(2rem, 6vw, 4rem); margin: 0; }
 .plan-counts dt { color: #746e63; font-size: 0.8rem; }
 .plan-counts dd { margin: 4px 0 0; font-size: 1.5rem; }
 .segments { display: grid; gap: 12px; padding: 0; list-style: none; }
+.duration-summary { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; padding: 14px 18px; border-radius: 12px; background: #25221d; color: #f8f3ea; }
+.duration-summary strong { font-size: 1.5rem; }
+.duration-summary .increase { color: #9fddb9; }
+.duration-summary .decrease { color: #f0aaa2; }
 .player { display: block; width: 100%; max-height: 500px; margin-bottom: 10px; border-radius: 14px; background: #111; }
 .keyboard-help { color: #746e63; font-size: 0.82rem; }
 .segment { padding: 20px; border-radius: 14px; background: #fffdf9; border-left: 5px solid #198754; }

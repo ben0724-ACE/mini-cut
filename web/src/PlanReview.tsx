@@ -13,6 +13,18 @@ interface PlanReviewProps {
 const formatTime = (milliseconds: number) =>
   new Date(milliseconds).toISOString().slice(14, 19);
 
+const estimatedDuration = (plan: PlanDetail) =>
+  plan.segments
+    .filter((segment) => segment.action === "keep")
+    .reduce((total, segment) => total + segment.end_ms - segment.start_ms, 0);
+
+const formatDuration = (milliseconds: number) => {
+  const seconds = Math.abs(milliseconds) / 1000;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = (seconds % 60).toFixed(1).padStart(4, "0");
+  return `${minutes.toString().padStart(2, "0")}:${remainder}`;
+};
+
 interface UndoEntry {
   segmentId: string;
   previousAction: "keep" | "delete";
@@ -20,12 +32,15 @@ interface UndoEntry {
 
 export function PlanReview({ initialPlan, saveDecision, mediaUrl }: PlanReviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const initialDuration = useRef(estimatedDuration(initialPlan));
   const [plan, setPlan] = useState(initialPlan);
   const [undoStack, setUndoStack] = useState<UndoEntry[]>([]);
   const [pendingSegment, setPendingSegment] = useState<string | null>(null);
   const [error, setError] = useState("");
   const kept = plan.segments.filter((segment) => segment.action === "keep").length;
   const deleted = plan.segments.length - kept;
+  const duration = estimatedDuration(plan);
+  const durationChange = duration - initialDuration.current;
 
   const changeDecision = async (
     segmentId: string,
@@ -88,6 +103,15 @@ export function PlanReview({ initialPlan, saveDecision, mediaUrl }: PlanReviewPr
           <div><dt>删除</dt><dd>{deleted}</dd></div>
         </dl>
       </header>
+      <div className="duration-summary" aria-live="polite">
+        <span>预计输出时长</span>
+        <strong>{formatDuration(duration)}</strong>
+        <span className={durationChange > 0 ? "increase" : durationChange < 0 ? "decrease" : ""}>
+          {durationChange === 0
+            ? "暂无变化"
+            : `${durationChange > 0 ? "+" : "−"}${formatDuration(durationChange)}`}
+        </span>
+      </div>
       <video ref={videoRef} className="player" controls preload="metadata" src={mediaUrl}>
         浏览器无法播放这个视频。
       </video>

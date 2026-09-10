@@ -78,6 +78,16 @@ MINICUT_PROJECTS_ROOT=/path/to/projects uv run minicut-api
 
 Interactive API documentation is available at `http://127.0.0.1:8000/docs`. The API supports project management, idempotent background transcription/planning/rendering tasks, plan review and revision, and byte-range streaming for registered source media and project exports. It never accepts an arbitrary source filesystem path for media playback.
 
+Start the local review interface in a second terminal:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5173/?project=<project-id>&asset=<asset-id>`. The review screen shows every keep/delete decision and its reason, seeks the source video from transcript segments, persists restore/delete changes, supports undo, and updates the estimated output duration. With a segment focused, use `K` to keep, `D` to delete, and Space to play or pause.
+
 ## Development
 
 Create or update the local environment, then run the complete quality gate:
@@ -85,6 +95,7 @@ Create or update the local environment, then run the complete quality gate:
 ```bash
 uv sync
 uv run python tools/check.py
+cd web && npm test && npm run build
 ```
 
 Real MLX inference is opt-in so the default test suite never downloads or loads a model. In an environment that provides `mlx-whisper`, point the integration test at a local media file:
