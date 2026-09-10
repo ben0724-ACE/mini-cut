@@ -140,6 +140,14 @@ class PlanProjectUseCaseTest(unittest.TestCase):
             self.assertEqual(payload["asset_id"], "asset-1")
             self.assertEqual(len(cast(list[object], payload["segments"])), 2)
             self.assertIsInstance(payload["plan"], dict)
+            self.assertIsNotNone(result.summary_path)
+            assert result.summary_path is not None
+            summary = result.summary_path.read_text(encoding="utf-8")
+            self.assertIn("Decisions: 1 keep, 1 delete", summary)
+            self.assertIn("[KEEP]", summary)
+            self.assertIn("Text: 内容", summary)
+            self.assertIn("[DELETE]", summary)
+            self.assertIn("Text: 嗯", summary)
 
 
 class FakeTimelineRenderer:

@@ -251,6 +251,8 @@ def main(
                 f"{result.deleted_segments} deleted segments.",
                 file=stdout,
             )
+            if result.summary_path is not None:
+                print(f"Plan summary: {result.summary_path}", file=stdout)
             return 0
         raise AssertionError(f"Unhandled CLI command: {parsed.command}")
 

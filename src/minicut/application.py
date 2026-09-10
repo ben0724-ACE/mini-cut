@@ -190,6 +190,7 @@ class PlanResult:
     deleted_segments: int
     artifact_path: Path
     reused: bool = False
+    summary_path: Path | None = None
 
 
 class PlanOperation(Protocol):
@@ -286,8 +287,11 @@ class PlanProjectUseCase:
             / "plans"
             / f"{request.asset_id}.json"
         )
+        summary_path = (
+            request.project_directory / ".minicut" / "plans" / f"{request.asset_id}.txt"
+        )
         if artifact_path.is_file():
-            existing_plan, _ = _read_plan_artifact(
+            existing_plan, existing_segments = _read_plan_artifact(
                 request.project_directory, request.asset_id
             )
             expected_planner = (
@@ -304,12 +308,20 @@ class PlanProjectUseCase:
                     decision.action.value == "keep"
                     for decision in existing_plan.decisions
                 )
+                if not summary_path.is_file():
+                    _write_text(
+                        summary_path,
+                        _render_plan_summary(
+                            request.asset_id, existing_plan, existing_segments
+                        ),
+                    )
                 return PlanResult(
                     request.asset_id,
                     kept,
                     len(existing_plan.decisions) - kept,
                     artifact_path,
                     True,
+                    summary_path,
                 )
         transcript = _read_cached_transcript(
             request.project_directory, request.asset_id
@@ -334,13 +346,47 @@ class PlanProjectUseCase:
                 "plan": plan.to_dict(),
             },
         )
+        _write_text(
+            summary_path, _render_plan_summary(request.asset_id, plan, segments)
+        )
         kept = sum(decision.action.value == "keep" for decision in plan.decisions)
         return PlanResult(
             request.asset_id,
             kept,
             len(plan.decisions) - kept,
             artifact_path,
+            False,
+            summary_path,
         )
+
+
+def _render_plan_summary(
+    asset_id: str,
+    plan: EditPlan,
+    segments: tuple[SemanticSegment, ...],
+) -> str:
+    segments_by_id = {segment.segment_id: segment for segment in segments}
+    kept = sum(decision.action.value == "keep" for decision in plan.decisions)
+    lines = [
+        f"MiniCut plan for asset {asset_id}",
+        f"Summary: {plan.summary}",
+        f"Target: {plan.brief.target_duration_ms} ms",
+        f"Style: {plan.brief.style}",
+        f"Decisions: {kept} keep, {len(plan.decisions) - kept} delete",
+        "",
+    ]
+    for decision in plan.decisions:
+        segment = segments_by_id[decision.segment_id]
+        lines.extend(
+            (
+                f"[{decision.action.value.upper()}] {decision.segment_id} "
+                f"({segment.start_ms}-{segment.end_ms} ms)",
+                f"Text: {segment.text}",
+                f"Reason: {decision.reason.value} — {decision.explanation}",
+                "",
+            )
+        )
+    return "\n".join(lines).rstrip() + "\n"
 
 
 @dataclass(frozen=True, slots=True)
