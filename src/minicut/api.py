@@ -1,8 +1,9 @@
 """Local HTTP API that adapts web schemas to MiniCut application services."""
 
 import json
+import mimetypes
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Annotated, cast
@@ -10,6 +11,7 @@ from typing import Annotated, cast
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
+from starlette.responses import StreamingResponse
 
 from minicut.application import (
     InitProjectOperation,
@@ -38,6 +40,7 @@ from minicut.application import (
 )
 from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError
+from minicut.project import ProjectRepository
 
 ProjectId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
 SafeFileName = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
@@ -196,6 +199,74 @@ def _plan_response(result: ReadPlanResult) -> PlanDetailResponse:
             )
             for segment in result.segments
         ],
+    )
+
+
+def _resolve_project_resource(project_directory: Path, relative_path: str) -> Path:
+    """Resolve an export while preventing traversal and escaping symlinks."""
+    exports_directory = (project_directory / "exports").resolve()
+    candidate = (exports_directory / relative_path).resolve()
+    if not candidate.is_relative_to(exports_directory):
+        raise HTTPException(status_code=400, detail="Media path is not allowed")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Media does not exist")
+    return candidate
+
+
+def _parse_byte_range(value: str, size: int) -> tuple[int, int]:
+    """Parse one HTTP byte range, including suffix ranges."""
+    if not value.startswith("bytes=") or "," in value:
+        raise ValueError("unsupported range")
+    bounds = value.removeprefix("bytes=").split("-", maxsplit=1)
+    if len(bounds) != 2 or (not bounds[0] and not bounds[1]):
+        raise ValueError("invalid range")
+    if not bounds[0]:
+        length = int(bounds[1])
+        if length <= 0:
+            raise ValueError("invalid suffix")
+        start = max(size - length, 0)
+        return start, size - 1
+    start = int(bounds[0])
+    end = size - 1 if not bounds[1] else int(bounds[1])
+    if start < 0 or start >= size or end < start:
+        raise ValueError("unsatisfiable range")
+    return start, min(end, size - 1)
+
+
+def _stream_file(path: Path, range_header: str | None) -> StreamingResponse:
+    size = path.stat().st_size
+    start, end, response_status = 0, size - 1, status.HTTP_200_OK
+    if range_header is not None:
+        try:
+            start, end = _parse_byte_range(range_header, size)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+                detail="Requested range is not satisfiable",
+                headers={"Content-Range": f"bytes */{size}"},
+            ) from None
+        response_status = status.HTTP_206_PARTIAL_CONTENT
+
+    def content() -> Iterator[bytes]:
+        remaining = end - start + 1
+        with path.open("rb") as source:
+            source.seek(start)
+            while remaining:
+                chunk = source.read(min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(end - start + 1),
+    }
+    if response_status == status.HTTP_206_PARTIAL_CONTENT:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return StreamingResponse(
+        content(), status_code=response_status, headers=headers, media_type=media_type
     )
 
 
@@ -545,6 +616,40 @@ def create_app(
         except MiniCutError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return _plan_response(read_plan_result(project_id, asset_id))
+
+    range_header = Header(alias="Range")
+
+    @api.get("/api/projects/{project_id}/media/source/{asset_id}")
+    def get_source_media(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        asset_id: str,
+        requested_range: Annotated[str | None, range_header] = None,
+    ) -> StreamingResponse:
+        project_directory = root / project_id
+        inspect(project_id)
+        manifest = ProjectRepository(project_directory).read()
+        asset = next(
+            (item for item in manifest.assets if item.asset_id == asset_id), None
+        )
+        if asset is None:
+            raise HTTPException(status_code=404, detail="Media does not exist")
+        source_path = Path(asset.source_path).resolve()
+        if not source_path.is_file():
+            raise HTTPException(status_code=404, detail="Media does not exist")
+        return _stream_file(source_path, requested_range)
+
+    @api.get("/api/projects/{project_id}/media/exports/{resource_path:path}")
+    def get_exported_media(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        resource_path: str,
+        requested_range: Annotated[str | None, range_header] = None,
+    ) -> StreamingResponse:
+        project_directory = root / project_id
+        inspect(project_id)
+        return _stream_file(
+            _resolve_project_resource(project_directory, resource_path),
+            requested_range,
+        )
 
     return api
 

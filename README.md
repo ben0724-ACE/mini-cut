@@ -68,6 +68,16 @@ minicut plan-edit ./my-project --asset-id <asset-id> \
 
 Plan revisions are retained under `.minicut/plans/<asset-id>-history/`. A valid change increments the plan revision and forces timeline recompilation and rendering for the requested output.
 
+## Local API
+
+Point the API at a directory whose immediate children are MiniCut projects, then start the local-only server:
+
+```bash
+MINICUT_PROJECTS_ROOT=/path/to/projects uv run minicut-api
+```
+
+Interactive API documentation is available at `http://127.0.0.1:8000/docs`. The API supports project management, idempotent background transcription/planning/rendering tasks, plan review and revision, and byte-range streaming for registered source media and project exports. It never accepts an arbitrary source filesystem path for media playback.
+
 ## Development
 
 Create or update the local environment, then run the complete quality gate:
