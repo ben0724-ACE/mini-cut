@@ -30,6 +30,7 @@ export function App() {
     <main className="shell">
       <PlanReview
         initialPlan={plan}
+        mediaUrl={`/api/projects/${encodeURIComponent(projectId)}/media/source/${encodeURIComponent(assetId)}`}
         saveDecision={(segmentId, action) =>
           modifyPlan(projectId, assetId, segmentId, action)
         }

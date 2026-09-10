@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { PlanDetail } from "./api";
 
 interface PlanReviewProps {
@@ -7,6 +7,7 @@ interface PlanReviewProps {
     segmentId: string,
     action: "keep" | "delete",
   ) => Promise<PlanDetail>;
+  mediaUrl: string;
 }
 
 const formatTime = (milliseconds: number) =>
@@ -17,7 +18,8 @@ interface UndoEntry {
   previousAction: "keep" | "delete";
 }
 
-export function PlanReview({ initialPlan, saveDecision }: PlanReviewProps) {
+export function PlanReview({ initialPlan, saveDecision, mediaUrl }: PlanReviewProps) {
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [plan, setPlan] = useState(initialPlan);
   const [undoStack, setUndoStack] = useState<UndoEntry[]>([]);
   const [pendingSegment, setPendingSegment] = useState<string | null>(null);
@@ -60,6 +62,17 @@ export function PlanReview({ initialPlan, saveDecision }: PlanReviewProps) {
     }
   };
 
+  const seek = (milliseconds: number) => {
+    if (videoRef.current) videoRef.current.currentTime = milliseconds / 1000;
+  };
+
+  const togglePlayback = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) void video.play();
+    else video.pause();
+  };
+
   return (
     <section aria-labelledby="plan-title">
       <header className="plan-header">
@@ -75,9 +88,36 @@ export function PlanReview({ initialPlan, saveDecision }: PlanReviewProps) {
           <div><dt>删除</dt><dd>{deleted}</dd></div>
         </dl>
       </header>
+      <video ref={videoRef} className="player" controls preload="metadata" src={mediaUrl}>
+        浏览器无法播放这个视频。
+      </video>
+      <p className="keyboard-help">聚焦片段后：K 保留，D 删除，空格播放或暂停。</p>
       <ol className="segments" aria-label="剪辑片段">
         {plan.segments.map((segment) => (
-          <li className={`segment segment--${segment.action}`} key={segment.segment_id}>
+          <li
+            className={`segment segment--${segment.action}`}
+            key={segment.segment_id}
+            tabIndex={0}
+            aria-label={`${segment.action === "keep" ? "保留" : "删除"}片段：${segment.text}`}
+            onClick={(event) => {
+              if ((event.target as HTMLElement).closest("button")) return;
+              seek(segment.start_ms);
+            }}
+            onKeyDown={(event) => {
+              const key = event.key.toLowerCase();
+              if (key === "k") {
+                void changeDecision(segment.segment_id, "keep", true);
+              } else if (key === "d") {
+                void changeDecision(segment.segment_id, "delete", true);
+              } else if (event.key === " ") {
+                event.preventDefault();
+                seek(segment.start_ms);
+                togglePlayback();
+              } else if (event.key === "Enter") {
+                seek(segment.start_ms);
+              }
+            }}
+          >
             <div className="segment-meta">
               <span className="decision">{segment.action === "keep" ? "保留" : "删除"}</span>
               <time>{formatTime(segment.start_ms)}–{formatTime(segment.end_ms)}</time>

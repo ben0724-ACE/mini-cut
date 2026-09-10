@@ -20,7 +20,7 @@ const plan: PlanDetail = {
 
 describe("PlanReview", () => {
   it("shows keep/delete decisions, reasons and counts", () => {
-    render(<PlanReview initialPlan={plan} saveDecision={vi.fn()} />);
+    render(<PlanReview initialPlan={plan} saveDecision={vi.fn()} mediaUrl="/media" />);
     expect(screen.getByText("核心观点")).toBeInTheDocument();
     expect(screen.getByText("重复内容")).toBeInTheDocument();
     expect(screen.getByText(/承载主要信息/)).toBeInTheDocument();
@@ -41,7 +41,7 @@ describe("PlanReview", () => {
         ),
       })
       .mockResolvedValueOnce(plan);
-    render(<PlanReview initialPlan={plan} saveDecision={saveDecision} />);
+    render(<PlanReview initialPlan={plan} saveDecision={saveDecision} mediaUrl="/media" />);
 
     await user.click(screen.getByRole("button", { name: "恢复此段" }));
     expect(saveDecision).toHaveBeenLastCalledWith("s2", "keep");
@@ -51,5 +51,35 @@ describe("PlanReview", () => {
     await user.click(screen.getByRole("button", { name: "撤销上次修改" }));
     expect(saveDecision).toHaveBeenLastCalledWith("s2", "delete");
     expect(screen.getByText("Revision 2")).toBeInTheDocument();
+  });
+
+  it("seeks from text and supports keyboard editing and playback", async () => {
+    const user = userEvent.setup();
+    const saveDecision = vi.fn().mockResolvedValue({
+      ...plan,
+      revision: 3,
+      segments: plan.segments.map((segment) =>
+        segment.segment_id === "s1"
+          ? { ...segment, action: "delete" as const }
+          : segment,
+      ),
+    });
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+    render(
+      <PlanReview initialPlan={plan} saveDecision={saveDecision} mediaUrl="/media" />,
+    );
+    const video = screen.getByText("浏览器无法播放这个视频。") as HTMLVideoElement;
+
+    await user.click(screen.getByText("重复内容"));
+    expect(video.currentTime).toBe(1.2);
+
+    screen.getByLabelText("保留片段：核心观点").focus();
+    await user.keyboard("d");
+    expect(saveDecision).toHaveBeenCalledWith("s1", "delete");
+
+    screen.getByLabelText("删除片段：重复内容").focus();
+    await user.keyboard(" ");
+    expect(video.currentTime).toBe(1.2);
+    expect(play).toHaveBeenCalledOnce();
   });
 });
