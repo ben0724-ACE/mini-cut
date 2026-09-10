@@ -16,6 +16,9 @@ dependencies = [
     "opencc-python-reimplemented>=0.1.7,<0.2",
 ]
 
+[project.scripts]
+minicut = "minicut.cli:main"
+
 [tool.uv.build-backend]
 module-name = "minicut"
 

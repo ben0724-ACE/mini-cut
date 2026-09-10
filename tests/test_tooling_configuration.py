@@ -40,6 +40,12 @@ def require_string(value: object) -> str:
 
 
 class ToolingConfigurationTest(unittest.TestCase):
+    def test_package_registers_the_minicut_cli(self) -> None:
+        project = load_project()
+        scripts = require_nested_table(project, "project", "scripts")
+
+        self.assertEqual(scripts["minicut"], "minicut.cli:main")
+
     def test_development_group_contains_quality_tools(self) -> None:
         project = load_project()
         dependency_groups = require_nested_table(project, "dependency-groups")

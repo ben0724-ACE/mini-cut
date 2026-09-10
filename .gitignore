@@ -21,6 +21,7 @@ venv/
 .uv-cache/
 .uv-python/
 .env
+/manual-test/
 .env.*
 !.env.example
 
