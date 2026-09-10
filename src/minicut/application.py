@@ -44,6 +44,7 @@ from minicut.semantic_segmentation import (
 from minicut.subtitle import build_readable_cues, map_retained_words, render_srt
 from minicut.text_normalization import normalize_transcript_words
 from minicut.timeline import Timeline, compile_timeline
+from minicut.timeline_postprocess import JumpCutRisk, detect_jump_cut_risks
 from minicut.timeline_validation import (
     TimelineTrackRequirements,
     validate_timeline_for_render,
@@ -672,6 +673,7 @@ class PreviewTimelineResult:
     asset_id: str
     plan_revision: int
     timeline: Timeline
+    jump_cut_risks: tuple[JumpCutRisk, ...]
 
 
 class PreviewTimelineOperation(Protocol):
@@ -688,7 +690,8 @@ class PreviewTimelineUseCase:
         )
         timeline = compile_timeline(plan, segments, request.asset_id)
         revision = _read_plan_revision(request.project_directory, request.asset_id)
-        return PreviewTimelineResult(request.asset_id, revision, timeline)
+        risks = detect_jump_cut_risks(timeline, min_removed_gap_ms=300)
+        return PreviewTimelineResult(request.asset_id, revision, timeline, risks)
 
 
 def _read_plan_revision(project_directory: Path, asset_id: str) -> int:

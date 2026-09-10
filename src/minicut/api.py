@@ -146,6 +146,15 @@ class PreviewTimelineResponse(BaseModel):
     plan_revision: int
     estimated_duration_ms: int
     clips: list[PreviewClipResponse]
+    jump_cut_risks: list["JumpCutRiskResponse"]
+
+
+class JumpCutRiskResponse(BaseModel):
+    left_clip_id: str
+    right_clip_id: str
+    removed_gap_ms: int
+    output_at_ms: int
+    explanation: str
 
 
 def _job_path(project_directory: Path, task_id: str) -> Path:
@@ -667,6 +676,16 @@ def create_app(
                 )
                 for clip in result.timeline.clips
             ],
+            jump_cut_risks=[
+                JumpCutRiskResponse(
+                    left_clip_id=risk.left_clip_id,
+                    right_clip_id=risk.right_clip_id,
+                    removed_gap_ms=risk.removed_gap_ms,
+                    output_at_ms=risk.output_at_ms,
+                    explanation=risk.explanation,
+                )
+                for risk in result.jump_cut_risks
+            ],
         )
 
     range_header = Header(alias="Range")
@@ -724,6 +743,7 @@ __all__ = [
     "PlanDetailResponse",
     "PlanSegmentResponse",
     "PlanVersionsResponse",
+    "JumpCutRiskResponse",
     "PreviewClipResponse",
     "PreviewTimelineResponse",
     "ProjectSummaryResponse",

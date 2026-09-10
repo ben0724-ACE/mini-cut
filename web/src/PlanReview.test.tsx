@@ -26,6 +26,9 @@ const preview: PreviewTimeline = {
     { clip_id: "clip:0", segment_ids: ["s1"], source_start_ms: 0, source_end_ms: 1_000, output_start_ms: 0, output_end_ms: 1_000 },
     { clip_id: "clip:1", segment_ids: ["s3"], source_start_ms: 2_000, source_end_ms: 2_600, output_start_ms: 1_000, output_end_ms: 1_600 },
   ],
+  jump_cut_risks: [
+    { left_clip_id: "clip:0", right_clip_id: "clip:1", removed_gap_ms: 1_000, output_at_ms: 1_000, explanation: "可能产生跳切" },
+  ],
 };
 
 describe("PlanReview", () => {
@@ -37,6 +40,8 @@ describe("PlanReview", () => {
     expect(screen.getByText(/与前文重复/)).toBeInTheDocument();
     expect(screen.getByText("00:01.2")).toBeInTheDocument();
     expect(screen.getByText("暂无变化")).toBeInTheDocument();
+    expect(screen.getByText(/切点 00:01.0/)).toBeInTheDocument();
+    expect(screen.getByText(/跳切风险（跳过 00:01.0）/)).toBeInTheDocument();
     expect(screen.getByText("保留", { selector: "dt" }).nextSibling).toHaveTextContent("1");
     expect(screen.getByText("删除", { selector: "dt" }).nextSibling).toHaveTextContent("1");
   });

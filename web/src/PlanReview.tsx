@@ -148,6 +148,26 @@ export function PlanReview({
       <button type="button" className="preview-button" onClick={startPreview}>
         从头播放粗剪预览
       </button>
+      <section className="timeline-strip" aria-label="粗剪时间轴">
+        {preview.clips.map((clip, index) => {
+          const risk = preview.jump_cut_risks.find(
+            (item) => item.right_clip_id === clip.clip_id,
+          );
+          return (
+            <div className="timeline-part" key={clip.clip_id}>
+              {index > 0 && (
+                <span className={`cut-marker${risk ? " cut-marker--risk" : ""}`}>
+                  切点 {formatDuration(clip.output_start_ms)}
+                  {risk && ` · 跳切风险（跳过 ${formatDuration(risk.removed_gap_ms)}）`}
+                </span>
+              )}
+              <span className="clip-bar" style={{ flexGrow: clip.output_end_ms - clip.output_start_ms }}>
+                {clip.clip_id}
+              </span>
+            </div>
+          );
+        })}
+      </section>
       <video
         ref={videoRef}
         className="player"

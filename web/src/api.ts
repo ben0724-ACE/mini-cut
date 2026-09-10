@@ -34,6 +34,15 @@ export interface PreviewTimeline {
   plan_revision: number;
   estimated_duration_ms: number;
   clips: PreviewClip[];
+  jump_cut_risks: JumpCutRisk[];
+}
+
+export interface JumpCutRisk {
+  left_clip_id: string;
+  right_clip_id: string;
+  removed_gap_ms: number;
+  output_at_ms: number;
+  explanation: string;
 }
 
 export class ApiError extends Error {}
