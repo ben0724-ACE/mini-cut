@@ -4,19 +4,69 @@ import argparse
 import sys
 import traceback
 from collections.abc import Callable, Sequence
-from typing import TextIO
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TextIO, cast
 
+from minicut.application import (
+    InitProjectOperation,
+    InitProjectRequest,
+    InitProjectUseCase,
+)
 from minicut.errors import MiniCutError
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+@dataclass(frozen=True, slots=True)
+class CliServices:
+    """Injectable application use cases available to CLI handlers."""
+
+    init_project: InitProjectOperation
+
+
+def _default_services() -> CliServices:
+    return CliServices(init_project=InitProjectUseCase())
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    services: CliServices | None = None,
+    output_stream: TextIO | None = None,
+    error_stream: TextIO | None = None,
+) -> int:
     """Parse command-line arguments and return a process exit status."""
     parser = argparse.ArgumentParser(
         prog="minicut",
         description="Local-first AI-assisted rough-cutting for spoken videos.",
     )
-    parser.parse_args(argv)
-    return 0
+    parser.add_argument("--debug", action="store_true")
+    commands = parser.add_subparsers(dest="command")
+    init_parser = commands.add_parser("init", help="Initialize a MiniCut project.")
+    init_parser.add_argument("project_directory", type=Path)
+    init_parser.add_argument("--project-id", required=True)
+    parsed = parser.parse_args(argv)
+    if parsed.command is None:
+        return 0
+
+    active_services = services if services is not None else _default_services()
+    stdout = sys.stdout if output_stream is None else output_stream
+
+    def operation() -> int:
+        if parsed.command == "init":
+            request = InitProjectRequest(
+                cast(Path, parsed.project_directory),
+                cast(str, parsed.project_id),
+            )
+            result = active_services.init_project.execute(request)
+            print(f"Initialized project {result.project_id}.", file=stdout)
+            return 0
+        raise AssertionError(f"Unhandled CLI command: {parsed.command}")
+
+    return run_cli(
+        operation,
+        debug=cast(bool, parsed.debug),
+        error_stream=error_stream,
+    )
 
 
 def run_cli(

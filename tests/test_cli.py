@@ -1,8 +1,11 @@
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from minicut.cli import main, run_cli
+from minicut.application import InitProjectRequest, InitProjectResult
+from minicut.cli import CliServices, main, run_cli
 from minicut.errors import UserInputError
 
 
@@ -47,6 +50,54 @@ class CommandLineErrorTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("Traceback (most recent call last)", error_output.getvalue())
         self.assertIn("UserInputError", error_output.getvalue())
+
+
+class FakeInitProject:
+    def __init__(self) -> None:
+        self.requests: list[InitProjectRequest] = []
+
+    def execute(self, request: InitProjectRequest) -> InitProjectResult:
+        self.requests.append(request)
+        return InitProjectResult(request.project_directory, request.project_id)
+
+
+class InitCommandTest(unittest.TestCase):
+    def test_calls_exactly_one_init_use_case_and_reports_success(self) -> None:
+        fake = FakeInitProject()
+        output = StringIO()
+
+        exit_code = main(
+            ["init", "/projects/demo", "--project-id", "demo"],
+            services=CliServices(fake),
+            output_stream=output,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            fake.requests, [InitProjectRequest(Path("/projects/demo"), "demo")]
+        )
+        self.assertEqual(output.getvalue(), "Initialized project demo.\n")
+
+    def test_missing_required_argument_exits_before_calling_service(self) -> None:
+        fake = FakeInitProject()
+
+        with self.assertRaises(SystemExit) as raised:
+            main(["init", "/projects/demo"], services=CliServices(fake))
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(fake.requests, [])
+
+    def test_real_use_case_creates_manifest(self) -> None:
+        with TemporaryDirectory() as directory:
+            project_directory = Path(directory) / "demo"
+
+            exit_code = main(
+                ["init", str(project_directory), "--project-id", "demo"],
+                output_stream=StringIO(),
+            )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((project_directory / "manifest.json").is_file())
 
 
 if __name__ == "__main__":
