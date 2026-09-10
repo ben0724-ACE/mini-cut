@@ -1,6 +1,7 @@
 """Map retained transcript words onto rendered timeline time."""
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from minicut.semantic_segment import SemanticSegment
@@ -38,6 +39,27 @@ class SubtitleCue:
             raise ValueError("subtitle cue time range must be non-empty")
         if not self.text.strip():
             raise ValueError("subtitle cue text must not be blank")
+
+
+@dataclass(frozen=True, slots=True)
+class SubtitleLayoutPolicy:
+    """Readable line and duration constraints for grouped subtitle cues."""
+
+    max_characters_per_line: int = 18
+    max_lines: int = 2
+    min_duration_ms: int = 800
+    max_duration_ms: int = 5_000
+
+    def __post_init__(self) -> None:
+        if self.max_characters_per_line <= 0 or self.max_lines <= 0:
+            raise ValueError("subtitle line limits must be positive")
+        if self.min_duration_ms <= 0 or self.max_duration_ms <= 0:
+            raise ValueError("subtitle duration limits must be positive")
+        if self.min_duration_ms > self.max_duration_ms:
+            raise ValueError("subtitle minimum duration must not exceed maximum")
+
+
+_DEFAULT_LAYOUT_POLICY = SubtitleLayoutPolicy()
 
 
 _TIMESTAMP = re.compile(
@@ -90,6 +112,96 @@ def build_word_cues(
     )
     _validate_cue_sequence(cues, video_duration_ms)
     return cues
+
+
+_TERMINAL_PUNCTUATION = frozenset("。！？!?…")
+
+
+def _is_punctuation(text: str) -> bool:
+    return bool(text) and all(
+        unicodedata.category(character).startswith("P") for character in text
+    )
+
+
+def _append_token(current: str, token: str) -> str:
+    needs_space = (
+        bool(current)
+        and not _is_punctuation(token)
+        and current[-1].isascii()
+        and current[-1].isalnum()
+        and token[0].isascii()
+        and token[0].isalnum()
+    )
+    return f"{current}{' ' if needs_space else ''}{token}"
+
+
+def _wrap_tokens(tokens: tuple[str, ...], max_characters: int) -> tuple[str, ...]:
+    lines: list[str] = []
+    for token in tokens:
+        if not lines:
+            lines.append(token)
+            continue
+        candidate = _append_token(lines[-1], token)
+        if len(candidate) <= max_characters or _is_punctuation(token):
+            lines[-1] = candidate
+        else:
+            lines.append(token)
+    return tuple(lines)
+
+
+def build_readable_cues(
+    mapped_words: tuple[MappedWord, ...],
+    video_duration_ms: int,
+    policy: SubtitleLayoutPolicy = _DEFAULT_LAYOUT_POLICY,
+) -> tuple[SubtitleCue, ...]:
+    """Group mapped words by line, duration, punctuation, and edit boundaries."""
+    build_word_cues(mapped_words, video_duration_ms)
+    retained = tuple(word for word in mapped_words if word.text.strip())
+    if not retained:
+        return ()
+
+    groups: list[tuple[MappedWord, ...]] = []
+    current: list[MappedWord] = []
+    for word in retained:
+        if current:
+            tokens = tuple(item.text for item in (*current, word))
+            exceeds_lines = (
+                len(_wrap_tokens(tokens, policy.max_characters_per_line))
+                > policy.max_lines
+            )
+            exceeds_duration = (
+                word.end_ms - current[0].start_ms > policy.max_duration_ms
+            )
+            changed_clip = word.clip_id != current[-1].clip_id
+            after_sentence = current[-1].text.rstrip()[-1] in _TERMINAL_PUNCTUATION
+            if exceeds_lines or exceeds_duration or changed_clip or after_sentence:
+                groups.append(tuple(current))
+                current = []
+        current.append(word)
+    groups.append(tuple(current))
+
+    cues: list[SubtitleCue] = []
+    for index, group in enumerate(groups):
+        start_ms = group[0].start_ms
+        natural_end_ms = group[-1].end_ms
+        next_start_ms = (
+            groups[index + 1][0].start_ms
+            if index + 1 < len(groups)
+            else video_duration_ms
+        )
+        end_ms = min(
+            max(natural_end_ms, start_ms + policy.min_duration_ms),
+            next_start_ms,
+            video_duration_ms,
+        )
+        lines = _wrap_tokens(
+            tuple(word.text for word in group),
+            policy.max_characters_per_line,
+        )
+        cues.append(SubtitleCue(start_ms, end_ms, "\n".join(lines)))
+    result = tuple(cues)
+    _validate_cue_sequence(result, video_duration_ms)
+    return result
 
 
 def render_srt(cues: tuple[SubtitleCue, ...], video_duration_ms: int) -> str:
@@ -185,6 +297,8 @@ def map_retained_words(
 __all__ = [
     "MappedWord",
     "SubtitleCue",
+    "SubtitleLayoutPolicy",
+    "build_readable_cues",
     "build_word_cues",
     "map_retained_words",
     "parse_srt",

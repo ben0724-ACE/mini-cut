@@ -5,6 +5,8 @@ from minicut.semantic_segment import SemanticSegment
 from minicut.subtitle import (
     MappedWord,
     SubtitleCue,
+    SubtitleLayoutPolicy,
+    build_readable_cues,
     build_word_cues,
     map_retained_words,
     parse_srt,
@@ -200,6 +202,91 @@ class SrtSerializationTest(unittest.TestCase):
             with self.subTest(content=content):
                 with self.assertRaises(ValueError):
                     parse_srt(content)
+
+
+class ReadableSubtitleLayoutTest(unittest.TestCase):
+    def test_groups_mixed_language_wraps_lines_and_attaches_punctuation(self) -> None:
+        words = (
+            MappedWord("w1", "你好", 0, 200, "clip:0"),
+            MappedWord("w2", "MiniCut", 220, 400, "clip:0"),
+            MappedWord("w3", "works", 420, 600, "clip:0"),
+            MappedWord("w4", "。", 600, 650, "clip:0"),
+            MappedWord("w5", "下一句", 800, 1_050, "clip:0"),
+        )
+
+        cues = build_readable_cues(
+            words,
+            2_000,
+            SubtitleLayoutPolicy(
+                max_characters_per_line=10,
+                max_lines=2,
+                min_duration_ms=500,
+                max_duration_ms=3_000,
+            ),
+        )
+
+        self.assertEqual(len(cues), 2)
+        self.assertEqual(cues[0].text, "你好MiniCut\nworks。")
+        self.assertEqual(cues[1].text, "下一句")
+        self.assertEqual((cues[0].start_ms, cues[0].end_ms), (0, 650))
+
+    def test_breaks_on_clip_duration_and_line_capacity(self) -> None:
+        cases = (
+            (
+                (
+                    MappedWord("w1", "one", 0, 200, "clip:0"),
+                    MappedWord("w2", "two", 250, 450, "clip:1"),
+                ),
+                SubtitleLayoutPolicy(20, 2, 100, 2_000),
+            ),
+            (
+                (
+                    MappedWord("w1", "one", 0, 200, "clip:0"),
+                    MappedWord("w2", "two", 1_100, 1_300, "clip:0"),
+                ),
+                SubtitleLayoutPolicy(20, 2, 100, 1_000),
+            ),
+            (
+                (
+                    MappedWord("w1", "12345", 0, 200, "clip:0"),
+                    MappedWord("w2", "67890", 250, 450, "clip:0"),
+                ),
+                SubtitleLayoutPolicy(5, 1, 100, 2_000),
+            ),
+        )
+
+        for words, policy in cases:
+            with self.subTest(policy=policy):
+                cues = build_readable_cues(words, 2_000, policy)
+                self.assertEqual(len(cues), 2)
+
+    def test_minimum_duration_never_overlaps_or_exceeds_video(self) -> None:
+        words = (
+            MappedWord("w1", "短", 0, 100, "clip:0"),
+            MappedWord("w2", "。", 100, 150, "clip:0"),
+            MappedWord("w3", "末尾", 400, 500, "clip:0"),
+        )
+        policy = SubtitleLayoutPolicy(18, 2, 800, 5_000)
+
+        cues = build_readable_cues(words, 700, policy)
+        reparsed = parse_srt(render_srt(cues, 700))
+
+        self.assertEqual(cues[0].end_ms, 400)
+        self.assertEqual(cues[-1].end_ms, 700)
+        self.assertEqual(reparsed, cues)
+        self.assertTrue(
+            all(
+                left.end_ms <= right.start_ms
+                for left, right in zip(cues, cues[1:], strict=False)
+            )
+        )
+
+    def test_rejects_invalid_layout_policy(self) -> None:
+        invalid = ((0, 2, 800, 5_000), (18, 0, 800, 5_000), (18, 2, 900, 800))
+        for values in invalid:
+            with self.subTest(values=values):
+                with self.assertRaises(ValueError):
+                    SubtitleLayoutPolicy(*values)
 
 
 if __name__ == "__main__":
