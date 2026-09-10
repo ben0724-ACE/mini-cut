@@ -7,10 +7,13 @@ from tempfile import TemporaryDirectory
 from minicut.application import (
     InitProjectRequest,
     InitProjectResult,
+    PlanRequest,
+    PlanResult,
     TranscribeRequest,
     TranscribeResult,
 )
 from minicut.cli import CliServices, main, run_cli
+from minicut.edit_plan import EditIntensity
 from minicut.errors import UserInputError
 
 
@@ -153,6 +156,61 @@ class TranscribeCommandTest(unittest.TestCase):
                     "small",
                 ],
                 services=CliServices(FakeInitProject(), fake),
+            )
+        self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(fake.requests, [])
+
+
+class FakePlan:
+    def __init__(self) -> None:
+        self.requests: list[PlanRequest] = []
+
+    def execute(self, request: PlanRequest) -> PlanResult:
+        self.requests.append(request)
+        return PlanResult("asset-1", 3, 1, Path("/project/plan.json"))
+
+
+class PlanCommandTest(unittest.TestCase):
+    def test_calls_one_plan_use_case_with_typed_options(self) -> None:
+        fake = FakePlan()
+        output = StringIO()
+
+        exit_code = main(
+            [
+                "plan",
+                "/projects/demo",
+                "--asset-id",
+                "asset-1",
+                "--target-ms",
+                "60000",
+                "--intensity",
+                "aggressive",
+                "--planner",
+                "deepseek",
+            ],
+            services=CliServices(FakeInitProject(), plan=fake),
+            output_stream=output,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(fake.requests), 1)
+        self.assertEqual(fake.requests[0].intensity, EditIntensity.AGGRESSIVE)
+        self.assertEqual(fake.requests[0].planner, "deepseek")
+        self.assertIn("3 kept and 1 deleted", output.getvalue())
+
+    def test_nonpositive_target_exits_before_plan_service(self) -> None:
+        fake = FakePlan()
+        with self.assertRaises(SystemExit) as raised:
+            main(
+                [
+                    "plan",
+                    "/projects/demo",
+                    "--asset-id",
+                    "asset-1",
+                    "--target-ms",
+                    "0",
+                ],
+                services=CliServices(FakeInitProject(), plan=fake),
             )
         self.assertEqual(raised.exception.code, 2)
         self.assertEqual(fake.requests, [])

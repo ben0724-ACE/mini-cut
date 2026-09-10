@@ -12,11 +12,22 @@ from minicut.application import (
     InitProjectOperation,
     InitProjectRequest,
     InitProjectUseCase,
+    PlanOperation,
+    PlanProjectUseCase,
+    PlanRequest,
     TranscribeOperation,
     TranscribeProjectUseCase,
     TranscribeRequest,
 )
+from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be a positive integer")
+    return parsed
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,12 +36,14 @@ class CliServices:
 
     init_project: InitProjectOperation
     transcribe: TranscribeOperation | None = None
+    plan: PlanOperation | None = None
 
 
 def _default_services() -> CliServices:
     return CliServices(
         init_project=InitProjectUseCase(),
         transcribe=TranscribeProjectUseCase(),
+        plan=PlanProjectUseCase(),
     )
 
 
@@ -61,6 +74,17 @@ def main(
     )
     transcribe_parser.add_argument("--model", required=True)
     transcribe_parser.add_argument("--language", default="zh")
+    plan_parser = commands.add_parser("plan", help="Build an edit plan.")
+    plan_parser.add_argument("project_directory", type=Path)
+    plan_parser.add_argument("--asset-id", required=True)
+    plan_parser.add_argument("--target-ms", required=True, type=_positive_int)
+    plan_parser.add_argument(
+        "--intensity",
+        choices=tuple(intensity.value for intensity in EditIntensity),
+        default=EditIntensity.BALANCED.value,
+    )
+    plan_parser.add_argument("--style", default="concise")
+    plan_parser.add_argument("--planner", choices=("rule", "deepseek"), default="rule")
     parsed = parser.parse_args(argv)
     if parsed.command is None:
         return 0
@@ -91,6 +115,25 @@ def main(
             )
             print(
                 f"Transcribed {result.word_count} words for asset {result.asset_id}.",
+                file=stdout,
+            )
+            return 0
+        if parsed.command == "plan":
+            if active_services.plan is None:
+                raise AssertionError("Plan service is not configured")
+            result = active_services.plan.execute(
+                PlanRequest(
+                    cast(Path, parsed.project_directory),
+                    cast(str, parsed.asset_id),
+                    cast(int, parsed.target_ms),
+                    EditIntensity(cast(str, parsed.intensity)),
+                    cast(str, parsed.style),
+                    cast(str, parsed.planner),
+                )
+            )
+            print(
+                f"Planned {result.kept_segments} kept and "
+                f"{result.deleted_segments} deleted segments.",
                 file=stdout,
             )
             return 0
