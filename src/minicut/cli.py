@@ -15,6 +15,9 @@ from minicut.application import (
     PlanOperation,
     PlanProjectUseCase,
     PlanRequest,
+    RenderOperation,
+    RenderProjectUseCase,
+    RenderRequest,
     TranscribeOperation,
     TranscribeProjectUseCase,
     TranscribeRequest,
@@ -37,6 +40,7 @@ class CliServices:
     init_project: InitProjectOperation
     transcribe: TranscribeOperation | None = None
     plan: PlanOperation | None = None
+    render: RenderOperation | None = None
 
 
 def _default_services() -> CliServices:
@@ -44,6 +48,7 @@ def _default_services() -> CliServices:
         init_project=InitProjectUseCase(),
         transcribe=TranscribeProjectUseCase(),
         plan=PlanProjectUseCase(),
+        render=RenderProjectUseCase(),
     )
 
 
@@ -85,6 +90,11 @@ def main(
     )
     plan_parser.add_argument("--style", default="concise")
     plan_parser.add_argument("--planner", choices=("rule", "deepseek"), default="rule")
+    render_parser = commands.add_parser("render", help="Render video and subtitles.")
+    render_parser.add_argument("project_directory", type=Path)
+    render_parser.add_argument("--asset-id", required=True)
+    render_parser.add_argument("--output", required=True, type=Path)
+    render_parser.add_argument("--timeout", type=_positive_int, default=600)
     parsed = parser.parse_args(argv)
     if parsed.command is None:
         return 0
@@ -115,6 +125,22 @@ def main(
             )
             print(
                 f"Transcribed {result.word_count} words for asset {result.asset_id}.",
+                file=stdout,
+            )
+            return 0
+        if parsed.command == "render":
+            if active_services.render is None:
+                raise AssertionError("Render service is not configured")
+            result = active_services.render.execute(
+                RenderRequest(
+                    cast(Path, parsed.project_directory),
+                    cast(str, parsed.asset_id),
+                    cast(Path, parsed.output),
+                    float(cast(int, parsed.timeout)),
+                )
+            )
+            print(
+                f"Rendered {result.duration_ms} ms to {result.output_path}.",
                 file=stdout,
             )
             return 0

@@ -7,6 +7,8 @@ from typing import cast
 from minicut.application import (
     PlanProjectUseCase,
     PlanRequest,
+    RenderProjectUseCase,
+    RenderRequest,
     TranscribeProjectUseCase,
     TranscribeRequest,
 )
@@ -123,6 +125,88 @@ class PlanProjectUseCaseTest(unittest.TestCase):
             self.assertEqual(payload["asset_id"], "asset-1")
             self.assertEqual(len(cast(list[object], payload["segments"])), 2)
             self.assertIsInstance(payload["plan"], dict)
+
+
+class FakeTimelineRenderer:
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[str, ...], Path, float]] = []
+
+    def render_to_path(
+        self,
+        command: tuple[str, ...],
+        output_path: str | Path,
+        *,
+        timeout_seconds: float,
+    ) -> object:
+        self.calls.append((command, Path(output_path), timeout_seconds))
+        return object()
+
+
+class RenderProjectUseCaseTest(unittest.TestCase):
+    def test_compiles_plan_renders_media_and_writes_subtitles(self) -> None:
+        with TemporaryDirectory() as directory:
+            project_directory = Path(directory)
+            asset = MediaAsset(
+                "asset-1",
+                "/media/input.mov",
+                1_000,
+                (
+                    StreamInfo(0, StreamType.VIDEO, "h264"),
+                    StreamInfo(1, StreamType.AUDIO, "aac"),
+                ),
+                "fingerprint",
+            )
+            ProjectRepository(project_directory).create(
+                ProjectManifest("demo", (asset,))
+            )
+            transcript = Transcript(
+                "transcript-1",
+                TranscriptSource("asset-1", "mlx-whisper", "large-v3-turbo"),
+                "zh",
+                (
+                    Word("w1", "内容", 0, 400),
+                    Word("w2", "嗯", 500, 800),
+                ),
+                (
+                    Utterance("u1", "内容", 0, 400, ("w1",)),
+                    Utterance("u2", "嗯", 500, 800, ("w2",)),
+                ),
+            )
+            TranscriptCacheRepository(
+                project_directory / ".minicut/transcripts/asset-1.json"
+            ).write(
+                TranscriptionCacheKey(
+                    "fingerprint", "mlx-whisper", "large-v3-turbo", "zh", None
+                ),
+                transcript,
+            )
+            PlanProjectUseCase().execute(
+                PlanRequest(
+                    project_directory,
+                    "asset-1",
+                    1_000,
+                    EditIntensity.BALANCED,
+                    "concise",
+                    "rule",
+                )
+            )
+            renderer = FakeTimelineRenderer()
+            output_path = project_directory / "exports/result.mp4"
+
+            result = RenderProjectUseCase(renderer=renderer).execute(
+                RenderRequest(project_directory, "asset-1", output_path, 30)
+            )
+
+            self.assertEqual(result.duration_ms, 400)
+            self.assertEqual(len(renderer.calls), 1)
+            command, rendered_path, timeout = renderer.calls[0]
+            self.assertEqual(rendered_path, output_path)
+            self.assertEqual(timeout, 30)
+            self.assertIn("file:///media/input.mov", command)
+            self.assertEqual(
+                result.subtitle_path.read_text(encoding="utf-8"),
+                "1\n00:00:00,000 --> 00:00:00,400\n内容\n",
+            )
 
 
 if __name__ == "__main__":

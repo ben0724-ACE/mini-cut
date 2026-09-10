@@ -9,9 +9,9 @@ from typing import Protocol, cast
 
 from minicut.deepseek_provider import create_deepseek_planner_from_env
 from minicut.edit_plan import EditBrief, EditIntensity, EditPlan
-from minicut.errors import UserInputError
+from minicut.errors import ProcessingError, UserInputError
 from minicut.importer import import_media
-from minicut.media import MediaAsset
+from minicut.media import MediaAsset, StreamType
 from minicut.mlx_whisper import (
     MlxWhisperConfig,
     map_mlx_transcription,
@@ -23,6 +23,8 @@ from minicut.open_source_whisper import (
     transcribe_with_open_source_whisper,
 )
 from minicut.project import ProjectManifest, ProjectRepository
+from minicut.render_command import RenderCommandBuilder
+from minicut.renderer import FfmpegRenderer
 from minicut.rule_planner import RulePlanner
 from minicut.segmentation import build_utterances
 from minicut.semantic_segment import SemanticSegment
@@ -30,7 +32,13 @@ from minicut.semantic_segmentation import (
     build_rule_based_segments,
     mark_segment_candidates,
 )
+from minicut.subtitle import build_readable_cues, map_retained_words, render_srt
 from minicut.text_normalization import normalize_transcript_words
+from minicut.timeline import compile_timeline
+from minicut.timeline_validation import (
+    TimelineTrackRequirements,
+    validate_timeline_for_render,
+)
 from minicut.transcript import Transcript
 from minicut.transcription_cache import (
     TranscriptCacheRepository,
@@ -237,6 +245,26 @@ def _write_json(path: Path, value: object) -> None:
             temporary_path.unlink(missing_ok=True)
 
 
+def _write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}-",
+            suffix=".tmp",
+            delete=False,
+        ) as output:
+            output.write(content)
+            temporary_path = Path(output.name)
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 class PlanProjectUseCase:
     def __init__(self, *, planner: EditPlanner = _plan_edit) -> None:
         self._planner = planner
@@ -285,6 +313,118 @@ class PlanProjectUseCase:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class RenderRequest:
+    project_directory: Path
+    asset_id: str
+    output_path: Path
+    timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class RenderResult:
+    output_path: Path
+    subtitle_path: Path
+    duration_ms: int
+
+
+class RenderOperation(Protocol):
+    def execute(self, request: RenderRequest) -> RenderResult: ...
+
+
+class TimelineRenderer(Protocol):
+    def render_to_path(
+        self,
+        command: tuple[str, ...],
+        output_path: str | Path,
+        *,
+        timeout_seconds: float,
+    ) -> object: ...
+
+
+def _read_plan_artifact(
+    project_directory: Path, asset_id: str
+) -> tuple[EditPlan, tuple[SemanticSegment, ...]]:
+    path = project_directory / ".minicut" / "plans" / f"{asset_id}.json"
+    if not path.is_file():
+        raise UserInputError("Edit plan artifact does not exist")
+    try:
+        payload = cast(dict[str, object], json.loads(path.read_text(encoding="utf-8")))
+        if payload["asset_id"] != asset_id:
+            raise ValueError("asset mismatch")
+        plan = EditPlan.from_dict(cast(dict[str, object], payload["plan"]))
+        segment_data = cast(list[dict[str, object]], payload["segments"])
+        return plan, tuple(SemanticSegment.from_dict(item) for item in segment_data)
+    except (KeyError, OSError, TypeError, UnicodeError, ValueError) as error:
+        raise UserInputError("Edit plan artifact is invalid") from error
+
+
+class RenderProjectUseCase:
+    def __init__(
+        self,
+        *,
+        command_builder: RenderCommandBuilder | None = None,
+        renderer: TimelineRenderer | None = None,
+    ) -> None:
+        self._command_builder = command_builder or RenderCommandBuilder()
+        self._renderer = renderer or FfmpegRenderer()
+
+    def execute(self, request: RenderRequest) -> RenderResult:
+        if request.timeout_seconds <= 0:
+            raise UserInputError("Render timeout must be positive")
+        manifest = ProjectRepository(request.project_directory).read()
+        assets = tuple(
+            asset for asset in manifest.assets if asset.asset_id == request.asset_id
+        )
+        if len(assets) != 1:
+            raise UserInputError("Project asset does not exist")
+        asset = assets[0]
+        plan, segments = _read_plan_artifact(
+            request.project_directory, request.asset_id
+        )
+        transcript = _read_cached_transcript(
+            request.project_directory, request.asset_id
+        )
+        timeline = compile_timeline(plan, segments, request.asset_id)
+        stream_types = {stream.stream_type for stream in asset.streams}
+        requirements = TimelineTrackRequirements(
+            require_audio=StreamType.AUDIO in stream_types,
+            require_video=StreamType.VIDEO in stream_types,
+        )
+        validate_timeline_for_render(timeline, (asset,), requirements)
+        if len(timeline.clips) == 1:
+            command = self._command_builder.build_single_clip(
+                timeline, (asset,), str(request.output_path)
+            )
+        else:
+            command = self._command_builder.build_multi_clip(
+                timeline,
+                (asset,),
+                str(request.output_path),
+                requirements,
+            )
+        self._renderer.render_to_path(
+            command,
+            request.output_path,
+            timeout_seconds=request.timeout_seconds,
+        )
+        mapped_words = map_retained_words(timeline, segments, transcript.words)
+        cues = build_readable_cues(mapped_words, timeline.estimated_duration_ms)
+        subtitle_path = request.output_path.with_suffix(".srt")
+        try:
+            _write_text(
+                subtitle_path,
+                render_srt(cues, timeline.estimated_duration_ms),
+            )
+        except OSError as error:
+            raise ProcessingError("Subtitle output could not be written") from error
+        return RenderResult(
+            request.output_path.absolute(),
+            subtitle_path.absolute(),
+            timeline.estimated_duration_ms,
+        )
+
+
 __all__ = [
     "InitProjectOperation",
     "InitProjectRequest",
@@ -294,6 +434,10 @@ __all__ = [
     "PlanProjectUseCase",
     "PlanRequest",
     "PlanResult",
+    "RenderOperation",
+    "RenderProjectUseCase",
+    "RenderRequest",
+    "RenderResult",
     "TranscribeOperation",
     "TranscribeProjectUseCase",
     "TranscribeRequest",

@@ -9,6 +9,8 @@ from minicut.application import (
     InitProjectResult,
     PlanRequest,
     PlanResult,
+    RenderRequest,
+    RenderResult,
     TranscribeRequest,
     TranscribeResult,
 )
@@ -211,6 +213,62 @@ class PlanCommandTest(unittest.TestCase):
                     "0",
                 ],
                 services=CliServices(FakeInitProject(), plan=fake),
+            )
+        self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(fake.requests, [])
+
+
+class FakeRender:
+    def __init__(self) -> None:
+        self.requests: list[RenderRequest] = []
+
+    def execute(self, request: RenderRequest) -> RenderResult:
+        self.requests.append(request)
+        return RenderResult(
+            request.output_path, request.output_path.with_suffix(".srt"), 900
+        )
+
+
+class RenderCommandTest(unittest.TestCase):
+    def test_calls_one_render_use_case_and_reports_output(self) -> None:
+        fake = FakeRender()
+        output = StringIO()
+
+        exit_code = main(
+            [
+                "render",
+                "/projects/demo",
+                "--asset-id",
+                "asset-1",
+                "--output",
+                "/exports/result.mp4",
+                "--timeout",
+                "30",
+            ],
+            services=CliServices(FakeInitProject(), render=fake),
+            output_stream=output,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(fake.requests), 1)
+        self.assertEqual(fake.requests[0].timeout_seconds, 30)
+        self.assertIn("Rendered 900 ms", output.getvalue())
+
+    def test_invalid_timeout_exits_before_render_service(self) -> None:
+        fake = FakeRender()
+        with self.assertRaises(SystemExit) as raised:
+            main(
+                [
+                    "render",
+                    "/projects/demo",
+                    "--asset-id",
+                    "asset-1",
+                    "--output",
+                    "/exports/result.mp4",
+                    "--timeout",
+                    "0",
+                ],
+                services=CliServices(FakeInitProject(), render=fake),
             )
         self.assertEqual(raised.exception.code, 2)
         self.assertEqual(fake.requests, [])
