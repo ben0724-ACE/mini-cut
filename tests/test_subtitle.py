@@ -2,7 +2,14 @@ import unittest
 
 from minicut.media import TimeRange
 from minicut.semantic_segment import SemanticSegment
-from minicut.subtitle import map_retained_words
+from minicut.subtitle import (
+    MappedWord,
+    SubtitleCue,
+    build_word_cues,
+    map_retained_words,
+    parse_srt,
+    render_srt,
+)
 from minicut.timeline import Clip, Timeline
 from minicut.transcript import Word
 
@@ -144,6 +151,55 @@ class RetainedWordMappingTest(unittest.TestCase):
                         segments,
                         words,
                     )
+
+
+class SrtSerializationTest(unittest.TestCase):
+    def test_word_cues_render_as_valid_srt_and_round_trip(self) -> None:
+        words = (
+            MappedWord("w1", "你好", 0, 450, "clip:0"),
+            MappedWord("w2", "MiniCut", 500, 1_200, "clip:0"),
+            MappedWord("w3", "结束", 3_723_456, 3_724_000, "clip:1"),
+        )
+
+        cues = build_word_cues(words, 3_724_000)
+        content = render_srt(cues, 3_724_000)
+
+        self.assertEqual(
+            content,
+            "1\n00:00:00,000 --> 00:00:00,450\n你好\n\n"
+            "2\n00:00:00,500 --> 00:00:01,200\nMiniCut\n\n"
+            "3\n01:02:03,456 --> 01:02:04,000\n结束\n",
+        )
+        self.assertEqual(parse_srt(content), cues)
+        self.assertEqual(parse_srt(content.replace("\n", "\r\n")), cues)
+
+    def test_rejects_overlap_or_cue_beyond_video_duration(self) -> None:
+        cases = (
+            (
+                (
+                    SubtitleCue(0, 500, "first"),
+                    SubtitleCue(400, 700, "second"),
+                ),
+                1_000,
+                "non-overlapping",
+            ),
+            ((SubtitleCue(0, 1_001, "too long"),), 1_000, "exceeds"),
+        )
+        for cues, duration_ms, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    render_srt(cues, duration_ms)
+
+    def test_parser_rejects_invalid_index_timestamp_and_timing_separator(self) -> None:
+        invalid = (
+            "2\n00:00:00,000 --> 00:00:01,000\ntext\n",
+            "1\n00:00:60,000 --> 00:01:01,000\ntext\n",
+            "1\n00:00:00,000 -> 00:00:01,000\ntext\n",
+        )
+        for content in invalid:
+            with self.subTest(content=content):
+                with self.assertRaises(ValueError):
+                    parse_srt(content)
 
 
 if __name__ == "__main__":
