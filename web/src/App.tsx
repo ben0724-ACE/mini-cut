@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ApiError, getPlan, type PlanDetail } from "./api";
+import { ApiError, getPlan, modifyPlan, type PlanDetail } from "./api";
 import { PlanReview } from "./PlanReview";
 
 export function App() {
@@ -26,5 +26,14 @@ export function App() {
   }
   if (error) return <main className="shell"><p role="alert">{error}</p></main>;
   if (!plan) return <main className="shell"><p role="status">正在读取剪辑计划…</p></main>;
-  return <main className="shell"><PlanReview plan={plan} /></main>;
+  return (
+    <main className="shell">
+      <PlanReview
+        initialPlan={plan}
+        saveDecision={(segmentId, action) =>
+          modifyPlan(projectId, assetId, segmentId, action)
+        }
+      />
+    </main>
+  );
 }

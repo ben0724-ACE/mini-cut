@@ -39,3 +39,29 @@ export async function getPlan(
   }
   return (await response.json()) as PlanDetail;
 }
+
+export async function modifyPlan(
+  projectId: string,
+  assetId: string,
+  segmentId: string,
+  action: "keep" | "delete",
+): Promise<PlanDetail> {
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(assetId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        restore_segment_ids: action === "keep" ? [segmentId] : [],
+        delete_segment_ids: action === "delete" ? [segmentId] : [],
+      }),
+    },
+  );
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as {
+      detail?: string;
+    } | null;
+    throw new ApiError(payload?.detail ?? `修改失败（${response.status}）`);
+  }
+  return (await response.json()) as PlanDetail;
+}

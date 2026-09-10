@@ -23,4 +23,6 @@ h1 { font-size: clamp(2rem, 6vw, 4rem); margin: 0; }
 .segment--delete .decision { color: #97392f; }
 .segment-text { font-size: 1.12rem; line-height: 1.65; }
 .reason { color: #746e63; font-size: 0.9rem; margin-bottom: 0; }
+button { margin-top: 12px; border: 1px solid #b8afa1; border-radius: 8px; padding: 8px 12px; background: #fff; color: inherit; cursor: pointer; }
+button:disabled { cursor: wait; opacity: 0.55; }
 @media (max-width: 600px) { .plan-header { flex-direction: column; } }
