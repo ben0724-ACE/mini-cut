@@ -32,6 +32,7 @@ class LoudnessCommandTest(unittest.TestCase):
         self.assertIn("measured_I=-23.1", loudnorm)
         self.assertIn("measured_TP=-8.2", loudnorm)
         self.assertIn("linear=true", loudnorm)
+        self.assertIn("alimiter=limit=0.749894:level=false", loudnorm)
         self.assertEqual(normalization[-1], "file:///output/result.mp4")
 
     def test_parses_ffmpeg_json_measurement(self) -> None:

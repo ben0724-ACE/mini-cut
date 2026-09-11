@@ -158,6 +158,8 @@ def build_loudness_normalization_command(
         f"measured_thresh={measurement.input_threshold_lufs}:"
         f"offset={measurement.target_offset_lu}:linear=true:print_format=summary"
     )
+    limiter = 10 ** ((profile.true_peak_dbfs - 1.0) / 20)
+    audio_filter = f"{loudnorm},alimiter=limit={limiter:.6f}:level=false"
     return (
         executable,
         "-nostdin",
@@ -171,7 +173,7 @@ def build_loudness_normalization_command(
         "-c:v",
         "copy",
         "-af",
-        loudnorm,
+        audio_filter,
         "-c:a",
         "aac",
         "-ar",
