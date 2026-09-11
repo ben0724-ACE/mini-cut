@@ -13,7 +13,7 @@ from minicut.eval_metrics import (
     evaluate_selection,
     evaluate_timeline_quality,
 )
-from minicut.eval_sample import EvalSample
+from minicut.eval_sample import EvalSample, ReferenceAction
 
 EvalReplay = Callable[[EvalSample], EvalPrediction]
 
@@ -29,6 +29,40 @@ class EvalCaseResult:
 @dataclass(frozen=True, slots=True)
 class EvalRunResult:
     cases: tuple[EvalCaseResult, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class QualityDelta:
+    """Candidate minus baseline; error-rate improvements are negative values."""
+
+    retention_recall_delta: float
+    deletion_accuracy_delta: float
+    duration_error_ratio_delta: float
+    cut_word_rate_delta: float
+    isolated_clip_rate_delta: float
+    narrative_break_rate_delta: float
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionChange:
+    sample_id: str
+    segment_id: str
+    baseline_action: ReferenceAction
+    candidate_action: ReferenceAction
+
+
+@dataclass(frozen=True, slots=True)
+class EvalCaseComparison:
+    sample_id: str
+    delta: QualityDelta
+    decision_changes: tuple[DecisionChange, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class EvalComparisonReport:
+    sample_count: int
+    aggregate: QualityDelta
+    cases: tuple[EvalCaseComparison, ...]
 
 
 def _read_sample(path: Path) -> EvalSample:
@@ -74,9 +108,89 @@ def run_evaluation_directory(
     return EvalRunResult(tuple(cases))
 
 
+def _quality_delta(
+    baseline: EvalCaseResult,
+    candidate: EvalCaseResult,
+) -> QualityDelta:
+    return QualityDelta(
+        candidate.selection.retention_recall - baseline.selection.retention_recall,
+        candidate.selection.deletion_accuracy - baseline.selection.deletion_accuracy,
+        candidate.selection.duration_error_ratio
+        - baseline.selection.duration_error_ratio,
+        candidate.timeline.cut_word_rate - baseline.timeline.cut_word_rate,
+        candidate.timeline.isolated_clip_rate - baseline.timeline.isolated_clip_rate,
+        candidate.timeline.narrative_break_rate
+        - baseline.timeline.narrative_break_rate,
+    )
+
+
+def _mean_delta(deltas: tuple[QualityDelta, ...]) -> QualityDelta:
+    count = len(deltas)
+    return QualityDelta(
+        sum(delta.retention_recall_delta for delta in deltas) / count,
+        sum(delta.deletion_accuracy_delta for delta in deltas) / count,
+        sum(delta.duration_error_ratio_delta for delta in deltas) / count,
+        sum(delta.cut_word_rate_delta for delta in deltas) / count,
+        sum(delta.isolated_clip_rate_delta for delta in deltas) / count,
+        sum(delta.narrative_break_rate_delta for delta in deltas) / count,
+    )
+
+
+def compare_eval_runs(
+    baseline: EvalRunResult,
+    candidate: EvalRunResult,
+) -> EvalComparisonReport:
+    """Compare two completed runs without freezing either run as a contract."""
+    baseline_by_id = {case.sample_id: case for case in baseline.cases}
+    candidate_by_id = {case.sample_id: case for case in candidate.cases}
+    if (
+        not baseline_by_id
+        or len(baseline_by_id) != len(baseline.cases)
+        or len(candidate_by_id) != len(candidate.cases)
+        or set(baseline_by_id) != set(candidate_by_id)
+    ):
+        raise ValueError("evaluation runs must contain the same sample IDs once")
+
+    comparisons: list[EvalCaseComparison] = []
+    for baseline_case in baseline.cases:
+        candidate_case = candidate_by_id[baseline_case.sample_id]
+        segment_ids = sorted(baseline_case.prediction.actions)
+        if set(segment_ids) != set(candidate_case.prediction.actions):
+            raise ValueError("matching samples must contain the same Segment IDs")
+        changes = tuple(
+            DecisionChange(
+                baseline_case.sample_id,
+                segment_id,
+                baseline_case.prediction.actions[segment_id],
+                candidate_case.prediction.actions[segment_id],
+            )
+            for segment_id in segment_ids
+            if baseline_case.prediction.actions[segment_id]
+            is not candidate_case.prediction.actions[segment_id]
+        )
+        comparisons.append(
+            EvalCaseComparison(
+                baseline_case.sample_id,
+                _quality_delta(baseline_case, candidate_case),
+                changes,
+            )
+        )
+    case_tuple = tuple(comparisons)
+    return EvalComparisonReport(
+        len(case_tuple),
+        _mean_delta(tuple(comparison.delta for comparison in case_tuple)),
+        case_tuple,
+    )
+
+
 __all__ = [
     "EvalCaseResult",
+    "DecisionChange",
+    "EvalCaseComparison",
+    "EvalComparisonReport",
     "EvalReplay",
     "EvalRunResult",
+    "QualityDelta",
+    "compare_eval_runs",
     "run_evaluation_directory",
 ]

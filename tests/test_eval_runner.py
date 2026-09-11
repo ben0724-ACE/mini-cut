@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from minicut.eval_metrics import EvalClip, EvalPrediction
-from minicut.eval_runner import run_evaluation_directory
+from minicut.eval_runner import compare_eval_runs, run_evaluation_directory
 from minicut.eval_sample import (
     EvalLabel,
     EvalSample,
@@ -89,6 +89,59 @@ class EvalRunnerTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "duplicate"):
                 run_evaluation_directory(samples, _perfect_prediction)
+
+
+class EvalComparisonTest(unittest.TestCase):
+    def test_compares_quality_and_locates_changed_segment_decisions(self) -> None:
+        with TemporaryDirectory() as directory:
+            samples = Path(directory)
+            (samples / "sample.json").write_text(
+                json.dumps(_sample("sample-a").to_dict()), encoding="utf-8"
+            )
+            baseline = run_evaluation_directory(samples, _perfect_prediction)
+
+            def degraded(sample: EvalSample) -> EvalPrediction:
+                del sample
+                return EvalPrediction(
+                    {"s1": ReferenceAction.DELETE, "s2": ReferenceAction.DELETE},
+                    0,
+                    (),
+                )
+
+            candidate = run_evaluation_directory(samples, degraded)
+
+            report = compare_eval_runs(baseline, candidate)
+
+            self.assertEqual(report.sample_count, 1)
+            self.assertEqual(report.aggregate.retention_recall_delta, -1.0)
+            self.assertEqual(report.aggregate.deletion_accuracy_delta, -0.5)
+            self.assertEqual(report.aggregate.duration_error_ratio_delta, 1.0)
+            self.assertEqual(report.cases[0].sample_id, "sample-a")
+            self.assertEqual(len(report.cases[0].decision_changes), 1)
+            change = report.cases[0].decision_changes[0]
+            self.assertEqual(change.segment_id, "s1")
+            self.assertIs(change.baseline_action, ReferenceAction.KEEP)
+            self.assertIs(change.candidate_action, ReferenceAction.DELETE)
+
+    def test_rejects_comparison_of_different_sample_sets(self) -> None:
+        with (
+            TemporaryDirectory() as first_directory,
+            TemporaryDirectory() as second_directory,
+        ):
+            first = Path(first_directory)
+            second = Path(second_directory)
+            (first / "a.json").write_text(
+                json.dumps(_sample("sample-a").to_dict()), encoding="utf-8"
+            )
+            (second / "b.json").write_text(
+                json.dumps(_sample("sample-b").to_dict()), encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(ValueError, "same sample"):
+                compare_eval_runs(
+                    run_evaluation_directory(first, _perfect_prediction),
+                    run_evaluation_directory(second, _perfect_prediction),
+                )
 
 
 if __name__ == "__main__":
