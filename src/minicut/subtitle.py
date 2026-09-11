@@ -49,6 +49,7 @@ class SubtitleLayoutPolicy:
     max_lines: int = 2
     min_duration_ms: int = 800
     max_duration_ms: int = 5_000
+    normalize_chinese_punctuation: bool = True
 
     def __post_init__(self) -> None:
         if self.max_characters_per_line <= 0 or self.max_lines <= 0:
@@ -115,6 +116,14 @@ def build_word_cues(
 
 
 _TERMINAL_PUNCTUATION = frozenset("。！？!?…")
+_CHINESE_PUNCTUATION = {
+    ",": "，",
+    ".": "。",
+    ":": "：",
+    ";": "；",
+    "!": "！",
+    "?": "？",
+}
 
 
 def _is_punctuation(text: str) -> bool:
@@ -127,26 +136,63 @@ def _append_token(current: str, token: str) -> str:
     needs_space = (
         bool(current)
         and not _is_punctuation(token)
-        and current[-1].isascii()
-        and current[-1].isalnum()
         and token[0].isascii()
         and token[0].isalnum()
+        and (
+            (current[-1].isascii() and current[-1].isalnum()) or current[-1] in ",.!?;:"
+        )
     )
     return f"{current}{' ' if needs_space else ''}{token}"
 
 
-def _wrap_tokens(tokens: tuple[str, ...], max_characters: int) -> tuple[str, ...]:
-    lines: list[str] = []
+def _contains_cjk(text: str) -> bool:
+    return any("\u3400" <= character <= "\u9fff" for character in text)
+
+
+def _normalize_punctuation(tokens: tuple[str, ...]) -> tuple[str, ...]:
+    normalized: list[str] = []
+    for index, token in enumerate(tokens):
+        previous = tokens[index - 1] if index else ""
+        following = tokens[index + 1] if index + 1 < len(tokens) else ""
+        if token in _CHINESE_PUNCTUATION and (
+            _contains_cjk(previous) or _contains_cjk(following)
+        ):
+            token = _CHINESE_PUNCTUATION[token]
+        normalized.append(token)
+    return tuple(normalized)
+
+
+def _join_tokens(tokens: list[str]) -> str:
+    text = ""
+    for token in tokens:
+        text = _append_token(text, token)
+    return text
+
+
+def _wrap_tokens(
+    tokens: tuple[str, ...],
+    max_characters: int,
+    *,
+    normalize_chinese_punctuation: bool,
+) -> tuple[str, ...]:
+    if normalize_chinese_punctuation:
+        tokens = _normalize_punctuation(tokens)
+    lines: list[list[str]] = []
     for token in tokens:
         if not lines:
-            lines.append(token)
+            lines.append([token])
             continue
-        candidate = _append_token(lines[-1], token)
-        if len(candidate) <= max_characters or _is_punctuation(token):
-            lines[-1] = candidate
+        candidate = _join_tokens([*lines[-1], token])
+        if len(candidate) <= max_characters:
+            lines[-1].append(token)
+        elif _is_punctuation(token) and len(lines[-1]) > 1:
+            previous_token = lines[-1].pop()
+            lines.append([previous_token, token])
+        elif _is_punctuation(token):
+            lines[-1].append(token)
         else:
-            lines.append(token)
-    return tuple(lines)
+            lines.append([token])
+    return tuple(_join_tokens(line) for line in lines)
 
 
 def build_readable_cues(
@@ -166,7 +212,15 @@ def build_readable_cues(
         if current:
             tokens = tuple(item.text for item in (*current, word))
             exceeds_lines = (
-                len(_wrap_tokens(tokens, policy.max_characters_per_line))
+                len(
+                    _wrap_tokens(
+                        tokens,
+                        policy.max_characters_per_line,
+                        normalize_chinese_punctuation=(
+                            policy.normalize_chinese_punctuation
+                        ),
+                    )
+                )
                 > policy.max_lines
             )
             exceeds_duration = (
@@ -197,6 +251,7 @@ def build_readable_cues(
         lines = _wrap_tokens(
             tuple(word.text for word in group),
             policy.max_characters_per_line,
+            normalize_chinese_punctuation=policy.normalize_chinese_punctuation,
         )
         cues.append(SubtitleCue(start_ms, end_ms, "\n".join(lines)))
     result = tuple(cues)

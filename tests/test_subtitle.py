@@ -205,6 +205,41 @@ class SrtSerializationTest(unittest.TestCase):
 
 
 class ReadableSubtitleLayoutTest(unittest.TestCase):
+    def test_keeps_chinese_punctuation_with_text_without_exceeding_line_limit(
+        self,
+    ) -> None:
+        words = (
+            MappedWord("w1", "一二三四", 0, 200, "clip:0"),
+            MappedWord("w2", "五六", 220, 400, "clip:0"),
+            MappedWord("w3", ",", 400, 450, "clip:0"),
+        )
+
+        cues = build_readable_cues(
+            words,
+            1_000,
+            SubtitleLayoutPolicy(
+                max_characters_per_line=6,
+                max_lines=2,
+                min_duration_ms=100,
+                max_duration_ms=2_000,
+                normalize_chinese_punctuation=True,
+            ),
+        )
+
+        self.assertEqual(cues[0].text, "一二三四\n五六，")
+        self.assertTrue(all(len(line) <= 6 for line in cues[0].text.splitlines()))
+
+    def test_preserves_ascii_punctuation_in_english_text(self) -> None:
+        words = (
+            MappedWord("w1", "hello", 0, 200, "clip:0"),
+            MappedWord("w2", ",", 200, 220, "clip:0"),
+            MappedWord("w3", "world", 240, 500, "clip:0"),
+        )
+
+        cues = build_readable_cues(words, 1_000)
+
+        self.assertEqual(cues[0].text, "hello, world")
+
     def test_groups_mixed_language_wraps_lines_and_attaches_punctuation(self) -> None:
         words = (
             MappedWord("w1", "你好", 0, 200, "clip:0"),
