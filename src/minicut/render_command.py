@@ -233,6 +233,7 @@ class RenderCommandBuilder:
         encoding: RenderEncoding = _DEFAULT_ENCODING,
         audio_metadata: AudioOutputMetadata = _DEFAULT_AUDIO_METADATA,
         audio_fade: AudioFade = _DEFAULT_AUDIO_FADE,
+        denoise_filter: str | None = None,
     ) -> tuple[str, ...]:
         """Build an exact single-clip input-seek command as an argv tuple."""
         if len(timeline.clips) != 1:
@@ -247,11 +248,14 @@ class RenderCommandBuilder:
             raise ValueError("clip must reference exactly one known media asset")
         asset = matching_assets[0]
         stream_types = {stream.stream_type for stream in asset.streams}
-        audio_filters = (
-            _audio_fade_filters(clip.source_range.duration_ms, audio_fade)
-            if StreamType.AUDIO in stream_types
-            else ()
-        )
+        if denoise_filter is not None and not denoise_filter.strip():
+            raise ValueError("audio denoise filter must not be blank")
+        audio_filters = ()
+        if StreamType.AUDIO in stream_types:
+            audio_filters = (
+                *((denoise_filter,) if denoise_filter is not None else ()),
+                *_audio_fade_filters(clip.source_range.duration_ms, audio_fade),
+            )
         audio_filter_arguments = (
             ("-af", ",".join(audio_filters)) if audio_filters else ()
         )
@@ -285,12 +289,15 @@ class RenderCommandBuilder:
         encoding: RenderEncoding = _DEFAULT_ENCODING,
         audio_metadata: AudioOutputMetadata = _DEFAULT_AUDIO_METADATA,
         audio_fade: AudioFade = _DEFAULT_AUDIO_FADE,
+        denoise_filter: str | None = None,
     ) -> tuple[str, ...]:
         """Build a trim-and-concat filter graph for two or more clips."""
         if len(timeline.clips) < 2:
             raise ValueError("multi-clip render requires at least two clips")
         output_url = _local_file_url(output_path, label="render output")
         validate_timeline_for_render(timeline, assets, requirements)
+        if denoise_filter is not None and not denoise_filter.strip():
+            raise ValueError("audio denoise filter must not be blank")
 
         assets_by_id = {asset.asset_id: asset for asset in assets}
         referenced_asset_ids = tuple(
@@ -335,6 +342,8 @@ class RenderCommandBuilder:
                     f"aresample={audio_metadata.sample_rate},"
                     f"aformat=channel_layouts={audio_metadata.channel_layout}"
                 ]
+                if denoise_filter is not None:
+                    audio_filters.append("," + denoise_filter)
                 fades = _audio_fade_filters(clip.source_range.duration_ms, audio_fade)
                 if fades:
                     audio_filters.append("," + ",".join(fades))

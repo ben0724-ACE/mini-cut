@@ -2,10 +2,14 @@
 
 import json
 import re
+import subprocess
 from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path
 from typing import cast
+
+from minicut.errors import ProcessingError
+from minicut.probe import ProcessRunner, run_process
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +113,31 @@ def parse_loudness_measurement(stderr: str) -> LoudnessMeasurement:
         raise ValueError("FFmpeg loudness measurement JSON is invalid") from error
 
 
+def measure_loudness(
+    source_path: str | Path,
+    profile: LoudnessProfile = _DEFAULT_LOUDNESS_PROFILE,
+    *,
+    runner: ProcessRunner = run_process,
+    executable: str = "ffmpeg",
+    timeout_seconds: float = 30,
+) -> LoudnessMeasurement:
+    command = build_loudness_analysis_command(
+        source_path, profile, executable=executable
+    )
+    try:
+        result = runner(command, timeout_seconds)
+    except FileNotFoundError as error:
+        raise ProcessingError("FFmpeg executable is not available.") from error
+    except subprocess.TimeoutExpired as error:
+        raise ProcessingError("FFmpeg loudness analysis timed out.") from error
+    if result.return_code != 0:
+        raise ProcessingError("FFmpeg could not analyze audio loudness.")
+    try:
+        return parse_loudness_measurement(result.stderr)
+    except ValueError as error:
+        raise ProcessingError("FFmpeg returned invalid loudness data.") from error
+
+
 def build_loudness_normalization_command(
     source_path: str | Path,
     output_path: str | Path,
@@ -156,5 +185,6 @@ __all__ = [
     "LoudnessProfile",
     "build_loudness_analysis_command",
     "build_loudness_normalization_command",
+    "measure_loudness",
     "parse_loudness_measurement",
 ]

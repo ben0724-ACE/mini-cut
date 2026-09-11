@@ -279,6 +279,9 @@ class RenderCommandTest(unittest.TestCase):
                 "burned",
                 "--audio-crossfade-ms",
                 "25",
+                "--denoiser",
+                "afftdn",
+                "--normalize-loudness",
             ],
             services=CliServices(FakeInitProject(), render=fake),
         )
@@ -286,6 +289,9 @@ class RenderCommandTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake.requests[0].subtitle_mode, SubtitleMode.BURNED)
         self.assertEqual(fake.requests[0].audio_crossfade_ms, 25)
+        self.assertEqual(fake.requests[0].denoiser_id, "afftdn")
+        assert fake.requests[0].loudness_profile is not None
+        self.assertEqual(fake.requests[0].loudness_profile.target_lufs, -16)
 
     def test_invalid_timeout_exits_before_render_service(self) -> None:
         fake = FakeRender()

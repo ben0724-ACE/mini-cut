@@ -5,8 +5,10 @@ from minicut.audio_loudness import (
     LoudnessProfile,
     build_loudness_analysis_command,
     build_loudness_normalization_command,
+    measure_loudness,
     parse_loudness_measurement,
 )
+from minicut.probe import ProcessResult
 
 
 class LoudnessCommandTest(unittest.TestCase):
@@ -59,6 +61,25 @@ class LoudnessCommandTest(unittest.TestCase):
                     profile()
         with self.assertRaisesRegex(ValueError, "measurement"):
             parse_loudness_measurement("no loudness JSON")
+
+    def test_measurement_executes_injected_runner(self) -> None:
+        calls: list[tuple[tuple[str, ...], float]] = []
+
+        def runner(command: tuple[str, ...], timeout_seconds: float) -> ProcessResult:
+            calls.append((command, timeout_seconds))
+            return ProcessResult(
+                0,
+                "",
+                '{"input_i":"-20","input_tp":"-5","input_lra":"2",'
+                '"input_thresh":"-30","target_offset":"0"}',
+            )
+
+        measured = measure_loudness(
+            "/media/input.mp4", LoudnessProfile(), runner=runner, timeout_seconds=12
+        )
+
+        self.assertEqual(measured.input_lufs, -20)
+        self.assertEqual(calls[0][1], 12)
 
 
 if __name__ == "__main__":

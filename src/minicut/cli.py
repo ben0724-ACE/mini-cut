@@ -35,6 +35,7 @@ from minicut.application import (
     TranscribeProjectUseCase,
     TranscribeRequest,
 )
+from minicut.audio_loudness import LoudnessProfile
 from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError
 from minicut.render_command import SubtitleMode
@@ -139,6 +140,11 @@ def main(
         default=SubtitleMode.SOFT.value,
     )
     render_parser.add_argument("--audio-crossfade-ms", type=_nonnegative_int, default=0)
+    render_parser.add_argument("--denoiser", default="none")
+    render_parser.add_argument("--normalize-loudness", action="store_true")
+    render_parser.add_argument("--loudness-target-lufs", type=float, default=-16.0)
+    render_parser.add_argument("--loudness-true-peak-dbfs", type=float, default=-1.5)
+    render_parser.add_argument("--loudness-tolerance-lu", type=float, default=1.0)
     inspect_parser = commands.add_parser("inspect", help="Inspect project artifacts.")
     inspect_parser.add_argument("project_directory", type=Path)
     inspect_parser.add_argument("--asset-id")
@@ -155,6 +161,11 @@ def main(
         default=EditIntensity.BALANCED.value,
     )
     edit_parser.add_argument("--audio-crossfade-ms", type=_nonnegative_int, default=0)
+    edit_parser.add_argument("--denoiser", default="none")
+    edit_parser.add_argument("--normalize-loudness", action="store_true")
+    edit_parser.add_argument("--loudness-target-lufs", type=float, default=-16.0)
+    edit_parser.add_argument("--loudness-true-peak-dbfs", type=float, default=-1.5)
+    edit_parser.add_argument("--loudness-tolerance-lu", type=float, default=1.0)
     edit_parser.add_argument("--style", default="concise")
     edit_parser.add_argument("--planner", choices=("rule", "deepseek"), default="rule")
     edit_parser.add_argument("--output", required=True, type=Path)
@@ -217,6 +228,16 @@ def main(
                         cancellation,
                         SubtitleMode(cast(str, parsed.subtitle_mode)),
                         cast(int, parsed.audio_crossfade_ms),
+                        cast(str, parsed.denoiser),
+                        (
+                            LoudnessProfile(
+                                cast(float, parsed.loudness_target_lufs),
+                                cast(float, parsed.loudness_true_peak_dbfs),
+                                tolerance_lu=cast(float, parsed.loudness_tolerance_lu),
+                            )
+                            if cast(bool, parsed.normalize_loudness)
+                            else None
+                        ),
                     )
                 )
             finally:
@@ -288,6 +309,16 @@ def main(
                     float(cast(int, parsed.timeout)),
                     subtitle_mode=SubtitleMode(cast(str, parsed.subtitle_mode)),
                     audio_crossfade_ms=cast(int, parsed.audio_crossfade_ms),
+                    denoiser_id=cast(str, parsed.denoiser),
+                    loudness_profile=(
+                        LoudnessProfile(
+                            cast(float, parsed.loudness_target_lufs),
+                            cast(float, parsed.loudness_true_peak_dbfs),
+                            tolerance_lu=cast(float, parsed.loudness_tolerance_lu),
+                        )
+                        if cast(bool, parsed.normalize_loudness)
+                        else None
+                    ),
                 )
             )
             print(

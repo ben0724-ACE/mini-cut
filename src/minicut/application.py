@@ -8,6 +8,17 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Protocol, cast
 
+from minicut.audio_denoise import (
+    AudioDenoiser,
+    build_denoiser_registry,
+    resolve_denoiser,
+)
+from minicut.audio_loudness import (
+    LoudnessMeasurement,
+    LoudnessProfile,
+    build_loudness_normalization_command,
+    measure_loudness,
+)
 from minicut.deepseek_provider import create_deepseek_planner_from_env
 from minicut.edit_plan import (
     EditAction,
@@ -562,6 +573,8 @@ class RenderRequest:
     cancellation: CancellationToken | None = None
     subtitle_mode: SubtitleMode = SubtitleMode.SOFT
     audio_crossfade_ms: int = 0
+    denoiser_id: str = "none"
+    loudness_profile: LoudnessProfile | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -585,6 +598,15 @@ class TimelineRenderer(Protocol):
         timeout_seconds: float,
         cancellation: CancellationToken | None = None,
     ) -> object: ...
+
+
+LoudnessAnalyzer = Callable[[Path, LoudnessProfile, float], LoudnessMeasurement]
+
+
+def _measure_loudness_for_render(
+    path: Path, profile: LoudnessProfile, timeout_seconds: float
+) -> LoudnessMeasurement:
+    return measure_loudness(path, profile, timeout_seconds=timeout_seconds)
 
 
 def _read_plan_artifact(
@@ -714,15 +736,24 @@ class RenderProjectUseCase:
         *,
         command_builder: RenderCommandBuilder | None = None,
         renderer: TimelineRenderer | None = None,
+        denoisers: tuple[AudioDenoiser, ...] = (),
+        loudness_analyzer: LoudnessAnalyzer = _measure_loudness_for_render,
     ) -> None:
         self._command_builder = command_builder or RenderCommandBuilder()
         self._renderer = renderer or FfmpegRenderer()
+        self._denoisers = build_denoiser_registry(denoisers)
+        self._loudness_analyzer = loudness_analyzer
 
     def execute(self, request: RenderRequest) -> RenderResult:
         if request.timeout_seconds <= 0:
             raise UserInputError("Render timeout must be positive")
         if request.audio_crossfade_ms < 0:
             raise UserInputError("Audio crossfade duration must not be negative")
+        try:
+            denoiser = resolve_denoiser(request.denoiser_id, self._denoisers)
+        except ValueError as error:
+            raise UserInputError(str(error)) from error
+        denoise_filter = None if denoiser is None else denoiser.ffmpeg_filter()
         manifest = ProjectRepository(request.project_directory).read()
         assets = tuple(
             asset for asset in manifest.assets if asset.asset_id == request.asset_id
@@ -760,6 +791,8 @@ class RenderProjectUseCase:
             plan_revision,
             request.subtitle_mode,
             request.audio_crossfade_ms,
+            request.denoiser_id,
+            request.loudness_profile,
         ):
             return RenderResult(
                 request.output_path.absolute(),
@@ -768,6 +801,11 @@ class RenderProjectUseCase:
                 True,
             )
         stream_types = {stream.stream_type for stream in asset.streams}
+        if (
+            request.loudness_profile is not None
+            and StreamType.AUDIO not in stream_types
+        ):
+            raise UserInputError("Loudness normalization requires an audio stream")
         if (
             request.subtitle_mode is SubtitleMode.BURNED
             and StreamType.VIDEO not in stream_types
@@ -784,6 +822,7 @@ class RenderProjectUseCase:
                 (asset,),
                 str(request.output_path),
                 audio_fade=AudioFade(request.audio_crossfade_ms),
+                denoise_filter=denoise_filter,
             )
         else:
             command = self._command_builder.build_multi_clip(
@@ -792,6 +831,7 @@ class RenderProjectUseCase:
                 str(request.output_path),
                 requirements,
                 audio_fade=AudioFade(request.audio_crossfade_ms),
+                denoise_filter=denoise_filter,
             )
         self._renderer.render_to_path(
             command,
@@ -799,6 +839,24 @@ class RenderProjectUseCase:
             timeout_seconds=request.timeout_seconds,
             cancellation=request.cancellation,
         )
+        if request.loudness_profile is not None:
+            measurement = self._loudness_analyzer(
+                request.output_path,
+                request.loudness_profile,
+                request.timeout_seconds,
+            )
+            loudness_command = build_loudness_normalization_command(
+                request.output_path,
+                request.output_path,
+                request.loudness_profile,
+                measurement,
+            )
+            self._renderer.render_to_path(
+                loudness_command,
+                request.output_path,
+                timeout_seconds=request.timeout_seconds,
+                cancellation=request.cancellation,
+            )
         mapped_words = map_retained_words(timeline, segments, transcript.words)
         cues = build_readable_cues(mapped_words, timeline.estimated_duration_ms)
         try:
@@ -830,6 +888,8 @@ class RenderProjectUseCase:
                 "plan_revision": plan_revision,
                 "subtitle_mode": request.subtitle_mode.value,
                 "audio_crossfade_ms": request.audio_crossfade_ms,
+                "denoiser_id": request.denoiser_id,
+                "loudness_profile": _loudness_profile_record(request.loudness_profile),
             },
         )
         return RenderResult(
@@ -837,6 +897,19 @@ class RenderProjectUseCase:
             subtitle_path.absolute(),
             timeline.estimated_duration_ms,
         )
+
+
+def _loudness_profile_record(
+    profile: LoudnessProfile | None,
+) -> dict[str, float] | None:
+    if profile is None:
+        return None
+    return {
+        "target_lufs": profile.target_lufs,
+        "true_peak_dbfs": profile.true_peak_dbfs,
+        "loudness_range_lu": profile.loudness_range_lu,
+        "tolerance_lu": profile.tolerance_lu,
+    }
 
 
 def _can_reuse_render(
@@ -848,6 +921,8 @@ def _can_reuse_render(
     plan_revision: int,
     subtitle_mode: SubtitleMode,
     audio_crossfade_ms: int,
+    denoiser_id: str,
+    loudness_profile: LoudnessProfile | None,
 ) -> bool:
     if (
         not record_path.is_file()
@@ -866,6 +941,9 @@ def _can_reuse_render(
             and record.get("plan_revision") == plan_revision
             and record.get("subtitle_mode") == subtitle_mode.value
             and record.get("audio_crossfade_ms") == audio_crossfade_ms
+            and record.get("denoiser_id") == denoiser_id
+            and record.get("loudness_profile")
+            == _loudness_profile_record(loudness_profile)
             and record_path.stat().st_mtime_ns >= plan_path.stat().st_mtime_ns
         )
     except (KeyError, OSError, TypeError, UnicodeError, ValueError):
@@ -889,6 +967,8 @@ class EditRequest:
     cancellation: CancellationToken | None = None
     subtitle_mode: SubtitleMode = SubtitleMode.SOFT
     audio_crossfade_ms: int = 0
+    denoiser_id: str = "none"
+    loudness_profile: LoudnessProfile | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -996,6 +1076,8 @@ class EditProjectUseCase:
                     request.cancellation,
                     request.subtitle_mode,
                     request.audio_crossfade_ms,
+                    request.denoiser_id,
+                    request.loudness_profile,
                 )
             )
             check_cancelled("render")

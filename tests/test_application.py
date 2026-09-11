@@ -23,6 +23,7 @@ from minicut.application import (
     TranscribeRequest,
     TranscribeResult,
 )
+from minicut.audio_loudness import LoudnessMeasurement, LoudnessProfile
 from minicut.edit_plan import EditAction, EditBrief, EditIntensity, EditPlan
 from minicut.errors import ProcessingError, UserInputError
 from minicut.media import MediaAsset, StreamInfo, StreamType
@@ -220,24 +221,41 @@ class RenderProjectUseCaseTest(unittest.TestCase):
             renderer = FakeTimelineRenderer()
             output_path = project_directory / "exports/result.mp4"
 
-            result = RenderProjectUseCase(renderer=renderer).execute(
+            def analyze_loudness(
+                path: Path, profile: LoudnessProfile, timeout_seconds: float
+            ) -> LoudnessMeasurement:
+                self.assertEqual(path, output_path)
+                self.assertEqual(profile.target_lufs, -16)
+                self.assertEqual(timeout_seconds, 30)
+                return LoudnessMeasurement(-22, -5, 2, -32, 0)
+
+            result = RenderProjectUseCase(
+                renderer=renderer, loudness_analyzer=analyze_loudness
+            ).execute(
                 RenderRequest(
                     project_directory,
                     "asset-1",
                     output_path,
                     30,
                     audio_crossfade_ms=25,
+                    denoiser_id="afftdn",
+                    loudness_profile=LoudnessProfile(),
                 )
             )
 
             self.assertEqual(result.duration_ms, 400)
-            self.assertEqual(len(renderer.calls), 2)
+            self.assertEqual(len(renderer.calls), 3)
             command, rendered_path, timeout = renderer.calls[0]
             self.assertEqual(rendered_path, output_path)
             self.assertEqual(timeout, 30)
             self.assertIn("file:///media/input.mov", command)
             self.assertIn("afade=t=in:st=0:d=0.025", command[command.index("-af") + 1])
-            subtitle_command, subtitle_output, _ = renderer.calls[1]
+            self.assertIn("afftdn=nr=12:nf=-50", command[command.index("-af") + 1])
+            loudness_command, _, _ = renderer.calls[1]
+            self.assertIn(
+                "measured_I=-22", loudness_command[loudness_command.index("-af") + 1]
+            )
+            subtitle_command, subtitle_output, _ = renderer.calls[2]
             self.assertIn("mov_text", subtitle_command)
             self.assertEqual(subtitle_output, output_path)
             self.assertEqual(

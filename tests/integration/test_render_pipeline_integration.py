@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from minicut.audio_denoise import build_denoiser_registry, resolve_denoiser
 from minicut.media import MediaAsset, StreamType, TimeRange
 from minicut.probe import probe_media
 from minicut.render_command import (
@@ -89,6 +90,8 @@ class RealRenderPipelineTest(unittest.TestCase):
                 ),
                 1_000,
             )
+            denoiser = resolve_denoiser("afftdn", build_denoiser_registry())
+            assert denoiser is not None
             command = RenderCommandBuilder().build_multi_clip(
                 timeline,
                 (asset,),
@@ -96,6 +99,7 @@ class RealRenderPipelineTest(unittest.TestCase):
                 TimelineTrackRequirements(require_audio=True, require_video=True),
                 VideoOutputMetadata(320, 240, "25"),
                 audio_fade=AudioFade(10),
+                denoise_filter=denoiser.ffmpeg_filter(),
             )
             FfmpegRenderer().render_to_path(
                 command,
