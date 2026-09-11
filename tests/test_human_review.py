@@ -2,6 +2,8 @@ import unittest
 
 from minicut.human_review import (
     HUMAN_REVIEW_RUBRIC_VERSION,
+    BlindReviewRecord,
+    CriterionReview,
     ReviewCriterion,
     create_blind_review_rubric,
 )
@@ -47,6 +49,46 @@ class BlindReviewRubricTest(unittest.TestCase):
         for hidden_term in ("model", "provider", "planner", "policy", "版本", "模型"):
             with self.subTest(hidden_term=hidden_term):
                 self.assertNotIn(hidden_term, visible_text.lower())
+
+
+class BlindReviewRecordTest(unittest.TestCase):
+    def test_records_all_scores_and_round_trips_without_model_identity(self) -> None:
+        record = BlindReviewRecord(
+            sample_id="sample-01",
+            reviewer_id="reviewer-a",
+            reviews=(
+                CriterionReview(
+                    ReviewCriterion.CUT_NATURALNESS,
+                    2,
+                    ("clip-02",),
+                    "句尾被截断。",
+                ),
+                CriterionReview(ReviewCriterion.NARRATIVE_CONTINUITY, 4),
+                CriterionReview(ReviewCriterion.REDUNDANCY, 3),
+                CriterionReview(ReviewCriterion.OVERALL_USABILITY, 4),
+            ),
+        )
+
+        restored = BlindReviewRecord.from_dict(record.to_dict())
+
+        self.assertEqual(restored, record)
+        self.assertEqual(restored.rubric_version, HUMAN_REVIEW_RUBRIC_VERSION)
+        self.assertNotIn("model", record.to_dict())
+        self.assertNotIn("planner", record.to_dict())
+
+    def test_rejects_incomplete_duplicate_or_unlocated_low_scores(self) -> None:
+        complete = tuple(CriterionReview(criterion, 4) for criterion in ReviewCriterion)
+
+        with self.assertRaisesRegex(ValueError, "every criterion"):
+            BlindReviewRecord("sample-01", "reviewer-a", complete[:-1])
+        with self.assertRaisesRegex(ValueError, "every criterion"):
+            BlindReviewRecord(
+                "sample-01",
+                "reviewer-a",
+                (*complete[:-1], complete[0]),
+            )
+        with self.assertRaisesRegex(ValueError, "low review score"):
+            CriterionReview(ReviewCriterion.REDUNDANCY, 2)
 
 
 if __name__ == "__main__":

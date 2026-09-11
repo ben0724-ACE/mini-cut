@@ -1,7 +1,9 @@
 """Model-blind human review rubric for rendered edit quality."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import cast
 
 HUMAN_REVIEW_RUBRIC_VERSION = "human-review-v1"
 
@@ -50,6 +52,87 @@ class BlindReviewRubric:
         actual = tuple(dimension.criterion for dimension in self.criteria)
         if actual != expected:
             raise ValueError("review rubric must contain every criterion in order")
+
+
+def _validate_opaque_id(value: str, field: str) -> None:
+    if not value or any(
+        character
+        not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+        for character in value
+    ):
+        raise ValueError(f"{field} must be an opaque identifier, not a path")
+
+
+@dataclass(frozen=True, slots=True)
+class CriterionReview:
+    criterion: ReviewCriterion
+    score: int
+    timeline_clip_ids: tuple[str, ...] = ()
+    note: str = ""
+
+    def __post_init__(self) -> None:
+        if isinstance(self.score, bool) or self.score not in range(1, 6):
+            raise ValueError("review score must be between 1 and 5")
+        if len(set(self.timeline_clip_ids)) != len(self.timeline_clip_ids):
+            raise ValueError("review Timeline clip IDs must be unique")
+        for clip_id in self.timeline_clip_ids:
+            _validate_opaque_id(clip_id, "Timeline clip ID")
+        if self.score <= 2 and not self.timeline_clip_ids:
+            raise ValueError("low review score must identify a Timeline clip")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "criterion": self.criterion.value,
+            "score": self.score,
+            "timeline_clip_ids": list(self.timeline_clip_ids),
+            "note": self.note,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "CriterionReview":
+        return cls(
+            ReviewCriterion(cast(str, data["criterion"])),
+            cast(int, data["score"]),
+            tuple(cast(list[str], data.get("timeline_clip_ids", []))),
+            cast(str, data.get("note", "")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class BlindReviewRecord:
+    sample_id: str
+    reviewer_id: str
+    reviews: tuple[CriterionReview, ...]
+    rubric_version: str = HUMAN_REVIEW_RUBRIC_VERSION
+
+    def __post_init__(self) -> None:
+        _validate_opaque_id(self.sample_id, "sample ID")
+        _validate_opaque_id(self.reviewer_id, "reviewer ID")
+        if self.rubric_version != HUMAN_REVIEW_RUBRIC_VERSION:
+            raise ValueError("unsupported human review rubric version")
+        actual = tuple(review.criterion for review in self.reviews)
+        if actual != tuple(ReviewCriterion):
+            raise ValueError("review record must contain every criterion in order")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "rubric_version": self.rubric_version,
+            "sample_id": self.sample_id,
+            "reviewer_id": self.reviewer_id,
+            "reviews": [review.to_dict() for review in self.reviews],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "BlindReviewRecord":
+        return cls(
+            sample_id=cast(str, data["sample_id"]),
+            reviewer_id=cast(str, data["reviewer_id"]),
+            reviews=tuple(
+                CriterionReview.from_dict(item)
+                for item in cast(list[dict[str, object]], data["reviews"])
+            ),
+            rubric_version=cast(str, data["rubric_version"]),
+        )
 
 
 def _anchors(*descriptions: str) -> tuple[ScoreAnchor, ...]:
@@ -114,7 +197,9 @@ def create_blind_review_rubric() -> BlindReviewRubric:
 
 __all__ = [
     "HUMAN_REVIEW_RUBRIC_VERSION",
+    "BlindReviewRecord",
     "BlindReviewRubric",
+    "CriterionReview",
     "ReviewCriterion",
     "ReviewDimension",
     "ScoreAnchor",
