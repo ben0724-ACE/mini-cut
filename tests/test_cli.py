@@ -277,12 +277,15 @@ class RenderCommandTest(unittest.TestCase):
                 "/exports/result.mp4",
                 "--subtitle-mode",
                 "burned",
+                "--audio-crossfade-ms",
+                "25",
             ],
             services=CliServices(FakeInitProject(), render=fake),
         )
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake.requests[0].subtitle_mode, SubtitleMode.BURNED)
+        self.assertEqual(fake.requests[0].audio_crossfade_ms, 25)
 
     def test_invalid_timeout_exits_before_render_service(self) -> None:
         fake = FakeRender()

@@ -32,7 +32,7 @@ from minicut.open_source_whisper import (
     transcribe_with_open_source_whisper,
 )
 from minicut.project import ProjectManifest, ProjectRepository
-from minicut.render_command import RenderCommandBuilder, SubtitleMode
+from minicut.render_command import AudioFade, RenderCommandBuilder, SubtitleMode
 from minicut.renderer import FfmpegRenderer
 from minicut.rule_planner import RulePlanner
 from minicut.segmentation import build_utterances
@@ -561,6 +561,7 @@ class RenderRequest:
     timeout_seconds: float
     cancellation: CancellationToken | None = None
     subtitle_mode: SubtitleMode = SubtitleMode.SOFT
+    audio_crossfade_ms: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -720,6 +721,8 @@ class RenderProjectUseCase:
     def execute(self, request: RenderRequest) -> RenderResult:
         if request.timeout_seconds <= 0:
             raise UserInputError("Render timeout must be positive")
+        if request.audio_crossfade_ms < 0:
+            raise UserInputError("Audio crossfade duration must not be negative")
         manifest = ProjectRepository(request.project_directory).read()
         assets = tuple(
             asset for asset in manifest.assets if asset.asset_id == request.asset_id
@@ -756,6 +759,7 @@ class RenderProjectUseCase:
             timeline.estimated_duration_ms,
             plan_revision,
             request.subtitle_mode,
+            request.audio_crossfade_ms,
         ):
             return RenderResult(
                 request.output_path.absolute(),
@@ -776,7 +780,10 @@ class RenderProjectUseCase:
         validate_timeline_for_render(timeline, (asset,), requirements)
         if len(timeline.clips) == 1:
             command = self._command_builder.build_single_clip(
-                timeline, (asset,), str(request.output_path)
+                timeline,
+                (asset,),
+                str(request.output_path),
+                audio_fade=AudioFade(request.audio_crossfade_ms),
             )
         else:
             command = self._command_builder.build_multi_clip(
@@ -784,6 +791,7 @@ class RenderProjectUseCase:
                 (asset,),
                 str(request.output_path),
                 requirements,
+                audio_fade=AudioFade(request.audio_crossfade_ms),
             )
         self._renderer.render_to_path(
             command,
@@ -821,6 +829,7 @@ class RenderProjectUseCase:
                 "duration_ms": timeline.estimated_duration_ms,
                 "plan_revision": plan_revision,
                 "subtitle_mode": request.subtitle_mode.value,
+                "audio_crossfade_ms": request.audio_crossfade_ms,
             },
         )
         return RenderResult(
@@ -838,6 +847,7 @@ def _can_reuse_render(
     duration_ms: int,
     plan_revision: int,
     subtitle_mode: SubtitleMode,
+    audio_crossfade_ms: int,
 ) -> bool:
     if (
         not record_path.is_file()
@@ -855,6 +865,7 @@ def _can_reuse_render(
             and record["duration_ms"] == duration_ms
             and record.get("plan_revision") == plan_revision
             and record.get("subtitle_mode") == subtitle_mode.value
+            and record.get("audio_crossfade_ms") == audio_crossfade_ms
             and record_path.stat().st_mtime_ns >= plan_path.stat().st_mtime_ns
         )
     except (KeyError, OSError, TypeError, UnicodeError, ValueError):
@@ -877,6 +888,7 @@ class EditRequest:
     on_progress: "EditProgressReporter" = lambda event: None
     cancellation: CancellationToken | None = None
     subtitle_mode: SubtitleMode = SubtitleMode.SOFT
+    audio_crossfade_ms: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -983,6 +995,7 @@ class EditProjectUseCase:
                     request.timeout_seconds,
                     request.cancellation,
                     request.subtitle_mode,
+                    request.audio_crossfade_ms,
                 )
             )
             check_cancelled("render")

@@ -221,7 +221,13 @@ class RenderProjectUseCaseTest(unittest.TestCase):
             output_path = project_directory / "exports/result.mp4"
 
             result = RenderProjectUseCase(renderer=renderer).execute(
-                RenderRequest(project_directory, "asset-1", output_path, 30)
+                RenderRequest(
+                    project_directory,
+                    "asset-1",
+                    output_path,
+                    30,
+                    audio_crossfade_ms=25,
+                )
             )
 
             self.assertEqual(result.duration_ms, 400)
@@ -230,6 +236,7 @@ class RenderProjectUseCaseTest(unittest.TestCase):
             self.assertEqual(rendered_path, output_path)
             self.assertEqual(timeout, 30)
             self.assertIn("file:///media/input.mov", command)
+            self.assertIn("afade=t=in:st=0:d=0.025", command[command.index("-af") + 1])
             subtitle_command, subtitle_output, _ = renderer.calls[1]
             self.assertIn("mov_text", subtitle_command)
             self.assertEqual(subtitle_output, output_path)

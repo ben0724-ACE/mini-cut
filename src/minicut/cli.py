@@ -48,6 +48,13 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _nonnegative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("value must not be negative")
+    return parsed
+
+
 def _format_edit_progress(event: EditProgressEvent) -> str:
     detail = "reused" if event.reused else event.status
     duration = (
@@ -131,6 +138,7 @@ def main(
         choices=tuple(mode.value for mode in SubtitleMode),
         default=SubtitleMode.SOFT.value,
     )
+    render_parser.add_argument("--audio-crossfade-ms", type=_nonnegative_int, default=0)
     inspect_parser = commands.add_parser("inspect", help="Inspect project artifacts.")
     inspect_parser.add_argument("project_directory", type=Path)
     inspect_parser.add_argument("--asset-id")
@@ -146,6 +154,7 @@ def main(
         choices=tuple(intensity.value for intensity in EditIntensity),
         default=EditIntensity.BALANCED.value,
     )
+    edit_parser.add_argument("--audio-crossfade-ms", type=_nonnegative_int, default=0)
     edit_parser.add_argument("--style", default="concise")
     edit_parser.add_argument("--planner", choices=("rule", "deepseek"), default="rule")
     edit_parser.add_argument("--output", required=True, type=Path)
@@ -207,6 +216,7 @@ def main(
                         lambda event: print(_format_edit_progress(event), file=stdout),
                         cancellation,
                         SubtitleMode(cast(str, parsed.subtitle_mode)),
+                        cast(int, parsed.audio_crossfade_ms),
                     )
                 )
             finally:
@@ -277,6 +287,7 @@ def main(
                     cast(Path, parsed.output),
                     float(cast(int, parsed.timeout)),
                     subtitle_mode=SubtitleMode(cast(str, parsed.subtitle_mode)),
+                    audio_crossfade_ms=cast(int, parsed.audio_crossfade_ms),
                 )
             )
             print(
