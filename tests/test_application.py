@@ -225,11 +225,14 @@ class RenderProjectUseCaseTest(unittest.TestCase):
             )
 
             self.assertEqual(result.duration_ms, 400)
-            self.assertEqual(len(renderer.calls), 1)
+            self.assertEqual(len(renderer.calls), 2)
             command, rendered_path, timeout = renderer.calls[0]
             self.assertEqual(rendered_path, output_path)
             self.assertEqual(timeout, 30)
             self.assertIn("file:///media/input.mov", command)
+            subtitle_command, subtitle_output, _ = renderer.calls[1]
+            self.assertIn("mov_text", subtitle_command)
+            self.assertEqual(subtitle_output, output_path)
             self.assertEqual(
                 result.subtitle_path.read_text(encoding="utf-8"),
                 "1\n00:00:00,000 --> 00:00:00,400\n内容\n",
@@ -423,7 +426,7 @@ class ModifyPlanUseCaseTest(unittest.TestCase):
                 cast(dict[str, object], revised_history["plan"])
             )
             self.assertNotEqual(original_plan.decisions, history_plan.decisions)
-            self.assertEqual(len(renderer.calls), 2)
+            self.assertEqual(len(renderer.calls), 4)
             self.assertEqual(result.output_path, output_path)
             self.assertEqual(result.duration_ms, 300)
 
@@ -558,7 +561,7 @@ class EditProjectUseCaseTest(unittest.TestCase):
             self.assertEqual(second.reused_stages, ("transcribe", "plan", "render"))
             self.assertEqual(transcription_calls, 1)
             self.assertEqual(planning_calls, 1)
-            self.assertEqual(len(renderer.calls), 1)
+            self.assertEqual(len(renderer.calls), 2)
             self.assertEqual(
                 [(event.stage, event.status) for event in progress[:6]],
                 [

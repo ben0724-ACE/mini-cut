@@ -6,6 +6,7 @@ from minicut.render_command import (
     AudioOutputMetadata,
     RenderCommandBuilder,
     RenderEncoding,
+    SubtitleMode,
     VideoOutputMetadata,
 )
 from minicut.timeline import Clip, Timeline
@@ -427,6 +428,62 @@ class RenderPathSafetyTest(unittest.TestCase):
                         (asset,),
                         output_path,
                     )
+
+
+class SubtitleOutputCommandTest(unittest.TestCase):
+    def test_builds_selectable_soft_subtitle_track_without_reencoding_media(
+        self,
+    ) -> None:
+        command = RenderCommandBuilder().build_subtitle_output(
+            "/output/base.mp4",
+            "/output/result.srt",
+            "/output/result.mp4",
+            SubtitleMode.SOFT,
+        )
+
+        self.assertEqual(
+            command,
+            (
+                "ffmpeg",
+                "-nostdin",
+                "-y",
+                "-i",
+                "file:///output/base.mp4",
+                "-i",
+                "file:///output/result.srt",
+                "-map",
+                "0:v?",
+                "-map",
+                "0:a?",
+                "-map",
+                "1:0",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "copy",
+                "-c:s",
+                "mov_text",
+                "-metadata:s:s:0",
+                "language=zho",
+                "file:///output/result.mp4",
+            ),
+        )
+
+    def test_builds_optional_burned_subtitles_without_scale_or_trim(self) -> None:
+        command = RenderCommandBuilder().build_subtitle_output(
+            "/output/base.mp4",
+            "/output/字幕.srt",
+            "/output/result.mp4",
+            SubtitleMode.BURNED,
+        )
+
+        self.assertIn("-vf", command)
+        self.assertIn("subtitles=filename=", command[command.index("-vf") + 1])
+        self.assertIn("-c:v", command)
+        self.assertIn("libx264", command)
+        self.assertNotIn("scale=", " ".join(command))
+        self.assertNotIn("-ss", command)
+        self.assertNotIn("-t", command)
 
 
 if __name__ == "__main__":

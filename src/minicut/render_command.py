@@ -1,6 +1,7 @@
 """Pure FFmpeg command construction from validated timelines."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 from fractions import Fraction
 from pathlib import Path
 
@@ -98,6 +99,26 @@ _DEFAULT_AUDIO_FADE = AudioFade()
 _DEFAULT_ENCODING = RenderEncoding()
 
 
+class SubtitleMode(StrEnum):
+    SOFT = "soft"
+    BURNED = "burned"
+
+
+def _subtitle_filter_path(path: str) -> str:
+    value = str(Path(path).absolute())
+    for source, replacement in (
+        ("\\", "\\\\"),
+        (":", "\\:"),
+        ("'", "\\'"),
+        (",", "\\,"),
+        ("[", "\\["),
+        ("]", "\\]"),
+        (";", "\\;"),
+    ):
+        value = value.replace(source, replacement)
+    return value
+
+
 def _audio_fade_filters(
     clip_duration_ms: int, audio_fade: AudioFade
 ) -> tuple[str, ...]:
@@ -147,6 +168,62 @@ class RenderCommandBuilder:
     def __post_init__(self) -> None:
         if not self.executable.strip():
             raise ValueError("FFmpeg executable must not be blank")
+
+    def build_subtitle_output(
+        self,
+        input_path: str,
+        subtitle_path: str,
+        output_path: str,
+        mode: SubtitleMode,
+        encoding: RenderEncoding = _DEFAULT_ENCODING,
+    ) -> tuple[str, ...]:
+        """Attach a selectable track or render subtitle text into video frames."""
+        input_url = _local_file_url(input_path, label="subtitle video input")
+        subtitle_url = _local_file_url(subtitle_path, label="subtitle input")
+        output_url = _local_file_url(output_path, label="subtitle video output")
+        command = [self.executable, "-nostdin", "-y", "-i", input_url]
+        if mode is SubtitleMode.SOFT:
+            command.extend(
+                (
+                    "-i",
+                    subtitle_url,
+                    "-map",
+                    "0:v?",
+                    "-map",
+                    "0:a?",
+                    "-map",
+                    "1:0",
+                    "-c:v",
+                    "copy",
+                    "-c:a",
+                    "copy",
+                    "-c:s",
+                    "mov_text",
+                    "-metadata:s:s:0",
+                    "language=zho",
+                )
+            )
+        elif mode is SubtitleMode.BURNED:
+            command.extend(
+                (
+                    "-vf",
+                    f"subtitles=filename='{_subtitle_filter_path(subtitle_path)}'",
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "0:a?",
+                    "-c:v",
+                    encoding.video_codec,
+                    "-pix_fmt",
+                    encoding.pixel_format,
+                    "-c:a",
+                    "copy",
+                )
+            )
+        else:
+            raise ValueError("unsupported subtitle output mode")
+        command.append(output_url)
+        return tuple(command)
 
     def build_single_clip(
         self,
@@ -295,5 +372,6 @@ __all__ = [
     "AudioOutputMetadata",
     "RenderCommandBuilder",
     "RenderEncoding",
+    "SubtitleMode",
     "VideoOutputMetadata",
 ]

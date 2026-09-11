@@ -9,6 +9,7 @@ from minicut.probe import probe_media
 from minicut.render_command import (
     AudioFade,
     RenderCommandBuilder,
+    SubtitleMode,
     VideoOutputMetadata,
 )
 from minicut.renderer import FfmpegRenderer
@@ -125,9 +126,64 @@ class RealRenderPipelineTest(unittest.TestCase):
                 SubtitleLayoutPolicy(min_duration_ms=300),
             )
             subtitles = render_srt(cues, timeline.estimated_duration_ms)
+            subtitle_path = root / "edited.srt"
+            subtitle_path.write_text(subtitles, encoding="utf-8")
 
             self.assertEqual(parse_srt(subtitles), cues)
             self.assertLessEqual(cues[-1].end_ms, probed_output.duration_ms)
+
+            soft_output = root / "soft.mp4"
+            soft_command = RenderCommandBuilder().build_subtitle_output(
+                str(output),
+                str(subtitle_path),
+                str(soft_output),
+                SubtitleMode.SOFT,
+            )
+            FfmpegRenderer().render_to_path(
+                soft_command,
+                soft_output,
+                timeout_seconds=30,
+            )
+            subtitle_codec = subprocess.run(
+                (
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "s:0",
+                    "-show_entries",
+                    "stream=codec_name",
+                    "-of",
+                    "default=nw=1:nk=1",
+                    str(soft_output),
+                ),
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            self.assertEqual(subtitle_codec.returncode, 0, subtitle_codec.stderr)
+            self.assertEqual(subtitle_codec.stdout.strip(), "mov_text")
+            soft_probe = probe_media(soft_output)
+            geometry = subprocess.run(
+                (
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=width,height",
+                    "-of",
+                    "csv=p=0:s=x",
+                    str(soft_output),
+                ),
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            self.assertEqual(geometry.returncode, 0, geometry.stderr)
+            self.assertEqual(geometry.stdout.strip(), "320x240")
+            self.assertLessEqual(abs(soft_probe.duration_ms - 1_000), 40)
 
 
 if __name__ == "__main__":

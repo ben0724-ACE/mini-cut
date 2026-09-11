@@ -25,6 +25,7 @@ from minicut.application import (
 from minicut.cli import CliServices, main, run_cli
 from minicut.edit_plan import EditIntensity
 from minicut.errors import UserInputError
+from minicut.render_command import SubtitleMode
 
 
 class CommandLineHelpTest(unittest.TestCase):
@@ -260,7 +261,28 @@ class RenderCommandTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(fake.requests), 1)
         self.assertEqual(fake.requests[0].timeout_seconds, 30)
+        self.assertEqual(fake.requests[0].subtitle_mode, SubtitleMode.SOFT)
         self.assertIn("Rendered 900 ms", output.getvalue())
+
+    def test_passes_optional_burned_subtitle_mode(self) -> None:
+        fake = FakeRender()
+
+        exit_code = main(
+            [
+                "render",
+                "/projects/demo",
+                "--asset-id",
+                "asset-1",
+                "--output",
+                "/exports/result.mp4",
+                "--subtitle-mode",
+                "burned",
+            ],
+            services=CliServices(FakeInitProject(), render=fake),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake.requests[0].subtitle_mode, SubtitleMode.BURNED)
 
     def test_invalid_timeout_exits_before_render_service(self) -> None:
         fake = FakeRender()

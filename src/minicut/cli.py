@@ -37,6 +37,7 @@ from minicut.application import (
 )
 from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError
+from minicut.render_command import SubtitleMode
 from minicut.transcription_task import CancellationToken
 
 
@@ -125,6 +126,11 @@ def main(
     render_parser.add_argument("--asset-id", required=True)
     render_parser.add_argument("--output", required=True, type=Path)
     render_parser.add_argument("--timeout", type=_positive_int, default=600)
+    render_parser.add_argument(
+        "--subtitle-mode",
+        choices=tuple(mode.value for mode in SubtitleMode),
+        default=SubtitleMode.SOFT.value,
+    )
     inspect_parser = commands.add_parser("inspect", help="Inspect project artifacts.")
     inspect_parser.add_argument("project_directory", type=Path)
     inspect_parser.add_argument("--asset-id")
@@ -144,6 +150,11 @@ def main(
     edit_parser.add_argument("--planner", choices=("rule", "deepseek"), default="rule")
     edit_parser.add_argument("--output", required=True, type=Path)
     edit_parser.add_argument("--timeout", type=_positive_int, default=600)
+    edit_parser.add_argument(
+        "--subtitle-mode",
+        choices=tuple(mode.value for mode in SubtitleMode),
+        default=SubtitleMode.SOFT.value,
+    )
     modify_parser = commands.add_parser(
         "plan-edit", help="Restore or delete planned Segments."
     )
@@ -195,6 +206,7 @@ def main(
                         float(cast(int, parsed.timeout)),
                         lambda event: print(_format_edit_progress(event), file=stdout),
                         cancellation,
+                        SubtitleMode(cast(str, parsed.subtitle_mode)),
                     )
                 )
             finally:
@@ -264,6 +276,7 @@ def main(
                     cast(str, parsed.asset_id),
                     cast(Path, parsed.output),
                     float(cast(int, parsed.timeout)),
+                    subtitle_mode=SubtitleMode(cast(str, parsed.subtitle_mode)),
                 )
             )
             print(

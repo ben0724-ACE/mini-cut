@@ -32,7 +32,7 @@ from minicut.open_source_whisper import (
     transcribe_with_open_source_whisper,
 )
 from minicut.project import ProjectManifest, ProjectRepository
-from minicut.render_command import RenderCommandBuilder
+from minicut.render_command import RenderCommandBuilder, SubtitleMode
 from minicut.renderer import FfmpegRenderer
 from minicut.rule_planner import RulePlanner
 from minicut.segmentation import build_utterances
@@ -560,6 +560,7 @@ class RenderRequest:
     output_path: Path
     timeout_seconds: float
     cancellation: CancellationToken | None = None
+    subtitle_mode: SubtitleMode = SubtitleMode.SOFT
 
 
 @dataclass(frozen=True, slots=True)
@@ -754,6 +755,7 @@ class RenderProjectUseCase:
             subtitle_path,
             timeline.estimated_duration_ms,
             plan_revision,
+            request.subtitle_mode,
         ):
             return RenderResult(
                 request.output_path.absolute(),
@@ -762,6 +764,11 @@ class RenderProjectUseCase:
                 True,
             )
         stream_types = {stream.stream_type for stream in asset.streams}
+        if (
+            request.subtitle_mode is SubtitleMode.BURNED
+            and StreamType.VIDEO not in stream_types
+        ):
+            raise UserInputError("Burned subtitles require a video stream")
         requirements = TimelineTrackRequirements(
             require_audio=StreamType.AUDIO in stream_types,
             require_video=StreamType.VIDEO in stream_types,
@@ -793,6 +800,18 @@ class RenderProjectUseCase:
             )
         except OSError as error:
             raise ProcessingError("Subtitle output could not be written") from error
+        subtitle_command = self._command_builder.build_subtitle_output(
+            str(request.output_path),
+            str(subtitle_path),
+            str(request.output_path),
+            request.subtitle_mode,
+        )
+        self._renderer.render_to_path(
+            subtitle_command,
+            request.output_path,
+            timeout_seconds=request.timeout_seconds,
+            cancellation=request.cancellation,
+        )
         _write_json(
             render_record_path,
             {
@@ -801,6 +820,7 @@ class RenderProjectUseCase:
                 "subtitle_path": str(subtitle_path.absolute()),
                 "duration_ms": timeline.estimated_duration_ms,
                 "plan_revision": plan_revision,
+                "subtitle_mode": request.subtitle_mode.value,
             },
         )
         return RenderResult(
@@ -817,6 +837,7 @@ def _can_reuse_render(
     subtitle_path: Path,
     duration_ms: int,
     plan_revision: int,
+    subtitle_mode: SubtitleMode,
 ) -> bool:
     if (
         not record_path.is_file()
@@ -833,6 +854,7 @@ def _can_reuse_render(
             and record["subtitle_path"] == str(subtitle_path.absolute())
             and record["duration_ms"] == duration_ms
             and record.get("plan_revision") == plan_revision
+            and record.get("subtitle_mode") == subtitle_mode.value
             and record_path.stat().st_mtime_ns >= plan_path.stat().st_mtime_ns
         )
     except (KeyError, OSError, TypeError, UnicodeError, ValueError):
@@ -854,6 +876,7 @@ class EditRequest:
     timeout_seconds: float
     on_progress: "EditProgressReporter" = lambda event: None
     cancellation: CancellationToken | None = None
+    subtitle_mode: SubtitleMode = SubtitleMode.SOFT
 
 
 @dataclass(frozen=True, slots=True)
@@ -959,6 +982,7 @@ class EditProjectUseCase:
                     request.output_path,
                     request.timeout_seconds,
                     request.cancellation,
+                    request.subtitle_mode,
                 )
             )
             check_cancelled("render")
