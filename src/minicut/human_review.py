@@ -135,6 +135,76 @@ class BlindReviewRecord:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class RegressionIssue:
+    """A low human-review score expressed as a reproducible expectation."""
+
+    sample_id: str
+    criterion: ReviewCriterion
+    timeline_clip_ids: tuple[str, ...]
+    observed_score: int
+    expected_min_score: int
+    description: str
+
+    def __post_init__(self) -> None:
+        _validate_opaque_id(self.sample_id, "sample ID")
+        if not self.timeline_clip_ids:
+            raise ValueError("regression issue must identify a Timeline clip")
+        if len(set(self.timeline_clip_ids)) != len(self.timeline_clip_ids):
+            raise ValueError("regression issue Timeline clip IDs must be unique")
+        for clip_id in self.timeline_clip_ids:
+            _validate_opaque_id(clip_id, "Timeline clip ID")
+        if self.observed_score not in range(1, 3):
+            raise ValueError("regression issue observed score must be 1 or 2")
+        if self.expected_min_score not in range(3, 6):
+            raise ValueError("regression issue expected score must be between 3 and 5")
+        if not self.description.strip():
+            raise ValueError("regression issue description must not be blank")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "sample_id": self.sample_id,
+            "criterion": self.criterion.value,
+            "timeline_clip_ids": list(self.timeline_clip_ids),
+            "observed_score": self.observed_score,
+            "expected_min_score": self.expected_min_score,
+            "description": self.description,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "RegressionIssue":
+        return cls(
+            sample_id=cast(str, data["sample_id"]),
+            criterion=ReviewCriterion(cast(str, data["criterion"])),
+            timeline_clip_ids=tuple(cast(list[str], data["timeline_clip_ids"])),
+            observed_score=cast(int, data["observed_score"]),
+            expected_min_score=cast(int, data["expected_min_score"]),
+            description=cast(str, data["description"]),
+        )
+
+
+def create_regression_issues(
+    record: BlindReviewRecord,
+    *,
+    expected_min_score: int = 3,
+) -> tuple[RegressionIssue, ...]:
+    """Convert located low scores into regression expectations for the sample."""
+    if expected_min_score not in range(3, 6):
+        raise ValueError("regression issue expected score must be between 3 and 5")
+    return tuple(
+        RegressionIssue(
+            sample_id=record.sample_id,
+            criterion=review.criterion,
+            timeline_clip_ids=review.timeline_clip_ids,
+            observed_score=review.score,
+            expected_min_score=expected_min_score,
+            description=review.note.strip() or "低分项需要回归验证。",
+        )
+        for review in record.reviews
+        if review.score <= 2
+    )
+
+
 def _anchors(*descriptions: str) -> tuple[ScoreAnchor, ...]:
     return tuple(
         ScoreAnchor(score, description)
@@ -200,8 +270,10 @@ __all__ = [
     "BlindReviewRecord",
     "BlindReviewRubric",
     "CriterionReview",
+    "RegressionIssue",
     "ReviewCriterion",
     "ReviewDimension",
     "ScoreAnchor",
     "create_blind_review_rubric",
+    "create_regression_issues",
 ]

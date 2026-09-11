@@ -4,8 +4,10 @@ from minicut.human_review import (
     HUMAN_REVIEW_RUBRIC_VERSION,
     BlindReviewRecord,
     CriterionReview,
+    RegressionIssue,
     ReviewCriterion,
     create_blind_review_rubric,
+    create_regression_issues,
 )
 
 
@@ -89,6 +91,63 @@ class BlindReviewRecordTest(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "low review score"):
             CriterionReview(ReviewCriterion.REDUNDANCY, 2)
+
+
+class ReviewRegressionIssueTest(unittest.TestCase):
+    def test_turns_each_low_score_into_a_locatable_regression_issue(self) -> None:
+        record = BlindReviewRecord(
+            sample_id="sample-01",
+            reviewer_id="reviewer-a",
+            reviews=(
+                CriterionReview(
+                    ReviewCriterion.CUT_NATURALNESS,
+                    2,
+                    ("clip-02",),
+                    "句尾被截断。",
+                ),
+                CriterionReview(
+                    ReviewCriterion.NARRATIVE_CONTINUITY,
+                    1,
+                    ("clip-03", "clip-04"),
+                ),
+                CriterionReview(ReviewCriterion.REDUNDANCY, 3),
+                CriterionReview(ReviewCriterion.OVERALL_USABILITY, 4),
+            ),
+        )
+
+        issues = create_regression_issues(record)
+
+        self.assertEqual(
+            issues,
+            (
+                RegressionIssue(
+                    "sample-01",
+                    ReviewCriterion.CUT_NATURALNESS,
+                    ("clip-02",),
+                    observed_score=2,
+                    expected_min_score=3,
+                    description="句尾被截断。",
+                ),
+                RegressionIssue(
+                    "sample-01",
+                    ReviewCriterion.NARRATIVE_CONTINUITY,
+                    ("clip-03", "clip-04"),
+                    observed_score=1,
+                    expected_min_score=3,
+                    description="低分项需要回归验证。",
+                ),
+            ),
+        )
+        self.assertEqual(RegressionIssue.from_dict(issues[0].to_dict()), issues[0])
+
+    def test_passing_scores_do_not_create_regression_issues(self) -> None:
+        record = BlindReviewRecord(
+            "sample-01",
+            "reviewer-a",
+            tuple(CriterionReview(criterion, 3) for criterion in ReviewCriterion),
+        )
+
+        self.assertEqual(create_regression_issues(record), ())
 
 
 if __name__ == "__main__":
