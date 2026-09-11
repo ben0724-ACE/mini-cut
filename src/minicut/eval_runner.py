@@ -65,6 +65,45 @@ class EvalComparisonReport:
     cases: tuple[EvalCaseComparison, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ReleaseQualityPolicy:
+    """Maximum per-sample degradation allowed at the formal release boundary."""
+
+    max_retention_recall_drop: float
+    max_deletion_accuracy_drop: float
+    max_duration_error_increase: float
+    max_cut_word_rate_increase: float
+    max_isolated_clip_rate_increase: float
+    max_narrative_break_rate_increase: float
+
+    def __post_init__(self) -> None:
+        values = (
+            self.max_retention_recall_drop,
+            self.max_deletion_accuracy_drop,
+            self.max_duration_error_increase,
+            self.max_cut_word_rate_increase,
+            self.max_isolated_clip_rate_increase,
+            self.max_narrative_break_rate_increase,
+        )
+        if any(value < 0 for value in values):
+            raise ValueError("release quality thresholds must not be negative")
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseQualityViolation:
+    metric: str
+    observed_degradation: float
+    allowed_degradation: float
+    worst_sample_id: str
+    decision_changes: tuple[DecisionChange, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseQualityDecision:
+    can_release: bool
+    violations: tuple[ReleaseQualityViolation, ...]
+
+
 def _read_sample(path: Path) -> EvalSample:
     try:
         payload = cast(dict[str, object], json.loads(path.read_text(encoding="utf-8")))
@@ -183,6 +222,48 @@ def compare_eval_runs(
     )
 
 
+def _degradation(delta: QualityDelta, metric: str) -> float:
+    value = getattr(delta, f"{metric}_delta")
+    if metric in {"retention_recall", "deletion_accuracy"}:
+        return max(0.0, -value)
+    return max(0.0, value)
+
+
+def assess_release_quality(
+    report: EvalComparisonReport,
+    policy: ReleaseQualityPolicy,
+) -> ReleaseQualityDecision:
+    """Apply thresholds only when deciding whether a candidate may be released."""
+    thresholds = (
+        ("retention_recall", policy.max_retention_recall_drop),
+        ("deletion_accuracy", policy.max_deletion_accuracy_drop),
+        ("duration_error_ratio", policy.max_duration_error_increase),
+        ("cut_word_rate", policy.max_cut_word_rate_increase),
+        ("isolated_clip_rate", policy.max_isolated_clip_rate_increase),
+        ("narrative_break_rate", policy.max_narrative_break_rate_increase),
+    )
+    violations: list[ReleaseQualityViolation] = []
+    for metric, allowed in thresholds:
+        worst = max(
+            report.cases,
+            key=lambda case: _degradation(case.delta, metric),
+        )
+        observed = _degradation(worst.delta, metric)
+        if observed <= allowed:
+            continue
+        violations.append(
+            ReleaseQualityViolation(
+                metric,
+                observed,
+                allowed,
+                worst.sample_id,
+                worst.decision_changes,
+            )
+        )
+    violation_tuple = tuple(violations)
+    return ReleaseQualityDecision(not violation_tuple, violation_tuple)
+
+
 __all__ = [
     "EvalCaseResult",
     "DecisionChange",
@@ -191,6 +272,10 @@ __all__ = [
     "EvalReplay",
     "EvalRunResult",
     "QualityDelta",
+    "ReleaseQualityDecision",
+    "ReleaseQualityPolicy",
+    "ReleaseQualityViolation",
+    "assess_release_quality",
     "compare_eval_runs",
     "run_evaluation_directory",
 ]

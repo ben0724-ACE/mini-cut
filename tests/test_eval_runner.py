@@ -5,7 +5,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from minicut.eval_metrics import EvalClip, EvalPrediction
-from minicut.eval_runner import compare_eval_runs, run_evaluation_directory
+from minicut.eval_runner import (
+    ReleaseQualityPolicy,
+    assess_release_quality,
+    compare_eval_runs,
+    run_evaluation_directory,
+)
 from minicut.eval_sample import (
     EvalLabel,
     EvalSample,
@@ -142,6 +147,76 @@ class EvalComparisonTest(unittest.TestCase):
                     run_evaluation_directory(first, _perfect_prediction),
                     run_evaluation_directory(second, _perfect_prediction),
                 )
+
+
+class ReleaseQualityDecisionTest(unittest.TestCase):
+    def test_blocks_release_and_locates_worst_sample_and_decision(self) -> None:
+        with TemporaryDirectory() as directory:
+            samples = Path(directory)
+            (samples / "sample.json").write_text(
+                json.dumps(_sample("sample-a").to_dict()), encoding="utf-8"
+            )
+            baseline = run_evaluation_directory(samples, _perfect_prediction)
+
+            def degraded(sample: EvalSample) -> EvalPrediction:
+                del sample
+                return EvalPrediction(
+                    {"s1": ReferenceAction.DELETE, "s2": ReferenceAction.DELETE},
+                    0,
+                    (),
+                )
+
+            report = compare_eval_runs(
+                baseline, run_evaluation_directory(samples, degraded)
+            )
+            policy = ReleaseQualityPolicy(
+                max_retention_recall_drop=0.1,
+                max_deletion_accuracy_drop=1.0,
+                max_duration_error_increase=2.0,
+                max_cut_word_rate_increase=1.0,
+                max_isolated_clip_rate_increase=1.0,
+                max_narrative_break_rate_increase=1.0,
+            )
+
+            decision = assess_release_quality(report, policy)
+
+            self.assertFalse(decision.can_release)
+            self.assertEqual(len(decision.violations), 1)
+            violation = decision.violations[0]
+            self.assertEqual(violation.metric, "retention_recall")
+            self.assertEqual(violation.observed_degradation, 1.0)
+            self.assertEqual(violation.allowed_degradation, 0.1)
+            self.assertEqual(violation.worst_sample_id, "sample-a")
+            self.assertEqual(violation.decision_changes[0].segment_id, "s1")
+
+    def test_allows_release_at_threshold_and_rejects_negative_policy(self) -> None:
+        with TemporaryDirectory() as directory:
+            samples = Path(directory)
+            (samples / "sample.json").write_text(
+                json.dumps(_sample("sample-a").to_dict()), encoding="utf-8"
+            )
+            run = run_evaluation_directory(samples, _perfect_prediction)
+            report = compare_eval_runs(run, run)
+            policy = ReleaseQualityPolicy(
+                max_retention_recall_drop=0,
+                max_deletion_accuracy_drop=0,
+                max_duration_error_increase=0,
+                max_cut_word_rate_increase=0,
+                max_isolated_clip_rate_increase=0,
+                max_narrative_break_rate_increase=0,
+            )
+
+            self.assertTrue(assess_release_quality(report, policy).can_release)
+
+        with self.assertRaisesRegex(ValueError, "negative"):
+            ReleaseQualityPolicy(
+                max_retention_recall_drop=-0.1,
+                max_deletion_accuracy_drop=0,
+                max_duration_error_increase=0,
+                max_cut_word_rate_increase=0,
+                max_isolated_clip_rate_increase=0,
+                max_narrative_break_rate_increase=0,
+            )
 
 
 if __name__ == "__main__":
