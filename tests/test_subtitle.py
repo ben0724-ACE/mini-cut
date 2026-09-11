@@ -6,8 +6,10 @@ from minicut.subtitle import (
     MappedWord,
     SubtitleCue,
     SubtitleLayoutPolicy,
+    SubtitleTermCorrection,
     build_readable_cues,
     build_word_cues,
+    correct_subtitle_terms,
     map_retained_words,
     parse_srt,
     render_srt,
@@ -322,6 +324,66 @@ class ReadableSubtitleLayoutTest(unittest.TestCase):
             with self.subTest(values=values):
                 with self.assertRaises(ValueError):
                     SubtitleLayoutPolicy(*values)
+
+
+class SubtitleTermCorrectionTest(unittest.TestCase):
+    def test_corrects_multi_token_term_without_changing_source_words_or_timing(
+        self,
+    ) -> None:
+        words = (
+            MappedWord("w1", "欢迎使用", 0, 200, "clip:0"),
+            MappedWord("w2", "迷你", 220, 350, "clip:0"),
+            MappedWord("w3", "Cut", 350, 500, "clip:0"),
+        )
+
+        corrected = correct_subtitle_terms(
+            words,
+            (SubtitleTermCorrection(("迷你", "Cut"), "MiniCut"),),
+        )
+
+        self.assertEqual(
+            tuple(word.text for word in words), ("欢迎使用", "迷你", "Cut")
+        )
+        self.assertEqual(
+            tuple(word.text for word in corrected), ("欢迎使用", "MiniCut")
+        )
+        self.assertEqual(
+            (corrected[1].start_ms, corrected[1].end_ms),
+            (220, 500),
+        )
+
+    def test_updated_dictionary_reuses_same_words_and_does_not_cross_clip(self) -> None:
+        words = (
+            MappedWord("w1", "Deep", 0, 200, "clip:0"),
+            MappedWord("w2", "Seek", 200, 400, "clip:0"),
+            MappedWord("w3", "Deep", 500, 700, "clip:1"),
+            MappedWord("w4", "Seek", 700, 900, "clip:2"),
+        )
+
+        first = correct_subtitle_terms(
+            words,
+            (SubtitleTermCorrection(("Deep", "Seek"), "深度求索"),),
+        )
+        updated = correct_subtitle_terms(
+            words,
+            (SubtitleTermCorrection(("Deep", "Seek"), "DeepSeek"),),
+        )
+
+        self.assertEqual(
+            tuple(word.text for word in first), ("深度求索", "Deep", "Seek")
+        )
+        self.assertEqual(
+            tuple(word.text for word in updated), ("DeepSeek", "Deep", "Seek")
+        )
+
+    def test_rejects_invalid_or_ambiguous_term_entries(self) -> None:
+        with self.assertRaises(ValueError):
+            SubtitleTermCorrection((), "MiniCut")
+        with self.assertRaises(ValueError):
+            SubtitleTermCorrection(("迷你",), " ")
+        duplicate = SubtitleTermCorrection(("迷你", "Cut"), "MiniCut")
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            correct_subtitle_terms((), (duplicate, duplicate))
 
 
 if __name__ == "__main__":

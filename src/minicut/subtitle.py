@@ -27,6 +27,70 @@ class MappedWord:
 
 
 @dataclass(frozen=True, slots=True)
+class SubtitleTermCorrection:
+    """One exact transcript-token sequence and its preferred display text."""
+
+    source_tokens: tuple[str, ...]
+    replacement: str
+
+    def __post_init__(self) -> None:
+        if not self.source_tokens or any(
+            not token.strip() for token in self.source_tokens
+        ):
+            raise ValueError("subtitle correction source tokens must not be blank")
+        if not self.replacement.strip():
+            raise ValueError("subtitle correction replacement must not be blank")
+
+
+def correct_subtitle_terms(
+    mapped_words: tuple[MappedWord, ...],
+    corrections: tuple[SubtitleTermCorrection, ...],
+) -> tuple[MappedWord, ...]:
+    """Apply display-only terminology fixes without modifying a transcript."""
+    sources = tuple(correction.source_tokens for correction in corrections)
+    if len(set(sources)) != len(sources):
+        raise ValueError("subtitle correction source tokens must not be duplicate")
+    ordered = tuple(
+        sorted(
+            corrections,
+            key=lambda correction: len(correction.source_tokens),
+            reverse=True,
+        )
+    )
+    corrected: list[MappedWord] = []
+    index = 0
+    while index < len(mapped_words):
+        match: tuple[SubtitleTermCorrection, tuple[MappedWord, ...]] | None = None
+        for correction in ordered:
+            count = len(correction.source_tokens)
+            candidates = mapped_words[index : index + count]
+            if len(candidates) != count:
+                continue
+            if tuple(word.text for word in candidates) != correction.source_tokens:
+                continue
+            if len({word.clip_id for word in candidates}) != 1:
+                continue
+            match = correction, candidates
+            break
+        if match is None:
+            corrected.append(mapped_words[index])
+            index += 1
+            continue
+        correction, candidates = match
+        corrected.append(
+            MappedWord(
+                candidates[0].word_id,
+                correction.replacement,
+                candidates[0].start_ms,
+                candidates[-1].end_ms,
+                candidates[0].clip_id,
+            )
+        )
+        index += len(candidates)
+    return tuple(corrected)
+
+
+@dataclass(frozen=True, slots=True)
 class SubtitleCue:
     """One non-empty subtitle interval ready for serialization."""
 
@@ -353,8 +417,10 @@ __all__ = [
     "MappedWord",
     "SubtitleCue",
     "SubtitleLayoutPolicy",
+    "SubtitleTermCorrection",
     "build_readable_cues",
     "build_word_cues",
+    "correct_subtitle_terms",
     "map_retained_words",
     "parse_srt",
     "render_srt",
