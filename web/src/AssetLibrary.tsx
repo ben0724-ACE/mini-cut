@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { listAssets, uploadAsset, type AssetDetail } from "./api";
 import { TranscriptionControls } from "./TranscriptionControls";
+import { HighlightForm } from "./HighlightForm";
 
 interface Props {
   projectId: string;
@@ -36,5 +37,6 @@ export function AssetLibrary({projectId, onOpen, load = listAssets, upload = upl
     {error && <div><p role="alert">{error}</p><button disabled={busy} onClick={() => {setError(""); setRetry(value => value + 1);}}>重新读取列表</button></div>}
     {assets === null ? <p role="status">正在读取素材…</p> : assets.length === 0 ? <p>尚无素材</p> : <div className="project-grid">{assets.map(asset => <article className="project-card" key={asset.asset_id}><h3>{asset.name}</h3><p>{(asset.duration_ms / 1000).toFixed(2)} 秒 · {asset.has_transcript ? "已转录" : "未转录"}</p>{asset.has_plan && <button onClick={() => onOpen(asset.asset_id)}>审阅现有剪辑</button>}</article>)}</div>}
     {assets?.map(asset => <details key={asset.asset_id}><summary>转录设置 · {asset.name}</summary><TranscriptionControls project={projectId} asset={asset.asset_id} onComplete={() => setRetry(value => value + 1)} /></details>)}
+    <p>AI 表单已准备；任务接口将在下一闭环接通。</p><HighlightForm ready={false} busy={false} onSubmit={() => {}} />
   </section>;
 }
