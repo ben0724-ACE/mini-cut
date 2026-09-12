@@ -42,6 +42,14 @@ class OutputCollectionRepository:
             / f"v{revision:04d}.json"
         )
 
+    def write_highlight_result(self, result: object) -> None:
+        self._write_json(
+            self.path.parent.parent
+            / "highlight-results"
+            / f"{self.collection_id}.json",
+            result,
+        )
+
     def write_render_record(
         self, output_id: str, revision: int, record: object
     ) -> None:

@@ -45,6 +45,8 @@ from minicut.application import (
 )
 from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError
+from minicut.highlight_brief import HighlightBrief, HighlightPreset
+from minicut.highlight_service import generate_highlights, read_highlights
 from minicut.importer import import_media
 from minicut.media import classify_media
 from minicut.project import ProjectRepository
@@ -105,6 +107,25 @@ class PlanTaskBody(BaseModel):
     intensity: EditIntensity = EditIntensity.BALANCED
     style: str = "concise"
     planner: str = Field(default="rule", pattern=r"^(rule|deepseek)$")
+
+
+class HighlightTaskBody(BaseModel):
+    asset_id: SafeFileName
+    preset: HighlightPreset
+    count: int = Field(ge=1, le=10)
+    min_ms: int | None = Field(default=None, gt=0)
+    max_ms: int | None = Field(default=None, gt=0)
+    hook_ms: int | None = Field(default=None, gt=0)
+    instructions: str = Field(default="", max_length=12000)
+    max_source_overlap: float = Field(default=0.3, ge=0, le=1)
+
+    def brief(self) -> HighlightBrief:
+        return HighlightBrief(**self.model_dump(exclude={"asset_id"}))
+
+    @model_validator(mode="after")
+    def valid_brief(self) -> Self:
+        self.brief()
+        return self
 
 
 class RenderTaskBody(BaseModel):
@@ -333,6 +354,9 @@ def create_app(
     read_plan: ReadPlanOperation | None = None,
     modify_plan: ModifyPlanOperation | None = None,
     preview_timeline: PreviewTimelineOperation | None = None,
+    highlights: Callable[
+        [Path, str, str, HighlightBrief], dict[str, object]
+    ] = generate_highlights,
 ) -> FastAPI:
     """Create an API instance bound to one local projects directory."""
     root = projects_root.absolute()
@@ -630,6 +654,71 @@ def create_app(
             ):
                 return _task_response(job)
         return None
+
+    @api.post(
+        "/api/projects/{project_id}/tasks/highlights",
+        response_model=TaskResponse,
+        status_code=202,
+    )
+    def submit_highlights(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        body: HighlightTaskBody,
+        background_tasks: BackgroundTasks,
+        idempotency_key: Annotated[str, task_key_header],
+    ) -> TaskResponse:
+        inspect(project_id)
+        manifest = ProjectRepository(root / project_id).read()
+        if not any(asset.asset_id == body.asset_id for asset in manifest.assets):
+            raise HTTPException(404, "Asset does not exist")
+        if not (
+            root / project_id / ".minicut/transcripts" / f"{body.asset_id}.json"
+        ).is_file():
+            raise HTTPException(400, "Transcription is required")
+        return submit_task(
+            project_id,
+            idempotency_key,
+            "highlights",
+            body.model_dump(mode="json"),
+            background_tasks,
+            lambda: highlights(
+                root / project_id,
+                body.asset_id,
+                f"highlights-{idempotency_key.replace('.', '-')}",
+                body.brief(),
+            ),
+        )
+
+    @api.get(
+        "/api/projects/{project_id}/assets/{asset_id}/highlight-task",
+        response_model=TaskResponse | None,
+    )
+    def latest_highlights(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        asset_id: SafeFileName,
+    ) -> TaskResponse | None:
+        inspect(project_id)
+        jobs = sorted(
+            (root / project_id / ".minicut/jobs").glob("*.json"),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )
+        for path in jobs:
+            job = _read_job(path)
+            request = cast(dict[str, object], job.get("request", {}))
+            if job.get("kind") == "highlights" and request.get("asset_id") == asset_id:
+                return _task_response(job)
+        return None
+
+    @api.get("/api/projects/{project_id}/highlights/{collection_id}")
+    def get_highlights(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        collection_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")],
+    ) -> dict[str, object]:
+        inspect(project_id)
+        try:
+            return read_highlights(root / project_id, collection_id)
+        except MiniCutError as error:
+            raise HTTPException(404, str(error)) from error
 
     @api.post(
         "/api/projects/{project_id}/tasks/plan",

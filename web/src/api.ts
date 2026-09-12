@@ -52,6 +52,14 @@ export interface ProjectDetail extends ProjectSummary { asset_ids: string[] }
 export interface AssetDetail { asset_id: string; name: string; duration_ms: number; has_transcript: boolean; has_plan: boolean }
 export interface TranscriptionTask {task_id: string; status: "pending" | "running" | "succeeded" | "failed"; result: {word_count?: number; reused?: boolean} | null; error: string | null}
 export interface TranscriptionOptions {provider: "mlx" | "whisper"; model: string; language: string}
+export interface HighlightClip {instance_id: string; segment_id: string; role: string; text: string; start_ms: number; end_ms: number}
+export interface HighlightOutput {output_id: string; title: string; reason: string; revision: number; duration_ms: number; clips: HighlightClip[]}
+export interface HighlightResult {collection_id: string; asset_id: string; brief: import("./HighlightForm").HighlightBrief; notes: string[]; outputs: HighlightOutput[]}
+export interface HighlightTask {task_id: string; status: TranscriptionTask["status"]; result: HighlightResult | null; error: string | null}
+export const recoverHighlights = (project: string, asset: string, signal?: AbortSignal) => projectRequest<HighlightTask | null>(`/api/projects/${encodeURIComponent(project)}/assets/${encodeURIComponent(asset)}/highlight-task`, {signal});
+export const readHighlightTask = (project: string, task: string, signal?: AbortSignal) => projectRequest<HighlightTask>(`/api/projects/${encodeURIComponent(project)}/tasks/${encodeURIComponent(task)}`, {signal});
+export const startHighlights = (project: string, asset: string, brief: import("./HighlightForm").HighlightBrief, key: string) => projectRequest<HighlightTask>(`/api/projects/${encodeURIComponent(project)}/tasks/highlights`, {method: "POST", headers: {"Content-Type": "application/json", "Idempotency-Key": key}, body: JSON.stringify({asset_id: asset, ...brief})});
+export const getHighlights = (project: string, collection: string, signal?: AbortSignal) => projectRequest<HighlightResult>(`/api/projects/${encodeURIComponent(project)}/highlights/${encodeURIComponent(collection)}`, {signal});
 export const recoverTranscription = (project: string, asset: string, signal?: AbortSignal) => projectRequest<TranscriptionTask | null>(`/api/projects/${encodeURIComponent(project)}/assets/${encodeURIComponent(asset)}/transcription-task`, {signal});
 export const readTranscription = (project: string, task: string, signal?: AbortSignal) => projectRequest<TranscriptionTask>(`/api/projects/${encodeURIComponent(project)}/tasks/${encodeURIComponent(task)}`, {signal});
 export const startTranscription = (project: string, asset: string, options: TranscriptionOptions) => projectRequest<TranscriptionTask>(`/api/projects/${encodeURIComponent(project)}/tasks/transcribe`, {method: "POST", headers: {"Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID()}, body: JSON.stringify({asset_id: asset, ...options})});
