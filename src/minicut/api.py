@@ -46,7 +46,11 @@ from minicut.application import (
 from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError
 from minicut.highlight_brief import HighlightBrief, HighlightPreset
-from minicut.highlight_service import generate_highlights, read_highlights
+from minicut.highlight_service import (
+    edit_output_item,
+    generate_highlights,
+    read_highlights,
+)
 from minicut.importer import import_media
 from minicut.media import classify_media
 from minicut.output_repository import OutputCollectionRepository
@@ -131,6 +135,17 @@ class HighlightTaskBody(BaseModel):
 
 class HighlightSelectionBody(BaseModel):
     output_ids: list[str]
+
+
+class OutputItemEditBody(BaseModel):
+    deleted: bool | None = None
+    display_text: str | None = Field(default=None, min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def require_change(self) -> Self:
+        if self.deleted is None and self.display_text is None:
+            raise ValueError("Provide a subtitle or decision change")
+        return self
 
 
 class RenderTaskBody(BaseModel):
@@ -751,6 +766,29 @@ def create_app(
             ).write_highlight_result(result)
             return result
         except MiniCutError as error:
+            raise HTTPException(400, str(error)) from error
+
+    @api.patch(
+        "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/items/{instance_id}"
+    )
+    def patch_output_item(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        collection_id: str,
+        output_id: str,
+        instance_id: str,
+        body: OutputItemEditBody,
+    ) -> dict[str, object]:
+        inspect(project_id)
+        try:
+            return edit_output_item(
+                root / project_id,
+                collection_id,
+                output_id,
+                instance_id,
+                deleted=body.deleted,
+                display_text=body.display_text,
+            )
+        except (MiniCutError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
 
     @api.post(

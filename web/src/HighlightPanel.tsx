@@ -15,7 +15,7 @@ export function HighlightPanel({project, asset, recover = recoverHighlights}: {p
     if (task?.status !== "succeeded" || !collection) return;
     setSelectionLoading(true);
     const controller = new AbortController();
-    getHighlights(project, collection, controller.signal).then(result => {if (!controller.signal.aborted) {setSelected(result.selected_output_ids ?? []); setSelectionLoading(false);}}).catch(() => {if (!controller.signal.aborted) setSelectionError("无法恢复作品选择，请刷新后重试。");});
+    getHighlights(project, collection, controller.signal).then(result => {if (!controller.signal.aborted) {setSelected(result.selected_output_ids ?? []); setSelectionLoading(false); if (result.outputs) setTask(previous => previous ? {...previous, result} : previous);}}).catch(() => {if (!controller.signal.aborted) setSelectionError("无法恢复作品选择，请刷新后重试。");});
     return () => controller.abort();
   }, [project, collection, task?.status]);
   async function select(output: string, checked: boolean) {

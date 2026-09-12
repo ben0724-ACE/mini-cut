@@ -6,6 +6,10 @@
 }
 
 body { margin: 0; }
+.output-edit-grid { display: grid; grid-template-columns: minmax(240px, 340px) minmax(0, 1fr); gap: 24px; }
+.output-edit-grid textarea { box-sizing: border-box; width: 100%; min-height: 80px; color: #e8ebf1; background: #17191d; font: inherit; border: 1px solid #383e48; border-radius: 6px; padding: 8px; }
+.preview-caption { text-align: center; min-height: 2em; white-space: pre-wrap; }
+@media (max-width: 960px) { .output-edit-grid { grid-template-columns: 1fr; } }
 .transcription-controls { padding: 16px; background: #202329; border-radius: 8px; }
 .transcription-controls label { display: inline-grid; gap: 8px; margin-right: 16px; }
 .transcription-controls select { color: #e8ebf1; background: #17191d; padding: 8px; border: 1px solid #383e48; border-radius: 6px; }

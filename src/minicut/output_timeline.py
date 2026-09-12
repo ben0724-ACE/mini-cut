@@ -9,7 +9,12 @@ from minicut.semantic_segment import (
     SemanticSegment,
     validate_segment_context_dependencies,
 )
-from minicut.subtitle import MappedWord, map_retained_words
+from minicut.subtitle import (
+    MappedWord,
+    SubtitleCue,
+    build_readable_cues,
+    map_retained_words,
+)
 from minicut.timeline import Clip, Timeline
 from minicut.timeline_validation import (
     TimelineDiagnosticSummary,
@@ -35,6 +40,8 @@ def compile_output_timeline(
     clips: list[Clip] = []
     cursor = 0
     for item in plan.items:
+        if item.deleted:
+            continue
         segment = by_id.get(item.segment_id)
         if segment is None:
             raise ValueError("output references an unknown source segment")
@@ -100,6 +107,8 @@ def inspect_output_context(
     by_id = {segment.segment_id: segment for segment in segments}
     issues: list[OutputContextIssue] = []
     for index, item in enumerate(plan.items):
+        if item.deleted:
+            continue
         segment = by_id.get(item.segment_id)
         if segment is None:
             raise ValueError("output references an unknown source segment")
@@ -107,7 +116,9 @@ def inspect_output_context(
             positions = [
                 position
                 for position, other in enumerate(plan.items)
-                if other.role is item.role and other.segment_id == dependency.segment_id
+                if not other.deleted
+                and other.role is item.role
+                and other.segment_id == dependency.segment_id
             ]
             found = any(
                 position < index
@@ -145,3 +156,28 @@ def map_output_words(
         occurrence = Timeline((clip,), clip.output_range.end_ms)
         mapped.extend(map_retained_words(occurrence, segments, words))
     return tuple(mapped)
+
+
+def build_output_cues(
+    timeline: Timeline, plan: OutputPlan, mapped: tuple[MappedWord, ...]
+) -> tuple[SubtitleCue, ...]:
+    by_instance = {item.instance_id: item for item in plan.items}
+    cues: list[SubtitleCue] = []
+    for clip in timeline.clips:
+        item = by_instance[clip.clip_id]
+        if item.display_text is not None:
+            cues.append(
+                SubtitleCue(
+                    clip.output_range.start_ms,
+                    clip.output_range.end_ms,
+                    item.display_text,
+                )
+            )
+        else:
+            cues.extend(
+                build_readable_cues(
+                    tuple(word for word in mapped if word.clip_id == clip.clip_id),
+                    timeline.estimated_duration_ms,
+                )
+            )
+    return tuple(cues)

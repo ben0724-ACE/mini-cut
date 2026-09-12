@@ -14,6 +14,7 @@ from minicut.output_plan import OutputPlan
 from minicut.output_repository import OutputCollectionRepository
 from minicut.output_timeline import (
     OutputContextIssue,
+    build_output_cues,
     compile_output_timeline,
     inspect_output_context,
     map_output_words,
@@ -26,7 +27,7 @@ from minicut.render_command import (
 )
 from minicut.renderer import FfmpegRenderer
 from minicut.semantic_segment import SemanticSegment
-from minicut.subtitle import build_readable_cues, render_srt
+from minicut.subtitle import render_srt
 from minicut.subtitle_font import SubtitleFont, resolve_subtitle_font
 from minicut.timeline import Timeline
 from minicut.timeline_validation import TimelineTrackRequirements
@@ -101,7 +102,7 @@ class RenderOutputUseCase:
             request.transcript.words,
         )
         subtitle_text = render_srt(
-            build_readable_cues(mapped, timeline.estimated_duration_ms),
+            build_output_cues(timeline, plan, mapped),
             timeline.estimated_duration_ms,
         )
         font = (

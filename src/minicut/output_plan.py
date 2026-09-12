@@ -41,12 +41,18 @@ class OutputItem:
     instance_id: str
     segment_id: str
     role: OutputRole
+    deleted: bool = False
+    display_text: str | None = None
 
     def __post_init__(self) -> None:
         _text(self.instance_id)
         _text(self.segment_id)
         if type(self.role) is not OutputRole:
             raise ValueError("unsupported output role")
+        if type(self.deleted) is not bool:
+            raise ValueError("deleted must be boolean")
+        if self.display_text is not None:
+            _text(self.display_text)
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +100,10 @@ class OutputPlan:
             seen_sources.add(key)
         if not body_started:
             raise ValueError("output plan requires a body")
+        if not any(
+            item.role is OutputRole.BODY and not item.deleted for item in self.items
+        ):
+            raise ValueError("output plan requires a retained body")
         if type(self.revision) is not int or self.revision < 1:
             raise ValueError("output revision must be positive")
 
@@ -112,6 +122,8 @@ class OutputPlan:
                     cast(str, item["instance_id"]),
                     cast(str, item["segment_id"]),
                     OutputRole(cast(str, item["role"])),
+                    cast(bool, item.get("deleted", False)),
+                    cast(str | None, item.get("display_text")),
                 )
                 for item in items
             ),

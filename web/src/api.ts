@@ -52,7 +52,8 @@ export interface ProjectDetail extends ProjectSummary { asset_ids: string[] }
 export interface AssetDetail { asset_id: string; name: string; duration_ms: number; has_transcript: boolean; has_plan: boolean }
 export interface TranscriptionTask {task_id: string; status: "pending" | "running" | "succeeded" | "failed"; result: {word_count?: number; reused?: boolean} | null; error: string | null}
 export interface TranscriptionOptions {provider: "mlx" | "whisper"; model: string; language: string}
-export interface HighlightClip {instance_id: string; segment_id: string; role: string; text: string; start_ms: number; end_ms: number}
+export interface HighlightClip {instance_id: string; segment_id: string; role: string; text: string; source_text?: string; deleted?: boolean; start_ms: number; end_ms: number}
+export const editOutputItem = (project: string, collection: string, output: string, instance: string, changes: {deleted?: boolean; display_text?: string}) => projectRequest<HighlightResult>(`/api/projects/${encodeURIComponent(project)}/highlights/${encodeURIComponent(collection)}/outputs/${encodeURIComponent(output)}/items/${encodeURIComponent(instance)}`, {method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(changes)});
 export interface HighlightOutput {output_id: string; title: string; reason: string; revision: number; duration_ms: number; clips: HighlightClip[]}
 export interface HighlightResult {collection_id: string; asset_id: string; brief: import("./HighlightForm").HighlightBrief; notes: string[]; outputs: HighlightOutput[]; selected_output_ids?: string[]}
 export const saveHighlightSelection = (project: string, collection: string, output_ids: string[]) => projectRequest<HighlightResult>(`/api/projects/${encodeURIComponent(project)}/highlights/${encodeURIComponent(collection)}/selection`, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({output_ids})});

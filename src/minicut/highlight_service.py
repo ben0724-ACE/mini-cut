@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -14,6 +15,7 @@ from minicut.highlight_workflow import attach_continuation_context, plan_highlig
 from minicut.output_repository import OutputCollectionRepository
 from minicut.output_timeline import compile_output_timeline
 from minicut.segmentation import build_utterances
+from minicut.semantic_segment import SemanticSegment
 from minicut.semantic_segmentation import (
     build_rule_based_segments,
     mark_segment_candidates,
@@ -101,9 +103,9 @@ def generate_highlights(
 
 
 def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
-    OutputCollectionRepository(project, collection_id)
+    repository = OutputCollectionRepository(project, collection_id)
     try:
-        return cast(
+        result = cast(
             dict[str, object],
             json.loads(
                 (
@@ -111,5 +113,98 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
                 ).read_text(encoding="utf-8")
             ),
         )
+        if repository.path.is_file():
+            segments = source_segments(project, cast(str, result["asset_id"]))
+            collection = repository.read(segments)
+            by_id = {segment.segment_id: segment for segment in segments}
+            rows = {
+                row["output_id"]: row
+                for row in cast(list[dict[str, object]], result["outputs"])
+            }
+            for plan in collection.plans:
+                row = rows[plan.output_id]
+                row["revision"] = plan.revision
+                row["duration_ms"] = compile_output_timeline(
+                    plan, segments, collection.asset_id
+                ).estimated_duration_ms
+                row["clips"] = [
+                    {
+                        "instance_id": item.instance_id,
+                        "segment_id": item.segment_id,
+                        "role": item.role.value,
+                        "text": item.display_text or by_id[item.segment_id].text,
+                        "source_text": by_id[item.segment_id].text,
+                        "deleted": item.deleted,
+                        "start_ms": by_id[item.segment_id].start_ms,
+                        "end_ms": by_id[item.segment_id].end_ms,
+                    }
+                    for item in plan.items
+                ]
+        return result
     except (OSError, ValueError) as error:
         raise UserInputError("Highlight result is missing or invalid") from error
+
+
+def source_segments(project: Path, asset: str) -> tuple[SemanticSegment, ...]:
+    try:
+        cache = json.loads(
+            (project / ".minicut/transcripts" / f"{asset}.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        transcript = Transcript.from_dict(cache["transcript"])
+        utterances = transcript.utterances or build_utterances(
+            transcript, normalize_transcript_words(transcript)
+        )
+        return attach_continuation_context(
+            mark_segment_candidates(build_rule_based_segments(transcript, utterances))
+        )
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise UserInputError("Source transcript is missing or invalid") from error
+
+
+def edit_output_item(
+    project: Path,
+    collection_id: str,
+    output_id: str,
+    instance_id: str,
+    *,
+    deleted: bool | None = None,
+    display_text: str | None = None,
+) -> dict[str, object]:
+    result = read_highlights(project, collection_id)
+    segments = source_segments(project, cast(str, result["asset_id"]))
+    repository = OutputCollectionRepository(project, collection_id)
+    collection = repository.read(segments)
+    plan = next(
+        (plan for plan in collection.plans if plan.output_id == output_id), None
+    )
+    if plan is None or not any(item.instance_id == instance_id for item in plan.items):
+        raise UserInputError("Output item does not exist")
+    updated = replace(
+        plan,
+        revision=plan.revision + 1,
+        items=tuple(
+            replace(
+                item,
+                deleted=item.deleted if deleted is None else deleted,
+                display_text=item.display_text
+                if display_text is None
+                else display_text.strip(),
+            )
+            if item.instance_id == instance_id
+            else item
+            for item in plan.items
+        ),
+    )
+    repository.write(
+        replace(
+            collection,
+            plans=tuple(
+                updated if existing.output_id == output_id else existing
+                for existing in collection.plans
+            ),
+        ),
+        segments,
+    )
+    return read_highlights(project, collection_id)
