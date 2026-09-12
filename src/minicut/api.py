@@ -86,10 +86,17 @@ class ProjectDetailResponse(ProjectSummaryResponse):
 
 
 class TranscribeTaskBody(BaseModel):
-    source_path: str
+    source_path: str | None = None
+    asset_id: SafeFileName | None = None
     provider: str = Field(pattern=r"^(mlx|whisper)$")
     model: str
     language: str = "zh"
+
+    @model_validator(mode="after")
+    def require_source(self) -> Self:
+        if (self.source_path is None) == (self.asset_id is None):
+            raise ValueError("Provide exactly one source path or asset ID")
+        return self
 
 
 class PlanTaskBody(BaseModel):
@@ -548,13 +555,28 @@ def create_app(
         background_tasks: BackgroundTasks,
         idempotency_key: Annotated[str, task_key_header],
     ) -> TaskResponse:
-        request_data = body.model_dump(mode="json")
+        request_data = body.model_dump(mode="json", exclude_none=True)
+        source = body.source_path
+        if body.asset_id is not None:
+            inspect(project_id)
+            asset = next(
+                (
+                    item
+                    for item in ProjectRepository(root / project_id).read().assets
+                    if item.asset_id == body.asset_id
+                ),
+                None,
+            )
+            if asset is None:
+                raise HTTPException(404, "Asset does not exist")
+            source = asset.source_path
+        assert source is not None
 
         def operation() -> dict[str, object]:
             result = transcriber.execute(
                 TranscribeRequest(
                     root / project_id,
-                    Path(body.source_path),
+                    Path(source),
                     body.provider,
                     body.model,
                     body.language,
@@ -575,6 +597,39 @@ def create_app(
             background_tasks,
             operation,
         )
+
+    @api.get(
+        "/api/projects/{project_id}/assets/{asset_id}/transcription-task",
+        response_model=TaskResponse | None,
+    )
+    def latest_transcription(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId, asset_id: SafeFileName
+    ) -> TaskResponse | None:
+        inspect(project_id)
+        asset = next(
+            (
+                item
+                for item in ProjectRepository(root / project_id).read().assets
+                if item.asset_id == asset_id
+            ),
+            None,
+        )
+        if asset is None:
+            raise HTTPException(404, "Asset does not exist")
+        jobs = sorted(
+            (root / project_id / ".minicut/jobs").glob("*.json"),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )
+        for path in jobs:
+            job = _read_job(path)
+            request = cast(dict[str, object], job.get("request", {}))
+            if job.get("kind") == "transcribe" and (
+                request.get("asset_id") == asset_id
+                or request.get("source_path") == asset.source_path
+            ):
+                return _task_response(job)
+        return None
 
     @api.post(
         "/api/projects/{project_id}/tasks/plan",

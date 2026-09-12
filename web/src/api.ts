@@ -50,6 +50,11 @@ export class ApiError extends Error {}
 export interface ProjectSummary { project_id: string; name?: string; asset_count: number }
 export interface ProjectDetail extends ProjectSummary { asset_ids: string[] }
 export interface AssetDetail { asset_id: string; name: string; duration_ms: number; has_transcript: boolean; has_plan: boolean }
+export interface TranscriptionTask {task_id: string; status: "pending" | "running" | "succeeded" | "failed"; result: {word_count?: number; reused?: boolean} | null; error: string | null}
+export interface TranscriptionOptions {provider: "mlx" | "whisper"; model: string; language: string}
+export const recoverTranscription = (project: string, asset: string, signal?: AbortSignal) => projectRequest<TranscriptionTask | null>(`/api/projects/${encodeURIComponent(project)}/assets/${encodeURIComponent(asset)}/transcription-task`, {signal});
+export const readTranscription = (project: string, task: string, signal?: AbortSignal) => projectRequest<TranscriptionTask>(`/api/projects/${encodeURIComponent(project)}/tasks/${encodeURIComponent(task)}`, {signal});
+export const startTranscription = (project: string, asset: string, options: TranscriptionOptions) => projectRequest<TranscriptionTask>(`/api/projects/${encodeURIComponent(project)}/tasks/transcribe`, {method: "POST", headers: {"Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID()}, body: JSON.stringify({asset_id: asset, ...options})});
 export const listAssets = (id: string, signal?: AbortSignal) => projectRequest<AssetDetail[]>(`/api/projects/${encodeURIComponent(id)}/assets`, { signal });
 export const uploadAsset = (id: string, file: File) => projectRequest<{asset_id: string}>(`/api/projects/${encodeURIComponent(id)}/assets?filename=${encodeURIComponent(file.name)}`, {method: "POST", body: file});
 

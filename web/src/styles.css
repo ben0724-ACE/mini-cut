@@ -6,6 +6,10 @@
 }
 
 body { margin: 0; }
+.transcription-controls { padding: 16px; background: #202329; border-radius: 8px; }
+.transcription-controls label { display: inline-grid; gap: 8px; margin-right: 16px; }
+.transcription-controls select { color: #e8ebf1; background: #17191d; padding: 8px; border: 1px solid #383e48; border-radius: 6px; }
+details { margin-top: 16px; } summary { cursor: pointer; padding: 12px 0; }
 .app-header { height: 60px; display: flex; align-items: center; gap: 24px; padding: 0 24px; border-bottom: 1px solid #383e48; font-weight: 700; }
 .app-header span { color: #adb5c3; font-size: 0.85rem; font-weight: 400; }
 .app-body { display: grid; grid-template-columns: 144px minmax(0, 1fr); min-height: calc(100vh - 61px); }

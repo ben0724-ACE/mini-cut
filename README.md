@@ -119,7 +119,11 @@ npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173/` to list projects, create one by name, and switch projects without entering IDs. Inside a project, choose a media file and click import: the browser copies it to the local project, leaving the original unchanged. The library shows filename, duration, and transcription status. This transfers the file to the local API, not to the LLM; unlike CLI path registration, it needs space for a copy. Web transcription controls are not connected yet; use the CLI for transcription. Existing plan review links (`?project=<project-id>&asset=<asset-id>`) remain supported. The review screen shows every keep/delete decision and its reason, previews the compiled cut without rendering, marks cut points and jump-cut risks, persists restore/delete changes, supports undo, and updates the estimated output duration. It can then start a formal render and download the project-owned video and subtitle. With a segment focused, use `K` to keep, `D` to delete, and Space to play or pause.
+Open `http://127.0.0.1:5173/` to list projects, create one by name, and switch projects without entering IDs. Inside a project, choose a media file and click import: the browser copies it to the local project, leaving the original unchanged. The library shows filename, duration, and transcription status. This transfers the file to the local API, not to the LLM; unlike CLI path registration, it needs space for a copy.
+
+Expand the media's transcription settings, select MLX (Apple Silicon) or PyTorch Whisper, a model, and Chinese or English, then start transcription. Install the chosen backend first. Existing Hugging Face model caches are shared; start the API with `HF_HUB_OFFLINE=1` to use cached MLX models offline. Refreshing or returning to a project recovers its latest task. Stopping status queries does **not** cancel backend computation. API process restarts do not resume interrupted computation. Multi-video AI generation controls are not connected to Web yet.
+
+Existing plan review links (`?project=<project-id>&asset=<asset-id>`) remain supported. The review screen shows every keep/delete decision and its reason, previews the compiled cut without rendering, marks cut points and jump-cut risks, persists restore/delete changes, supports undo, and updates the estimated output duration. It can then start a formal render and download the project-owned video and subtitle. With a segment focused, use `K` to keep, `D` to delete, and Space to play or pause.
 
 ## Development
 
