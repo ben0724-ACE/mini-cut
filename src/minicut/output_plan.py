@@ -81,6 +81,19 @@ class OutputPlan:
         if not self.items:
             raise ValueError("output plan must contain items")
         _unique(tuple(item.instance_id for item in self.items))
+        body_started = False
+        seen_sources: set[tuple[OutputRole, str]] = set()
+        for item in self.items:
+            if item.role is OutputRole.BODY:
+                body_started = True
+            elif body_started:
+                raise ValueError("hook items must precede the body")
+            key = (item.role, item.segment_id)
+            if key in seen_sources:
+                raise ValueError("source reuse must be explicit across hook and body")
+            seen_sources.add(key)
+        if not body_started:
+            raise ValueError("output plan requires a body")
         if type(self.revision) is not int or self.revision < 1:
             raise ValueError("output revision must be positive")
 
