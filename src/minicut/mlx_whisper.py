@@ -1,6 +1,8 @@
 """Configuration for the MLX Whisper transcription provider."""
 
+import warnings
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
@@ -114,7 +116,7 @@ def map_mlx_transcription(
     """Map an MLX response while keeping provider failures user-safe."""
     try:
         transcript = map_whisper_response(
-            response,
+            _coalesce_zero_duration_tokens(response),
             source=TranscriptSource(
                 asset_id=asset_id,
                 provider="mlx-whisper",
@@ -129,6 +131,58 @@ def map_mlx_transcription(
     if not transcript.words:
         raise ProcessingError("MLX Whisper returned no timestamped words")
     return transcript
+
+
+def _coalesce_zero_duration_tokens(
+    response: Mapping[str, object],
+) -> Mapping[str, object]:
+    data = deepcopy(dict(response))
+    segments = cast(list[dict[str, object]], data["segments"])
+    retained: list[dict[str, object]] = []
+    count = 0
+    skipped = 0
+    for segment in segments:
+        words = cast(list[dict[str, object]], segment["words"])
+        if (
+            not words
+            and not cast(str, segment["text"]).strip()
+            and segment["start"] == segment["end"]
+            and cast(float, segment["start"]) >= 0
+        ):
+            skipped += 1
+            continue
+        timed: list[dict[str, object]] = []
+        prefix = ""
+        for word in words:
+            if word["start"] == word["end"] and cast(float, word["start"]) >= 0:
+                count += 1
+                text = cast(str, word["word"])
+                if timed:
+                    timed[-1]["word"] = cast(str, timed[-1]["word"]) + text
+                    timed[-1]["probability"] = min(
+                        cast(float, timed[-1]["probability"]),
+                        cast(float, word["probability"]),
+                    )
+                else:
+                    prefix += text
+            else:
+                if prefix:
+                    word["word"] = prefix + cast(str, word["word"])
+                    prefix = ""
+                timed.append(word)
+        if words and not timed:
+            skipped += 1
+            continue
+        segment["words"] = timed
+        retained.append(segment)
+    data["segments"] = retained
+    if count or skipped:
+        warnings.warn(
+            f"MLX zero-duration tokens: {count} coalesced/omitted; {skipped} untimed segments omitted. Affected tokens have phrase-level timing, not precise word timing.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return data
 
 
 __all__ = [
