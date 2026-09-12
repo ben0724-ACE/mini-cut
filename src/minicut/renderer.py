@@ -9,6 +9,7 @@ from queue import Empty, Queue
 from tempfile import NamedTemporaryFile
 from threading import Thread
 from typing import Protocol, TextIO, cast
+from urllib.parse import unquote
 
 from minicut.errors import ProcessingError
 from minicut.render_progress import FfmpegProgressEvent, FfmpegProgressParser
@@ -196,7 +197,10 @@ class FfmpegRenderer:
     ) -> tuple[FfmpegProgressEvent, ...]:
         """Render to a same-directory temporary file, then atomically publish it."""
         destination = Path(output_path).absolute()
-        if not command or command[-1] != destination.as_uri():
+        if not command or command[-1] not in (
+            destination.as_uri(),
+            unquote(destination.as_uri()),
+        ):
             raise ValueError("render command output does not match publish destination")
         if not destination.parent.is_dir():
             raise ValueError("render output directory does not exist")
@@ -208,7 +212,7 @@ class FfmpegRenderer:
             delete=False,
         ) as temporary_file:
             temporary_path = Path(temporary_file.name)
-        temporary_command = (*command[:-1], temporary_path.as_uri())
+        temporary_command = (*command[:-1], unquote(temporary_path.as_uri()))
         try:
             events = self.execute(
                 temporary_command,

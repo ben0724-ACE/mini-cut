@@ -374,7 +374,7 @@ class MultiClipRenderCommandTest(unittest.TestCase):
 
 
 class RenderPathSafetyTest(unittest.TestCase):
-    def test_encodes_spaces_unicode_metacharacters_and_leading_dash(self) -> None:
+    def test_preserves_local_names_as_single_protocol_prefixed_arguments(self) -> None:
         asset = _asset()
         asset.source_path = "/media/采访 take [draft];$().mov"
         output_path = "/output/-report 结果;$(touch nope).mp4"
@@ -389,11 +389,11 @@ class RenderPathSafetyTest(unittest.TestCase):
         output_argument = command[-1]
         self.assertEqual(
             source_argument,
-            "file:///media/%E9%87%87%E8%AE%BF%20take%20%5Bdraft%5D%3B%24%28%29.mov",
+            "file:///media/采访 take [draft];$().mov",
         )
         self.assertEqual(
             output_argument,
-            "file:///output/-report%20%E7%BB%93%E6%9E%9C%3B%24%28touch%20nope%29.mp4",
+            "file:///output/-report 结果;$(touch nope).mp4",
         )
         self.assertNotIn("-report", command)
         self.assertNotIn("touch", command)
@@ -410,7 +410,7 @@ class RenderPathSafetyTest(unittest.TestCase):
 
         source_argument = command[command.index("-i") + 1]
         self.assertTrue(source_argument.startswith("file://"))
-        self.assertIn("concat%3Aone.mov%7Ctwo.mov", source_argument)
+        self.assertIn("concat:one.mov|two.mov", source_argument)
         self.assertTrue(command[-1].startswith("file://"))
 
     def test_rejects_empty_or_nul_paths(self) -> None:
@@ -484,7 +484,7 @@ class SubtitleOutputCommandTest(unittest.TestCase):
 
         self.assertIn("-vf", command)
         self.assertIn("subtitles=filename=", command[command.index("-vf") + 1])
-        self.assertIn("fontsdir='/fonts/中文'", command[command.index("-vf") + 1])
+        self.assertIn("fontsdir=/fonts/中文", command[command.index("-vf") + 1])
         self.assertIn(
             "force_style='FontName=Noto Sans CJK SC'",
             command[command.index("-vf") + 1],
@@ -500,6 +500,21 @@ class SubtitleOutputCommandTest(unittest.TestCase):
             RenderCommandBuilder().build_subtitle_output(
                 "/base.mp4", "/text.srt", "/burned.mp4", SubtitleMode.BURNED
             )
+
+    def test_escapes_both_filter_layers_and_keeps_literal_percent_names(self) -> None:
+        path = "/fonts/中 [文],v1:cut's/font.ttf"
+        command = RenderCommandBuilder().build_subtitle_output(
+            "/base%20片段.mp4",
+            "/字幕%25.srt",
+            "/结果.mp4",
+            SubtitleMode.BURNED,
+            subtitle_font=SubtitleFont("Noto Sans CJK SC", Path(path)),
+        )
+        self.assertEqual(command[command.index("-i") + 1], "file:///base%20片段.mp4")
+        subtitle_filter = command[command.index("-vf") + 1]
+        self.assertIn("filename=/字幕%25.srt", subtitle_filter)
+        self.assertIn("fontsdir=/fonts/中 ", subtitle_filter)
+        self.assertIn(r"\[文\]\,v1\\:cut\\\'s", subtitle_filter)
 
 
 if __name__ == "__main__":

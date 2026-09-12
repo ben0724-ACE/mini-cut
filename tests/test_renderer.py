@@ -156,7 +156,7 @@ class AtomicRenderPublicationTest(unittest.TestCase):
         self,
     ) -> None:
         with TemporaryDirectory() as directory:
-            destination = Path(directory) / "result.mp4"
+            destination = Path(directory) / "结果 [成片].mp4"
             destination.write_bytes(b"previous successful render")
             launcher = CapturingLauncher(FakeProcess(), b"new complete render")
 
@@ -167,6 +167,7 @@ class AtomicRenderPublicationTest(unittest.TestCase):
             )
 
             assert launcher.command is not None
+            self.assertIn("结果 [成片]", launcher.command[-1])
             temporary_path = Path(unquote(urlparse(launcher.command[-1]).path))
             self.assertEqual(temporary_path.parent, destination.parent)
             self.assertEqual(temporary_path.suffix, ".mp4")

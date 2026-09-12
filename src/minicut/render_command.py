@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from fractions import Fraction
 from pathlib import Path
+from urllib.parse import unquote
 
 from minicut.media import MediaAsset, StreamType
 from minicut.subtitle_font import SubtitleFont
@@ -21,7 +22,8 @@ def _seconds(milliseconds: int) -> str:
 def _local_file_url(path: str, *, label: str) -> str:
     if not path or "\0" in path:
         raise ValueError(f"{label} path must be a valid local path")
-    return Path(path).absolute().as_uri()
+    # FFmpeg's file protocol does not URL-decode percent-encoded local names.
+    return unquote(Path(path).absolute().as_uri())
 
 
 def _first_stream_index(asset: MediaAsset, stream_type: StreamType) -> int:
@@ -107,17 +109,15 @@ class SubtitleMode(StrEnum):
 
 def _subtitle_filter_path(path: str) -> str:
     value = str(Path(path).absolute())
-    for source, replacement in (
-        ("\\", "\\\\"),
-        (":", "\\:"),
-        ("'", "\\'"),
-        (",", "\\,"),
-        ("[", "\\["),
-        ("]", "\\]"),
-        (";", "\\;"),
-    ):
-        value = value.replace(source, replacement)
-    return value
+    # Escape the option parser, then the enclosing filtergraph parser. A single
+    # quoted string is insufficient for filenames containing an apostrophe.
+    option_value = "".join(
+        ("\\" if character in "\\':" else "") + character for character in value
+    )
+    return "".join(
+        ("\\" if character in "\\'[],;" else "") + character
+        for character in option_value
+    )
 
 
 def _audio_fade_filters(
@@ -210,8 +210,8 @@ class RenderCommandBuilder:
             if subtitle_font is None:
                 raise ValueError("Burned subtitles require an explicit CJK font")
             subtitle_filter = (
-                f"subtitles=filename='{_subtitle_filter_path(subtitle_path)}'"
-                f":fontsdir='{_subtitle_filter_path(str(subtitle_font.path.parent))}'"
+                f"subtitles=filename={_subtitle_filter_path(subtitle_path)}"
+                f":fontsdir={_subtitle_filter_path(str(subtitle_font.path.parent))}"
                 f":force_style='FontName={subtitle_font.family}'"
             )
             command.extend(
