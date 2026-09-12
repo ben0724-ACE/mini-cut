@@ -77,6 +77,7 @@ class InitProjectRequest:
 
     project_directory: Path
     project_id: str
+    name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +102,7 @@ class InitProjectUseCase:
         if not project_id:
             raise UserInputError("Project ID must not be blank")
         repository = ProjectRepository(request.project_directory)
-        repository.create(ProjectManifest(project_id=project_id))
+        repository.create(ProjectManifest(project_id=project_id, name=request.name))
         return InitProjectResult(request.project_directory.absolute(), project_id)
 
 

@@ -20,10 +20,15 @@ class ProjectManifest:
     project_id: str
     assets: tuple[MediaAsset, ...] = ()
     schema_version: int = MANIFEST_SCHEMA_VERSION
+    name: str | None = None
 
     def __post_init__(self) -> None:
         if not self.project_id.strip():
             raise ValueError("project_id must not be blank")
+        if self.name is not None and (
+            type(self.name) is not str or not self.name.strip()
+        ):
+            raise ValueError("project name must not be blank")
         if self.schema_version != MANIFEST_SCHEMA_VERSION:
             raise ValueError(
                 f"Unsupported manifest schema version: {self.schema_version}"
@@ -31,11 +36,14 @@ class ProjectManifest:
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-compatible representation."""
-        return {
+        result: dict[str, object] = {
             "schema_version": self.schema_version,
             "project_id": self.project_id,
             "assets": [asset.to_dict() for asset in self.assets],
         }
+        if self.name is not None:
+            result["name"] = self.name
+        return result
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "ProjectManifest":
@@ -45,6 +53,7 @@ class ProjectManifest:
             schema_version=cast(int, data["schema_version"]),
             project_id=cast(str, data["project_id"]),
             assets=tuple(MediaAsset.from_dict(asset) for asset in assets),
+            name=cast(str | None, data.get("name")),
         )
 
 
@@ -117,6 +126,7 @@ class ProjectRepository:
             project_id=manifest.project_id,
             assets=(*manifest.assets, asset),
             schema_version=manifest.schema_version,
+            name=manifest.name,
         )
         self.update(updated_manifest)
         return asset

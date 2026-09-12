@@ -52,6 +52,13 @@ class FailingReplacer:
 
 
 class ProjectRepositoryTest(unittest.TestCase):
+    def test_adding_asset_preserves_project_name(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = ProjectRepository(Path(directory) / "project")
+            repository.create(ProjectManifest(project_id="named", name="我的播客"))
+            repository.add_asset(_asset())
+            assert repository.read().name == "我的播客"
+
     def test_create_and_read_manifest(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             project_directory = Path(temporary_directory) / "project"

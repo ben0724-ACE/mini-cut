@@ -47,6 +47,22 @@ export interface JumpCutRisk {
 
 export class ApiError extends Error {}
 
+export interface ProjectSummary { project_id: string; name?: string; asset_count: number }
+export interface ProjectDetail extends ProjectSummary { asset_ids: string[] }
+
+async function projectRequest<T>(url: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { detail?: unknown } | null;
+    throw new ApiError(typeof payload?.detail === "string" ? payload.detail : `项目请求失败（${response.status}）`);
+  }
+  return await response.json() as T;
+}
+
+export const listProjects = (signal?: AbortSignal) => projectRequest<ProjectSummary[]>("/api/projects", { signal });
+export const createProject = (name: string) => projectRequest<ProjectDetail>("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+export const getProject = (projectId: string, signal?: AbortSignal) => projectRequest<ProjectDetail>(`/api/projects/${encodeURIComponent(projectId)}`, { signal });
+
 export interface RenderDownload {
   media_url: string;
   subtitle_url: string;

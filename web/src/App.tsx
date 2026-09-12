@@ -2,18 +2,72 @@ import { useEffect, useState } from "react";
 import {
   ApiError,
   getPlan,
+  getProject,
+  listProjects,
+  createProject,
   getPreviewTimeline,
   modifyPlan,
   renderAndWait,
   type PlanDetail,
   type PreviewTimeline,
+  type ProjectDetail,
 } from "./api";
 import { PlanReview } from "./PlanReview";
+import { ProjectHome } from "./ProjectHome";
 
 export function App() {
-  const parameters = new URLSearchParams(window.location.search);
+  const [search, setSearch] = useState(window.location.search);
+  useEffect(() => {
+    const update = () => setSearch(window.location.search);
+    window.addEventListener("popstate", update);
+    return () => window.removeEventListener("popstate", update);
+  }, []);
+  const parameters = new URLSearchParams(search);
   const projectId = parameters.get("project") ?? "";
   const assetId = parameters.get("asset") ?? "";
+  function navigate(project = "", asset = "") {
+    const query = new URLSearchParams();
+    if (project) query.set("project", project);
+    if (asset) query.set("asset", asset);
+    window.history.pushState({}, "", `${window.location.pathname}${query.size ? `?${query}` : ""}`);
+    setSearch(window.location.search);
+  }
+  return <div className="app-frame">
+    <header className="app-header">MiniCut <span>本地剪辑工作台</span></header>
+    <div className="app-body">
+      <nav aria-label="项目导航"><button onClick={() => navigate()}>我的项目</button>
+        {projectId && <button onClick={() => navigate(projectId)}>当前项目</button>}
+      </nav>
+      <main className="app-content">
+        {!projectId ? <ProjectHome loadProjects={listProjects} createProject={createProject} onSelect={(id) => navigate(id)} />
+          : !assetId ? <ProjectWorkspace key={projectId} projectId={projectId} onOpen={(asset) => navigate(projectId, asset)} />
+          : <Review key={`${projectId}:${assetId}`} projectId={projectId} assetId={assetId} />}
+      </main>
+    </div>
+  </div>;
+}
+
+function ProjectWorkspace({ projectId, onOpen }: { projectId: string; onOpen: (asset: string) => void }) {
+  const [project, setProject] = useState<ProjectDetail | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    getProject(projectId, controller.signal).then((value) => {
+      if (!controller.signal.aborted) setProject(value);
+    }).catch((reason: unknown) => {
+      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "无法读取项目");
+    });
+    return () => controller.abort();
+  }, [projectId]);
+  if (error) return <p role="alert">{error}</p>;
+  if (!project) return <p role="status">正在读取项目…</p>;
+  return <section><header className="workspace-heading"><div><h1>{project.name ?? project.project_id}</h1><p>{project.asset_count} 个素材</p></div></header>
+    {project.asset_ids.length ? <div className="project-grid">{project.asset_ids.map((asset, index) => <article className="project-card" key={asset}><h2>素材 {index + 1}</h2><button onClick={() => onOpen(asset)}>审阅现有剪辑</button></article>)}</div>
+      : <p>项目已创建，尚无素材。素材导入将在下一闭环接通。</p>}
+  </section>;
+}
+
+function Review({ projectId, assetId }: { projectId: string; assetId: string }) {
   const [plan, setPlan] = useState<PlanDetail | null>(null);
   const [preview, setPreview] = useState<PreviewTimeline | null>(null);
   const [error, setError] = useState("");

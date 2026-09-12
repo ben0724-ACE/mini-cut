@@ -6,11 +6,12 @@ import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Annotated, cast
+from typing import Annotated, Self, cast
+from uuid import uuid4
 
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 from starlette.responses import StreamingResponse
 
 from minicut.application import (
@@ -52,7 +53,19 @@ SafeFileName = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
 class ProjectCreateBody(BaseModel):
     """HTTP input for creating one project below the configured root."""
 
-    project_id: ProjectId
+    project_id: ProjectId | None = None
+    name: (
+        Annotated[
+            str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
+        ]
+        | None
+    ) = None
+
+    @model_validator(mode="after")
+    def require_identity(self) -> Self:
+        if self.project_id is None and self.name is None:
+            raise ValueError("Project name or ID is required")
+        return self
 
 
 class ProjectSummaryResponse(BaseModel):
@@ -60,6 +73,7 @@ class ProjectSummaryResponse(BaseModel):
 
     project_id: str
     asset_count: int
+    name: str | None = None
 
 
 class ProjectDetailResponse(ProjectSummaryResponse):
@@ -394,25 +408,32 @@ def create_app(
     @api.post(
         "/api/projects",
         response_model=ProjectDetailResponse,
+        response_model_exclude_none=True,
         status_code=status.HTTP_201_CREATED,
     )
     def create_project(  # pyright: ignore[reportUnusedFunction]
         body: ProjectCreateBody,
     ) -> ProjectDetailResponse:
+        project_id = body.project_id or f"project-{uuid4().hex}"
         try:
             initializer.execute(
-                InitProjectRequest(root / body.project_id, body.project_id)
+                InitProjectRequest(root / project_id, project_id, body.name)
             )
         except MiniCutError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        result = inspect(body.project_id)
+        result = inspect(project_id)
         return ProjectDetailResponse(
             project_id=result.project_id,
             asset_count=len(result.asset_ids),
             asset_ids=list(result.asset_ids),
+            name=body.name,
         )
 
-    @api.get("/api/projects", response_model=list[ProjectSummaryResponse])
+    @api.get(
+        "/api/projects",
+        response_model=list[ProjectSummaryResponse],
+        response_model_exclude_none=True,
+    )
     def list_projects(  # pyright: ignore[reportUnusedFunction]
     ) -> list[ProjectSummaryResponse]:
         if not root.is_dir():
@@ -426,11 +447,16 @@ def create_app(
                 ProjectSummaryResponse(
                     project_id=result.project_id,
                     asset_count=len(result.asset_ids),
+                    name=ProjectRepository(child).read().name,
                 )
             )
         return projects
 
-    @api.get("/api/projects/{project_id}", response_model=ProjectDetailResponse)
+    @api.get(
+        "/api/projects/{project_id}",
+        response_model=ProjectDetailResponse,
+        response_model_exclude_none=True,
+    )
     def get_project(  # pyright: ignore[reportUnusedFunction]
         project_id: ProjectId,
     ) -> ProjectDetailResponse:
@@ -439,6 +465,7 @@ def create_app(
             project_id=result.project_id,
             asset_count=len(result.asset_ids),
             asset_ids=list(result.asset_ids),
+            name=ProjectRepository(root / project_id).read().name,
         )
 
     task_key_header = Header(
