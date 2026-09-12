@@ -29,21 +29,41 @@ class OutputCollectionRepository:
         validate_output_collection(collection, segments)
         if collection.collection_id != self.collection_id:
             raise ValueError("collection does not match repository ID")
+        self._write_json(self.path, collection.to_dict())
+
+    def render_record_path(self, output_id: str, revision: int) -> Path:
+        validate_output_id(output_id)
+        if type(revision) is not int or revision < 1:
+            raise ValueError("render revision must be positive")
+        return (
+            self.path.parent
+            / f"{self.collection_id}-renders"
+            / output_id
+            / f"v{revision:04d}.json"
+        )
+
+    def write_render_record(
+        self, output_id: str, revision: int, record: object
+    ) -> None:
+        self._write_json(self.render_record_path(output_id, revision), record)
+
+    @staticmethod
+    def _write_json(path: Path, value: object) -> None:
         temporary: Path | None = None
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+            path.parent.mkdir(parents=True, exist_ok=True)
             with NamedTemporaryFile(
                 mode="w",
                 encoding="utf-8",
-                dir=self.path.parent,
+                dir=path.parent,
                 prefix=".collection-",
                 suffix=".tmp",
                 delete=False,
             ) as stream:
                 temporary = Path(stream.name)
-                json.dump(collection.to_dict(), stream, ensure_ascii=False)
+                json.dump(value, stream, ensure_ascii=False)
                 stream.write("\n")
-            temporary.replace(self.path)
+            temporary.replace(path)
         except OSError as error:
             raise ProcessingError("Output collection could not be written") from error
         finally:

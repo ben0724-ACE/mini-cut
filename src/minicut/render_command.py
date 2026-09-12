@@ -7,6 +7,9 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from minicut.media import MediaAsset, StreamType
+from minicut.output_plan import OutputPlan
+from minicut.output_timeline import validate_output_timeline
+from minicut.semantic_segment import SemanticSegment
 from minicut.subtitle_font import SubtitleFont
 from minicut.timeline import Timeline
 from minicut.timeline_validation import (
@@ -304,8 +307,60 @@ class RenderCommandBuilder:
         """Build a trim-and-concat filter graph for two or more clips."""
         if len(timeline.clips) < 2:
             raise ValueError("multi-clip render requires at least two clips")
-        output_url = _local_file_url(output_path, label="render output")
         validate_timeline_for_render(timeline, assets, requirements)
+        return self._build_concat_arguments(
+            timeline,
+            assets,
+            output_path,
+            requirements,
+            video_metadata,
+            encoding,
+            audio_metadata,
+            audio_fade,
+            denoise_filter,
+        )
+
+    def build_output_timeline(
+        self,
+        timeline: Timeline,
+        plan: OutputPlan,
+        segments: tuple[SemanticSegment, ...],
+        source_asset_id: str,
+        assets: tuple[MediaAsset, ...],
+        output_path: str,
+        requirements: TimelineTrackRequirements,
+        video_metadata: VideoOutputMetadata = _DEFAULT_VIDEO_METADATA,
+        encoding: RenderEncoding = _DEFAULT_ENCODING,
+    ) -> tuple[str, ...]:
+        """Render explicit source reuse/order only after plan-bound validation."""
+        validate_output_timeline(
+            timeline, plan, segments, source_asset_id, assets, requirements
+        )
+        return self._build_concat_arguments(
+            timeline,
+            assets,
+            output_path,
+            requirements,
+            video_metadata,
+            encoding,
+            _DEFAULT_AUDIO_METADATA,
+            _DEFAULT_AUDIO_FADE,
+            None,
+        )
+
+    def _build_concat_arguments(
+        self,
+        timeline: Timeline,
+        assets: tuple[MediaAsset, ...],
+        output_path: str,
+        requirements: TimelineTrackRequirements,
+        video_metadata: VideoOutputMetadata,
+        encoding: RenderEncoding,
+        audio_metadata: AudioOutputMetadata,
+        audio_fade: AudioFade,
+        denoise_filter: str | None,
+    ) -> tuple[str, ...]:
+        output_url = _local_file_url(output_path, label="render output")
         if denoise_filter is not None and not denoise_filter.strip():
             raise ValueError("audio denoise filter must not be blank")
 
