@@ -85,3 +85,21 @@ def test_empty_candidates_are_allowed() -> None:
         )
     )
     assert result.suggestions == ()
+
+
+def test_long_source_ids_use_local_aliases_and_resolve_back() -> None:
+    import asyncio
+    from dataclasses import replace
+
+    segments = (replace(source()[0], segment_id="segment:" + "x" * 100),)
+    provider = FakeProvider({"candidates": [candidate(["s-1"])], "notes": []})
+    result = asyncio.run(
+        HighlightPlanner(provider).plan(
+            HighlightBrief.for_preset(HighlightPreset.KNOWLEDGE), segments
+        )
+    )
+    assert result.suggestions[0].candidate.segment_ids == (segments[0].segment_id,)
+    assert (
+        json.loads(provider.requests[0].user_prompt)["segments"][0]["segment_id"]
+        == "s-1"
+    )

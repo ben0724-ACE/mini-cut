@@ -57,6 +57,9 @@ async def run(project: Path, asset_id: str, *, render_only: bool = False) -> Non
             if response.is_success:
                 body = response.json()
                 usage.update(body.get("usage", {}))
+                (project / "deepseek-trial-response.json").write_text(
+                    json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
 
         # Bound this paid short-media trial below the user-approved ¥1;
         # output is already limited to 4096 tokens by the existing adapter.
