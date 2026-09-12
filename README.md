@@ -33,8 +33,15 @@ services: each video has its own ordered source references and revision. A
 source quote can appear as an opening hook and again in the complete excerpt,
 with independently timed subtitle occurrences. Rendering these plans does not
 call a language model. The existing CLI and Web review workflow still use
-source-ordered keep/delete plans; multi-video generation and its Web controls
-are not connected yet.
+source-ordered keep/delete plans; multi-video Web controls are not connected yet.
+
+Python highlight planning supports speech cleanup, podcast highlights,
+opinion-first excerpts and knowledge digests, with explicit count, duration,
+hook and natural-language requirements. A measured selection pass preserves
+context and limits source overlap. At most one semantic revision can respond
+to measured failures or explicit reviewer feedback; insufficient material is
+reported rather than padded. Excerpts still need human review for meaning,
+titles and transcription accuracy.
 
 ## Current status
 

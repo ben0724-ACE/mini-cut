@@ -71,7 +71,11 @@ class HighlightPlanner:
         self.timeout = timeout
 
     async def plan(
-        self, brief: HighlightBrief, segments: tuple[SemanticSegment, ...]
+        self,
+        brief: HighlightBrief,
+        segments: tuple[SemanticSegment, ...],
+        *,
+        revision: dict[str, object] | None = None,
     ) -> HighlightProposal:
         validate_segment_context_dependencies(segments)
         if not segments:
@@ -122,6 +126,8 @@ class HighlightPlanner:
                 "fields": "根对象仅 candidates/notes；候选仅示例中五个字段；不要返回 type 或 hook_ms",
             },
         }
+        if revision is not None:
+            payload["revision"] = revision
         response = await asyncio.wait_for(
             self.provider.generate(
                 TextModelRequest(
