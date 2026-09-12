@@ -7,6 +7,7 @@ vi.mock("./api", async (original) => ({
   ...await original<typeof import("./api")>(),
   listProjects: vi.fn().mockResolvedValue([{ project_id: "old", name: "旧项目", asset_count: 0 }]),
   getProject: vi.fn().mockResolvedValue({ project_id: "old", name: "旧项目", asset_count: 0, asset_ids: [] }),
+  listAssets: vi.fn().mockResolvedValue([]),
 }));
 afterEach(() => { cleanup(); window.history.replaceState({}, "", "/"); });
 it("从项目中心进入项目并返回，无需输入 ID，支持浏览器导航", async () => {

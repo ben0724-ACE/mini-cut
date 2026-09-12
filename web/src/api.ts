@@ -49,6 +49,9 @@ export class ApiError extends Error {}
 
 export interface ProjectSummary { project_id: string; name?: string; asset_count: number }
 export interface ProjectDetail extends ProjectSummary { asset_ids: string[] }
+export interface AssetDetail { asset_id: string; name: string; duration_ms: number; has_transcript: boolean; has_plan: boolean }
+export const listAssets = (id: string, signal?: AbortSignal) => projectRequest<AssetDetail[]>(`/api/projects/${encodeURIComponent(id)}/assets`, { signal });
+export const uploadAsset = (id: string, file: File) => projectRequest<{asset_id: string}>(`/api/projects/${encodeURIComponent(id)}/assets?filename=${encodeURIComponent(file.name)}`, {method: "POST", body: file});
 
 async function projectRequest<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);

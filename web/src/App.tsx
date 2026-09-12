@@ -14,6 +14,7 @@ import {
 } from "./api";
 import { PlanReview } from "./PlanReview";
 import { ProjectHome } from "./ProjectHome";
+import { AssetLibrary } from "./AssetLibrary";
 
 export function App() {
   const [search, setSearch] = useState(window.location.search);
@@ -61,9 +62,8 @@ function ProjectWorkspace({ projectId, onOpen }: { projectId: string; onOpen: (a
   }, [projectId]);
   if (error) return <p role="alert">{error}</p>;
   if (!project) return <p role="status">正在读取项目…</p>;
-  return <section><header className="workspace-heading"><div><h1>{project.name ?? project.project_id}</h1><p>{project.asset_count} 个素材</p></div></header>
-    {project.asset_ids.length ? <div className="project-grid">{project.asset_ids.map((asset, index) => <article className="project-card" key={asset}><h2>素材 {index + 1}</h2><button onClick={() => onOpen(asset)}>审阅现有剪辑</button></article>)}</div>
-      : <p>项目已创建，尚无素材。素材导入将在下一闭环接通。</p>}
+  return <section><header className="workspace-heading"><h1>{project.name ?? project.project_id}</h1></header>
+    <p>项目已创建</p><AssetLibrary projectId={projectId} onOpen={onOpen} />
   </section>;
 }
 

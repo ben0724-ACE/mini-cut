@@ -10,8 +10,9 @@ from typing import Annotated, Self, cast
 from uuid import uuid4
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, status
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field, StringConstraints, model_validator
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
 from minicut.application import (
@@ -44,6 +45,8 @@ from minicut.application import (
 )
 from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError
+from minicut.importer import import_media
+from minicut.media import classify_media
 from minicut.project import ProjectRepository
 
 ProjectId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
@@ -467,6 +470,67 @@ def create_app(
             asset_ids=list(result.asset_ids),
             name=ProjectRepository(root / project_id).read().name,
         )
+
+    @api.get("/api/projects/{project_id}/assets")
+    def list_assets(project_id: ProjectId) -> list[dict[str, object]]:  # pyright: ignore[reportUnusedFunction]
+        inspect(project_id)
+        directory = root / project_id
+        return [
+            {
+                "asset_id": asset.asset_id,
+                "name": Path(asset.source_path).name,
+                "duration_ms": asset.duration_ms,
+                "has_transcript": (
+                    directory / ".minicut/transcripts" / f"{asset.asset_id}.json"
+                ).is_file(),
+                "has_plan": (
+                    directory / ".minicut/plans" / f"{asset.asset_id}.json"
+                ).is_file(),
+            }
+            for asset in ProjectRepository(directory).read().assets
+        ]
+
+    @api.post("/api/projects/{project_id}/assets", status_code=201)
+    async def upload_asset(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId, filename: str, request: Request
+    ) -> dict[str, object]:
+        inspect(project_id)
+        if (
+            not filename
+            or len(filename) > 200
+            or any(character in filename for character in ("/", "\\", "\x00"))
+            or any(ord(character) < 32 for character in filename)
+        ):
+            raise HTTPException(400, "Invalid media filename")
+        try:
+            classify_media(filename)
+        except MiniCutError as error:
+            raise HTTPException(400, str(error)) from error
+        directory = root / project_id / ".minicut/media" / uuid4().hex
+        directory.mkdir(parents=True)
+        destination = directory / filename
+        retained = False
+        try:
+            with destination.open("xb") as target:
+                async for chunk in request.stream():
+                    await run_in_threadpool(target.write, chunk)
+            asset = await run_in_threadpool(
+                import_media, ProjectRepository(root / project_id), destination
+            )
+            retained = Path(asset.source_path) == destination
+            return {
+                "asset_id": asset.asset_id,
+                "name": Path(asset.source_path).name,
+                "duration_ms": asset.duration_ms,
+            }
+        except MiniCutError as error:
+            raise HTTPException(400, str(error)) from error
+        except OSError as error:
+            raise HTTPException(500, "Media could not be stored") from error
+        finally:
+            if not retained:
+                destination.unlink(missing_ok=True)
+                directory.rmdir()
 
     task_key_header = Header(
         alias="Idempotency-Key",
