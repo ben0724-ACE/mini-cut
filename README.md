@@ -48,6 +48,24 @@ minicut inspect ./my-project --asset-id <asset-id>
 
 Use `--planner rule` for deterministic local planning. DeepSeek planning sends structured transcript text to the configured API, but never sends the original media.
 
+Subtitles default to a selectable MP4 track. Use `render --subtitle-mode burned`
+to put text into the video image. Burned output explicitly loads an installed CJK
+font: Arial Unicode MS (or Heiti SC) on macOS, Microsoft YaHei on Windows, and
+Noto Sans CJK SC in common Linux font locations. If no readable font is found,
+the command explains how to configure one; it does not download fonts.
+
+To use another installed font, set both variables before rendering:
+
+```bash
+export MINICUT_SUBTITLE_FONT_PATH="/absolute/path/NotoSansCJKsc-Regular.otf"
+export MINICUT_SUBTITLE_FONT_NAME="Noto Sans CJK SC"
+```
+
+The name must match the font's family, and the selected font must cover your
+subtitle characters. System fonts are not bundled or redistributed. Changing
+the configured font causes burned output to be rendered again; previously
+burned boxes cannot be repaired by changing player settings.
+
 The same stages can be run in one resumable command:
 
 ```bash

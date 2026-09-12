@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
+from unittest.mock import Mock
 
 from minicut.application import (
     EditCancelled,
@@ -28,8 +29,10 @@ from minicut.edit_plan import EditAction, EditBrief, EditIntensity, EditPlan
 from minicut.errors import ProcessingError, UserInputError
 from minicut.media import MediaAsset, StreamInfo, StreamType
 from minicut.project import ProjectManifest, ProjectRepository
+from minicut.render_command import SubtitleMode
 from minicut.rule_planner import RulePlanner
 from minicut.semantic_segment import SemanticSegment
+from minicut.subtitle_font import SubtitleFont
 from minicut.transcript import Transcript, TranscriptSource, Utterance, Word
 from minicut.transcription_cache import (
     TranscriptCacheRepository,
@@ -229,8 +232,11 @@ class RenderProjectUseCaseTest(unittest.TestCase):
                 self.assertEqual(timeout_seconds, 30)
                 return LoudnessMeasurement(-22, -5, 2, -32, 0)
 
+            unused_font_resolver = Mock(side_effect=UserInputError("No font installed"))
             result = RenderProjectUseCase(
-                renderer=renderer, loudness_analyzer=analyze_loudness
+                renderer=renderer,
+                loudness_analyzer=analyze_loudness,
+                subtitle_font_resolver=unused_font_resolver,
             ).execute(
                 RenderRequest(
                     project_directory,
@@ -244,6 +250,7 @@ class RenderProjectUseCaseTest(unittest.TestCase):
             )
 
             self.assertEqual(result.duration_ms, 400)
+            unused_font_resolver.assert_not_called()
             self.assertEqual(len(renderer.calls), 3)
             command, rendered_path, timeout = renderer.calls[0]
             self.assertEqual(rendered_path, output_path)
@@ -262,6 +269,31 @@ class RenderProjectUseCaseTest(unittest.TestCase):
                 result.subtitle_path.read_text(encoding="utf-8"),
                 "1\n00:00:00,000 --> 00:00:00,400\n内容\n",
             )
+            resolver = Mock(
+                return_value=SubtitleFont("Noto Sans CJK SC", Path("/fonts/a.ttf"))
+            )
+            burned = RenderProjectUseCase(
+                renderer=renderer, subtitle_font_resolver=resolver
+            )
+            burned_request = RenderRequest(
+                project_directory,
+                "asset-1",
+                output_path,
+                30,
+                subtitle_mode=SubtitleMode.BURNED,
+            )
+            self.assertFalse(burned.execute(burned_request).reused)
+            output_path.write_bytes(b"fake-rendered-video")
+            self.assertIn("FontName=Noto Sans CJK SC", " ".join(renderer.calls[-1][0]))
+            self.assertTrue(burned.execute(burned_request).reused)
+            resolver.return_value = SubtitleFont("Heiti SC", Path("/fonts/b.ttc"))
+            self.assertFalse(burned.execute(burned_request).reused)
+            self.assertIn("FontName=Heiti SC", " ".join(renderer.calls[-1][0]))
+            resolver.side_effect = UserInputError("No readable font")
+            call_count = len(renderer.calls)
+            with self.assertRaisesRegex(UserInputError, "readable font"):
+                burned.execute(burned_request)
+            self.assertEqual(len(renderer.calls), call_count)
 
 
 class InspectProjectUseCaseTest(unittest.TestCase):

@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from minicut.media import MediaAsset, StreamInfo, StreamType, TimeRange
 from minicut.render_command import (
@@ -9,6 +10,7 @@ from minicut.render_command import (
     SubtitleMode,
     VideoOutputMetadata,
 )
+from minicut.subtitle_font import SubtitleFont
 from minicut.timeline import Clip, Timeline
 from minicut.timeline_validation import TimelineTrackRequirements
 
@@ -475,15 +477,29 @@ class SubtitleOutputCommandTest(unittest.TestCase):
             "/output/字幕.srt",
             "/output/result.mp4",
             SubtitleMode.BURNED,
+            subtitle_font=SubtitleFont(
+                "Noto Sans CJK SC", Path("/fonts/中文/font.ttf")
+            ),
         )
 
         self.assertIn("-vf", command)
         self.assertIn("subtitles=filename=", command[command.index("-vf") + 1])
+        self.assertIn("fontsdir='/fonts/中文'", command[command.index("-vf") + 1])
+        self.assertIn(
+            "force_style='FontName=Noto Sans CJK SC'",
+            command[command.index("-vf") + 1],
+        )
         self.assertIn("-c:v", command)
         self.assertIn("libx264", command)
         self.assertNotIn("scale=", " ".join(command))
         self.assertNotIn("-ss", command)
         self.assertNotIn("-t", command)
+
+    def test_burned_mode_cannot_silently_use_a_latin_only_default(self) -> None:
+        with self.assertRaisesRegex(ValueError, "explicit CJK font"):
+            RenderCommandBuilder().build_subtitle_output(
+                "/base.mp4", "/text.srt", "/burned.mp4", SubtitleMode.BURNED
+            )
 
 
 if __name__ == "__main__":

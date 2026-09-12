@@ -6,6 +6,7 @@ from fractions import Fraction
 from pathlib import Path
 
 from minicut.media import MediaAsset, StreamType
+from minicut.subtitle_font import SubtitleFont
 from minicut.timeline import Timeline
 from minicut.timeline_validation import (
     TimelineTrackRequirements,
@@ -176,6 +177,8 @@ class RenderCommandBuilder:
         output_path: str,
         mode: SubtitleMode,
         encoding: RenderEncoding = _DEFAULT_ENCODING,
+        *,
+        subtitle_font: SubtitleFont | None = None,
     ) -> tuple[str, ...]:
         """Attach a selectable track or render subtitle text into video frames."""
         input_url = _local_file_url(input_path, label="subtitle video input")
@@ -204,10 +207,17 @@ class RenderCommandBuilder:
                 )
             )
         elif mode is SubtitleMode.BURNED:
+            if subtitle_font is None:
+                raise ValueError("Burned subtitles require an explicit CJK font")
+            subtitle_filter = (
+                f"subtitles=filename='{_subtitle_filter_path(subtitle_path)}'"
+                f":fontsdir='{_subtitle_filter_path(str(subtitle_font.path.parent))}'"
+                f":force_style='FontName={subtitle_font.family}'"
+            )
             command.extend(
                 (
                     "-vf",
-                    f"subtitles=filename='{_subtitle_filter_path(subtitle_path)}'",
+                    subtitle_filter,
                     "-map",
                     "0:v:0",
                     "-map",

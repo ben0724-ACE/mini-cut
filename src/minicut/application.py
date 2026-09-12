@@ -53,6 +53,7 @@ from minicut.semantic_segmentation import (
     mark_segment_candidates,
 )
 from minicut.subtitle import build_readable_cues, map_retained_words, render_srt
+from minicut.subtitle_font import SubtitleFont, resolve_subtitle_font
 from minicut.text_normalization import normalize_transcript_words
 from minicut.timeline import Timeline, compile_timeline
 from minicut.timeline_postprocess import JumpCutRisk, detect_jump_cut_risks
@@ -738,11 +739,13 @@ class RenderProjectUseCase:
         renderer: TimelineRenderer | None = None,
         denoisers: tuple[AudioDenoiser, ...] = (),
         loudness_analyzer: LoudnessAnalyzer = _measure_loudness_for_render,
+        subtitle_font_resolver: Callable[[], SubtitleFont] = resolve_subtitle_font,
     ) -> None:
         self._command_builder = command_builder or RenderCommandBuilder()
         self._renderer = renderer or FfmpegRenderer()
         self._denoisers = build_denoiser_registry(denoisers)
         self._loudness_analyzer = loudness_analyzer
+        self._subtitle_font_resolver = subtitle_font_resolver
 
     def execute(self, request: RenderRequest) -> RenderResult:
         if request.timeout_seconds <= 0:
@@ -782,6 +785,11 @@ class RenderProjectUseCase:
             / "plans"
             / f"{request.asset_id}.json"
         )
+        subtitle_font = (
+            self._subtitle_font_resolver()
+            if request.subtitle_mode is SubtitleMode.BURNED
+            else None
+        )
         if _can_reuse_render(
             render_record_path,
             plan_path,
@@ -793,6 +801,7 @@ class RenderProjectUseCase:
             request.audio_crossfade_ms,
             request.denoiser_id,
             request.loudness_profile,
+            subtitle_font,
         ):
             return RenderResult(
                 request.output_path.absolute(),
@@ -871,6 +880,7 @@ class RenderProjectUseCase:
             str(subtitle_path),
             str(request.output_path),
             request.subtitle_mode,
+            subtitle_font=subtitle_font,
         )
         self._renderer.render_to_path(
             subtitle_command,
@@ -887,6 +897,9 @@ class RenderProjectUseCase:
                 "duration_ms": timeline.estimated_duration_ms,
                 "plan_revision": plan_revision,
                 "subtitle_mode": request.subtitle_mode.value,
+                "subtitle_font": (
+                    None if subtitle_font is None else subtitle_font.to_record()
+                ),
                 "audio_crossfade_ms": request.audio_crossfade_ms,
                 "denoiser_id": request.denoiser_id,
                 "loudness_profile": _loudness_profile_record(request.loudness_profile),
@@ -923,6 +936,7 @@ def _can_reuse_render(
     audio_crossfade_ms: int,
     denoiser_id: str,
     loudness_profile: LoudnessProfile | None,
+    subtitle_font: SubtitleFont | None,
 ) -> bool:
     if (
         not record_path.is_file()
@@ -940,6 +954,8 @@ def _can_reuse_render(
             and record["duration_ms"] == duration_ms
             and record.get("plan_revision") == plan_revision
             and record.get("subtitle_mode") == subtitle_mode.value
+            and record.get("subtitle_font")
+            == (None if subtitle_font is None else subtitle_font.to_record())
             and record.get("audio_crossfade_ms") == audio_crossfade_ms
             and record.get("denoiser_id") == denoiser_id
             and record.get("loudness_profile")
