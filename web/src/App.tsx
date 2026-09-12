@@ -15,6 +15,7 @@ import {
 import { PlanReview } from "./PlanReview";
 import { ProjectHome } from "./ProjectHome";
 import { AssetLibrary } from "./AssetLibrary";
+import { OutputWorkspace } from "./OutputWorkspace";
 
 export function App() {
   const [search, setSearch] = useState(window.location.search);
@@ -26,6 +27,8 @@ export function App() {
   const parameters = new URLSearchParams(search);
   const projectId = parameters.get("project") ?? "";
   const assetId = parameters.get("asset") ?? "";
+  const collectionId = parameters.get("collection") ?? "";
+  const outputId = parameters.get("output") ?? "";
   function navigate(project = "", asset = "") {
     const query = new URLSearchParams();
     if (project) query.set("project", project);
@@ -41,6 +44,7 @@ export function App() {
       </nav>
       <main className="app-content">
         {!projectId ? <ProjectHome loadProjects={listProjects} createProject={createProject} onSelect={(id) => navigate(id)} />
+          : collectionId && outputId ? <OutputWorkspace key={`${projectId}:${collectionId}:${outputId}`} project={projectId} collection={collectionId} output={outputId} />
           : !assetId ? <ProjectWorkspace key={projectId} projectId={projectId} onOpen={(asset) => navigate(projectId, asset)} />
           : <Review key={`${projectId}:${assetId}`} projectId={projectId} assetId={assetId} />}
       </main>

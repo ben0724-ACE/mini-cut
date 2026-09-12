@@ -49,6 +49,7 @@ from minicut.highlight_brief import HighlightBrief, HighlightPreset
 from minicut.highlight_service import generate_highlights, read_highlights
 from minicut.importer import import_media
 from minicut.media import classify_media
+from minicut.output_repository import OutputCollectionRepository
 from minicut.project import ProjectRepository
 
 ProjectId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
@@ -126,6 +127,10 @@ class HighlightTaskBody(BaseModel):
     def valid_brief(self) -> Self:
         self.brief()
         return self
+
+
+class HighlightSelectionBody(BaseModel):
+    output_ids: list[str]
 
 
 class RenderTaskBody(BaseModel):
@@ -683,7 +688,7 @@ def create_app(
             lambda: highlights(
                 root / project_id,
                 body.asset_id,
-                f"highlights-{idempotency_key.replace('.', '-')}",
+                f"highlights-{uuid4().hex}",
                 body.brief(),
             ),
         )
@@ -719,6 +724,34 @@ def create_app(
             return read_highlights(root / project_id, collection_id)
         except MiniCutError as error:
             raise HTTPException(404, str(error)) from error
+
+    @api.put("/api/projects/{project_id}/highlights/{collection_id}/selection")
+    def save_highlight_selection(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        collection_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")],
+        body: HighlightSelectionBody,
+    ) -> dict[str, object]:
+        inspect(project_id)
+        try:
+            result = read_highlights(root / project_id, collection_id)
+            allowed = {
+                output["output_id"]
+                for output in cast(list[dict[str, object]], result["outputs"])
+            }
+            if (
+                len(set(body.output_ids)) != len(body.output_ids)
+                or not set(body.output_ids) <= allowed
+            ):
+                raise HTTPException(
+                    400, "Selection contains unknown or repeated outputs"
+                )
+            result["selected_output_ids"] = body.output_ids
+            OutputCollectionRepository(
+                root / project_id, collection_id
+            ).write_highlight_result(result)
+            return result
+        except MiniCutError as error:
+            raise HTTPException(400, str(error)) from error
 
     @api.post(
         "/api/projects/{project_id}/tasks/plan",
