@@ -331,6 +331,8 @@ class RenderCommandBuilder:
         requirements: TimelineTrackRequirements,
         video_metadata: VideoOutputMetadata = _DEFAULT_VIDEO_METADATA,
         encoding: RenderEncoding = _DEFAULT_ENCODING,
+        audio_fade: AudioFade = _DEFAULT_AUDIO_FADE,
+        denoise_filter: str | None = None,
     ) -> tuple[str, ...]:
         """Render explicit source reuse/order only after plan-bound validation."""
         validate_output_timeline(
@@ -344,8 +346,8 @@ class RenderCommandBuilder:
             video_metadata,
             encoding,
             _DEFAULT_AUDIO_METADATA,
-            _DEFAULT_AUDIO_FADE,
-            None,
+            audio_fade,
+            denoise_filter,
         )
 
     def _build_concat_arguments(

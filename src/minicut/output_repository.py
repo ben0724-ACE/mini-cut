@@ -70,9 +70,17 @@ class OutputCollectionRepository:
         )
 
     def write_render_record(
-        self, output_id: str, revision: int, record: object
+        self,
+        output_id: str,
+        revision: int,
+        record: object,
+        export_id: str | None = None,
     ) -> None:
-        self._write_json(self.render_record_path(output_id, revision), record)
+        path = self.render_record_path(output_id, revision)
+        if export_id is not None:
+            validate_output_id(export_id)
+            path = path.parent / export_id / path.name
+        self._write_json(path, record)
 
     @staticmethod
     def _write_json(path: Path, value: object) -> None:

@@ -8,9 +8,10 @@ from tempfile import TemporaryDirectory
 from typing import cast
 
 from minicut.application import TimelineRenderer
+from minicut.audio_denoise import build_denoiser_registry, resolve_denoiser
 from minicut.errors import ProcessingError, UserInputError
 from minicut.media import StreamType
-from minicut.output_plan import OutputPlan
+from minicut.output_plan import OutputPlan, validate_output_id
 from minicut.output_repository import OutputCollectionRepository
 from minicut.output_timeline import (
     OutputContextIssue,
@@ -21,6 +22,7 @@ from minicut.output_timeline import (
 )
 from minicut.project import ProjectRepository
 from minicut.render_command import (
+    AudioFade,
     RenderCommandBuilder,
     SubtitleMode,
     VideoOutputMetadata,
@@ -46,6 +48,9 @@ class OutputRenderRequest:
     subtitle_mode: SubtitleMode = SubtitleMode.SOFT
     video_metadata: VideoOutputMetadata = VideoOutputMetadata()
     cancellation: CancellationToken | None = None
+    export_id: str | None = None
+    audio_fade_ms: int = 0
+    denoiser_id: str = "none"
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +77,10 @@ class RenderOutputUseCase:
     def execute(self, request: OutputRenderRequest) -> OutputRenderResult:
         if request.timeout_seconds <= 0:
             raise UserInputError("Render timeout must be positive")
+        fade = AudioFade(request.audio_fade_ms)
+        denoiser = resolve_denoiser(request.denoiser_id, build_denoiser_registry())
+        if request.export_id is not None:
+            validate_output_id(request.export_id)
         repository = OutputCollectionRepository(
             request.project_directory, request.collection_id
         )
@@ -117,8 +126,13 @@ class RenderOutputUseCase:
             / plan.output_id
         )
         output = destination_directory / f"v{plan.revision:04d}.mp4"
+        if request.export_id is not None:
+            destination_directory = destination_directory / request.export_id
+            output = destination_directory / f"v{plan.revision:04d}.mp4"
         subtitle = output.with_suffix(".srt")
         record_path = repository.render_record_path(plan.output_id, plan.revision)
+        if request.export_id is not None:
+            record_path = record_path.parent / request.export_id / record_path.name
         if any(
             Path(asset.source_path).resolve() in (output.resolve(), subtitle.resolve())
             for asset in manifest.assets
@@ -160,6 +174,10 @@ class RenderOutputUseCase:
                     str(staged_video),
                     requirements,
                     request.video_metadata,
+                    audio_fade=fade,
+                    denoise_filter=None
+                    if denoiser is None
+                    else denoiser.ffmpeg_filter(),
                 )
                 self._renderer.render_to_path(
                     command,
@@ -196,8 +214,11 @@ class RenderOutputUseCase:
                     "subtitle_mode": request.subtitle_mode.value,
                     "subtitle_font": None if font is None else font.to_record(),
                     "video_metadata": asdict(request.video_metadata),
+                    "audio_fade_ms": request.audio_fade_ms,
+                    "denoiser_id": request.denoiser_id,
                     "context_issues": [asdict(issue) for issue in issues],
                 },
+                request.export_id,
             )
         except OSError as error:
             raise ProcessingError(

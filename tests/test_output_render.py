@@ -53,7 +53,10 @@ class OutputRenderTest(unittest.TestCase):
                 "asset",
                 str(source),
                 3000,
-                (StreamInfo(0, StreamType.VIDEO, "h264"),),
+                (
+                    StreamInfo(0, StreamType.VIDEO, "h264"),
+                    StreamInfo(1, StreamType.AUDIO, "aac"),
+                ),
                 "existing",
             )
             ProjectRepository(root).create(ProjectManifest("demo", (asset,)))
@@ -111,6 +114,18 @@ class OutputRenderTest(unittest.TestCase):
             self.assertTrue(first.record_path.is_file())
             self.assertEqual(use_case.execute(request).output_path, first.output_path)
             self.assertEqual(len(renderer.commands), 4)
+            independent = use_case.execute(
+                replace(
+                    request,
+                    export_id="export-1",
+                    audio_fade_ms=20,
+                    denoiser_id="afftdn",
+                )
+            )
+            self.assertNotEqual(independent.output_path, first.output_path)
+            self.assertTrue(independent.record_path.is_file())
+            self.assertIn("afftdn", " ".join(renderer.commands[-2]))
+            self.assertIn("afade", " ".join(renderer.commands[-2]))
             renderer.fail_subtitle = True
             saved_subtitles = first.subtitle_path.read_text(encoding="utf-8")
             with self.assertRaises(ProcessingError):

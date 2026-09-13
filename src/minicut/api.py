@@ -55,8 +55,10 @@ from minicut.highlight_service import (
 )
 from minicut.importer import import_media
 from minicut.media import classify_media
+from minicut.output_export import export_output
 from minicut.output_repository import OutputCollectionRepository
 from minicut.project import ProjectRepository
+from minicut.transcription_task import CancellationToken, TranscriptionCancelled
 
 ProjectId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
 SafeFileName = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
@@ -159,6 +161,15 @@ class RenderTaskBody(BaseModel):
     asset_id: str
     output_name: SafeFileName
     timeout_seconds: float = Field(default=600, gt=0)
+
+
+class OutputExportBody(BaseModel):
+    collection_id: SafeFileName
+    output_id: SafeFileName
+    revision: int = Field(ge=1)
+    subtitle_mode: str = Field(default="soft", pattern=r"^(soft|burned)$")
+    audio_fade_ms: int = Field(default=0, ge=0, le=500)
+    denoiser_id: str = Field(default="none", pattern=r"^(none|afftdn)$")
 
 
 class TaskResponse(BaseModel):
@@ -413,6 +424,8 @@ def create_app(
         except MiniCutError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
+    export_tokens: dict[tuple[str, str], CancellationToken] = {}
+
     def submit_task(
         project_id: str,
         task_id: str,
@@ -452,6 +465,8 @@ def create_app(
                     path,
                     {**running, "status": "succeeded", "result": result},
                 )
+            except TranscriptionCancelled:
+                _write_job(path, {**running, "status": "cancelled"})
             except MiniCutError as error:
                 _write_job(
                     path,
@@ -594,6 +609,97 @@ def create_app(
         alias="Idempotency-Key",
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
     )
+
+    @api.post(
+        "/api/projects/{project_id}/tasks/output-export",
+        response_model=TaskResponse,
+        status_code=202,
+    )
+    def submit_output_export(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        body: OutputExportBody,
+        background_tasks: BackgroundTasks,
+        idempotency_key: Annotated[str, task_key_header],
+    ) -> TaskResponse:
+        token = export_tokens.setdefault(
+            (project_id, idempotency_key), CancellationToken()
+        )
+
+        def operation() -> dict[str, object]:
+            try:
+                return export_output(
+                    root / project_id,
+                    body.collection_id,
+                    body.output_id,
+                    idempotency_key,
+                    body.revision,
+                    body.subtitle_mode,
+                    body.audio_fade_ms,
+                    body.denoiser_id,
+                    token,
+                )
+            finally:
+                export_tokens.pop((project_id, idempotency_key), None)
+
+        response = submit_task(
+            project_id,
+            idempotency_key,
+            "output-export",
+            body.model_dump(mode="json"),
+            background_tasks,
+            operation,
+        )
+        if response.status not in ("pending", "running"):
+            export_tokens.pop((project_id, idempotency_key), None)
+        return response
+
+    @api.post(
+        "/api/projects/{project_id}/tasks/{task_id}/cancel", response_model=TaskResponse
+    )
+    def cancel_export(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        task_id: SafeFileName,
+    ) -> TaskResponse:
+        inspect(project_id)
+        job = _read_job(_job_path(root / project_id, task_id))
+        if job.get("status") not in ("pending", "running"):
+            return _task_response(job)
+        token = export_tokens.get((project_id, task_id))
+        if token is None:
+            raise HTTPException(
+                409,
+                "This task cannot be cancelled by this server; it may predate a restart",
+            )
+        token.cancel()
+        return _task_response(job)
+
+    @api.get(
+        "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/export-task",
+        response_model=TaskResponse | None,
+    )
+    def latest_output_export(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        collection_id: SafeFileName,
+        output_id: SafeFileName,
+    ) -> TaskResponse | None:
+        inspect(project_id)
+        paths = sorted(
+            (root / project_id / ".minicut/jobs").glob("*.json"),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )
+        for path in paths:
+            job = _read_job(path)
+            data = job.get("request")
+            data = cast(dict[str, object], data) if isinstance(data, dict) else None
+            if (
+                job.get("kind") == "output-export"
+                and isinstance(data, dict)
+                and data.get("collection_id") == collection_id
+                and data.get("output_id") == output_id
+            ):
+                return _task_response(job)
+        return None
 
     @api.post(
         "/api/projects/{project_id}/tasks/transcribe",

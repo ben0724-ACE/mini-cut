@@ -89,6 +89,13 @@ export interface RenderDownload {
   duration_ms: number;
 }
 
+export interface OutputExportOptions {subtitle_mode:"soft"|"burned"; audio_fade_ms:number; denoiser_id:"none"|"afftdn"}
+export interface OutputExportTask {task_id:string; status:"pending"|"running"|"succeeded"|"failed"|"cancelled"; result:RenderDownload & {revision:number;output_id:string}|null; error:string|null}
+export const startOutputExport=(project:string,collection:string,output:string,revision:number,options:OutputExportOptions,key:string)=>projectRequest<OutputExportTask>(`/api/projects/${encodeURIComponent(project)}/tasks/output-export`,{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":key},body:JSON.stringify({collection_id:collection,output_id:output,revision,...options})});
+export const readOutputExport=(project:string,task:string,signal?:AbortSignal)=>projectRequest<OutputExportTask>(`/api/projects/${encodeURIComponent(project)}/tasks/${encodeURIComponent(task)}`,{signal});
+export const cancelOutputExport=(project:string,task:string)=>projectRequest<OutputExportTask>(`/api/projects/${encodeURIComponent(project)}/tasks/${encodeURIComponent(task)}/cancel`,{method:"POST"});
+export const recoverOutputExport=(project:string,collection:string,output:string,signal?:AbortSignal)=>projectRequest<OutputExportTask|null>(`/api/projects/${encodeURIComponent(project)}/highlights/${encodeURIComponent(collection)}/outputs/${encodeURIComponent(output)}/export-task`,{signal});
+
 interface TaskStatus {
   task_id: string;
   status: "pending" | "running" | "succeeded" | "failed";
