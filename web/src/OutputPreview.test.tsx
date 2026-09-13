@@ -2,6 +2,16 @@ import { expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { OutputPreview } from "./OutputPreview";
 
+it("加载后直接定位首段，原生播放按钮也按计划播放",()=>{
+  vi.spyOn(HTMLMediaElement.prototype,"pause").mockImplementation(()=>{});
+  render(<OutputPreview title="起点" mediaUrl="/source" clips={[{instance_id:"a",segment_id:"s",role:"body",text:"首段",start_ms:10000,end_ms:12000}]} />);
+  const video=screen.getByLabelText("播放器 · 起点") as HTMLVideoElement;
+  fireEvent.loadedMetadata(video);
+  expect(video.currentTime).toBe(10);
+  fireEvent.play(video);video.currentTime=12;fireEvent.timeUpdate(video);
+  expect(video.pause).toHaveBeenCalled();
+});
+
 it("按实例顺序播放，支持原话钩子后向前跳转正文", () => {
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});

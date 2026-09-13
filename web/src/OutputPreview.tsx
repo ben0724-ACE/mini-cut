@@ -6,10 +6,11 @@ export function OutputPreview({title, mediaUrl, clips: allClips, jumpTo}: {title
   const video = useRef<HTMLVideoElement>(null); const cursor = useRef<number | null>(null);
   const [error, setError] = useState("");
   const [caption, setCaption] = useState("");
-  useEffect(() => {if (jumpTo && video.current) {cursor.current = null; video.current.pause(); video.current.currentTime = jumpTo.ms / 1000; setCaption(allClips.find(clip => clip.start_ms === jumpTo.ms)?.text ?? "");}}, [jumpTo]);
-  return <div><video aria-label={`播放器 · ${title}`} ref={video} className="player" controls preload="metadata" src={mediaUrl} onPlay={() => {document.querySelectorAll("video").forEach(other => {if (other !== video.current) other.pause();});}} onError={() => setError("媒体无法加载")} onTimeUpdate={() => {
+  function initialize() {const player=video.current;if(player&&clips[0]) {cursor.current=0;player.currentTime=clips[0].start_ms/1000;setCaption(clips[0].text);}}
+  useEffect(() => {if (jumpTo && video.current) {const index=clips.findIndex(clip=>clip.start_ms===jumpTo.ms);cursor.current = index>=0?index:null; video.current.pause(); video.current.currentTime = jumpTo.ms / 1000; setCaption(allClips.find(clip => clip.start_ms === jumpTo.ms)?.text ?? "");}}, [jumpTo]);
+  return <div><video aria-label={`播放器 · ${title}`} ref={video} className="player" controls preload="metadata" src={mediaUrl} onLoadedMetadata={initialize} onPlay={() => {if(cursor.current===null) initialize();document.querySelectorAll("video").forEach(other => {if (other !== video.current) other.pause();});}} onError={() => setError("媒体无法加载")} onTimeUpdate={() => {
     const player = video.current; const index = cursor.current;
-    if (player) setCaption(clips.find(clip => player.currentTime * 1000 >= clip.start_ms && player.currentTime * 1000 < clip.end_ms)?.text ?? "");
+    if (player) setCaption((index===null?clips.find(clip => player.currentTime * 1000 >= clip.start_ms && player.currentTime * 1000 < clip.end_ms):clips[index])?.text ?? "");
     if (!player || index === null) return;
     const clip = clips[index];
     if (player.currentTime * 1000 < clip.end_ms) return;
