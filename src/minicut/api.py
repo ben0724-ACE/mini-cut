@@ -172,6 +172,20 @@ class OutputExportBody(BaseModel):
     denoiser_id: str = Field(default="none", pattern=r"^(none|afftdn)$")
 
 
+class OutputExportBatchBody(BaseModel):
+    outputs: list[OutputExportBody] = Field(min_length=1, max_length=10)
+
+    @model_validator(mode="after")
+    def unique_outputs(self) -> Self:
+        ids = [(output.collection_id, output.output_id) for output in self.outputs]
+        if (
+            len(set(ids)) != len(ids)
+            or len({output.collection_id for output in self.outputs}) != 1
+        ):
+            raise ValueError("Select distinct outputs from one collection")
+        return self
+
+
 class TaskResponse(BaseModel):
     task_id: str
     kind: str
@@ -652,6 +666,27 @@ def create_app(
         if response.status not in ("pending", "running"):
             export_tokens.pop((project_id, idempotency_key), None)
         return response
+
+    @api.post(
+        "/api/projects/{project_id}/tasks/output-export-batch",
+        response_model=list[TaskResponse],
+        status_code=202,
+    )
+    def submit_output_batch(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        body: OutputExportBatchBody,
+        background_tasks: BackgroundTasks,
+        idempotency_key: Annotated[str, task_key_header],
+    ) -> list[TaskResponse]:
+        return [
+            submit_output_export(
+                project_id,
+                output,
+                background_tasks,
+                f"{idempotency_key}-{output.output_id}",
+            )
+            for output in body.outputs
+        ]
 
     @api.post(
         "/api/projects/{project_id}/tasks/{task_id}/cancel", response_model=TaskResponse

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { recoverHighlights, readHighlightTask, startHighlights, getHighlights, saveHighlightSelection, type AssetDetail, type HighlightTask } from "./api";
 import { HighlightForm, type HighlightBrief } from "./HighlightForm";
 import { OutputPreview } from "./OutputPreview";
+import { BatchExport } from "./BatchExport";
 
 export function HighlightPanel({project, asset, recover = recoverHighlights}: {project: string; asset: AssetDetail; recover?: typeof recoverHighlights}) {
   const [task, setTask] = useState<HighlightTask | null>(null);
@@ -50,6 +51,7 @@ export function HighlightPanel({project, asset, recover = recoverHighlights}: {p
     {error && <p role="alert">{error}<button onClick={() => {setError(""); setLoading(true); setRetry(value => value + 1);}}>恢复查询</button></p>}
     {active && <p role="status">{task.status === "pending" ? "等待 AI 生成" : "AI 正在生成"}；离开或刷新不会取消后台任务。</p>}
     {task?.status === "failed" && <p role="alert">生成失败：{task.error}。可修改要求后再次生成。</p>}
+    {task?.status === "succeeded" && task.result && task.result.outputs.length > 0 && <BatchExport project={project} collection={collection} outputs={task.result.outputs} selected={selected} disabled={saving||selectionLoading} />}
     {task?.status === "succeeded" && task.result && <section><p>源素材：{asset.name}</p>{task.result.notes.map((note, index) => <p key={index}>{note}</p>)}<label><input type="checkbox" checked={onlySelected} onChange={event => setOnlySelected(event.target.checked)} />只看已选作品</label><p>已选 {selected.length} 条{saving ? " · 正在保存选择" : ""}</p>{selectionError && <p role="alert">{selectionError}</p>}<div className="project-grid">{task.result.outputs.filter(output => !onlySelected || selected.includes(output.output_id)).map(output => <article className="project-card" key={output.output_id}><h3>{output.title}</h3><p>{output.reason}</p><p>{(output.duration_ms / 1000).toFixed(2)} 秒 · 版本 {output.revision}</p><label><input type="checkbox" aria-label={`选择${output.title}`} disabled={saving || selectionLoading} checked={selected.includes(output.output_id)} onChange={event => void select(output.output_id, event.target.checked)} />选择作品</label><OutputPreview key={`${collection}:${output.output_id}`} title={output.title} clips={output.clips} mediaUrl={`/api/projects/${encodeURIComponent(project)}/media/source/${encodeURIComponent(asset.asset_id)}`} /><a href={`?project=${encodeURIComponent(project)}&collection=${encodeURIComponent(collection)}&output=${encodeURIComponent(output.output_id)}`}>进入单作品工作区</a></article>)}</div>{onlySelected && selected.length === 0 && <p>尚未选择作品</p>}{task.result.outputs.length === 0 && <p>没有符合要求的候选，请调整要求。</p>}</section>}
   </section>;
 }

@@ -12,6 +12,66 @@ from minicut.project import ProjectManifest, ProjectRepository
 from minicut.transcription_task import CancellationToken, TranscriptionCancelled
 
 
+def test_batch_exports_are_independent_and_failed_output_can_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ProjectRepository(tmp_path / "demo").create(ProjectManifest("demo"))
+    calls: list[str] = []
+
+    def fake_export(*args: object) -> dict[str, object]:
+        output = str(args[2])
+        calls.append(output)
+        if output == "bad" and calls.count("bad") == 1:
+            raise ProcessingError("failed output")
+        return {
+            "output_id": output,
+            "media_url": "/video",
+            "subtitle_url": "/srt",
+            "revision": 1,
+        }
+
+    monkeypatch.setattr(api_module, "export_output", fake_export)
+
+    async def run() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(tmp_path)),
+            base_url="http://test",
+        ) as client:
+            outputs = [
+                {"collection_id": "c", "output_id": id, "revision": 1}
+                for id in ("good", "bad")
+            ]
+            route = "/api/projects/demo/tasks/output-export-batch"
+            response = await client.post(
+                route, json={"outputs": outputs}, headers={"Idempotency-Key": "batch"}
+            )
+            assert response.status_code == 202
+            rows = [
+                (await client.get(f"/api/projects/demo/tasks/batch-{id}")).json()
+                for id in ("good", "bad")
+            ]
+            assert [row["status"] for row in rows] == ["succeeded", "failed"]
+            assert rows[1]["result"] is None
+            await client.post(
+                "/api/projects/demo/tasks/output-export",
+                json=outputs[1],
+                headers={"Idempotency-Key": "retry"},
+            )
+            assert (await client.get("/api/projects/demo/tasks/retry")).json()[
+                "status"
+            ] == "succeeded"
+            assert calls == ["good", "bad", "bad"]
+            assert (
+                await client.post(
+                    route,
+                    json={"outputs": [outputs[0], outputs[0]]},
+                    headers={"Idempotency-Key": "duplicate"},
+                )
+            ).status_code == 422
+
+    asyncio.run(run())
+
+
 def test_running_export_can_be_cancelled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

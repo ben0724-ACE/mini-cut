@@ -3,7 +3,31 @@ from dataclasses import replace
 from minicut.output_plan import OutputItem, OutputPlan, OutputRole
 from minicut.output_timeline import build_output_cues, compile_output_timeline
 from minicut.semantic_segment import SemanticSegment
-from minicut.subtitle import MappedWord
+from minicut.subtitle import MappedWord, render_srt
+
+
+def test_readable_subtitle_minimum_duration_does_not_cross_output_cut() -> None:
+    source = (
+        SemanticSegment("a", "Hi", 0, 800, ("ua",), ("wa",)),
+        SemanticSegment("b", "Bye", 2000, 2800, ("ub",), ("wb",)),
+    )
+    plan = OutputPlan(
+        "v",
+        "c",
+        "T",
+        (
+            OutputItem("i1", "a", OutputRole.BODY),
+            OutputItem("i2", "b", OutputRole.BODY),
+        ),
+    )
+    timeline = compile_output_timeline(plan, source, "asset")
+    mapped = (
+        MappedWord("wa", "Hi", 600, 800, "i1"),
+        MappedWord("wb", "Bye", 800, 1200, "i2"),
+    )
+    cues = build_output_cues(timeline, plan, mapped)
+    assert cues[0].end_ms <= 800
+    assert "Hi" in render_srt(cues, timeline.estimated_duration_ms)
 
 
 def test_deleted_instance_is_skipped_but_source_reference_survives() -> None:

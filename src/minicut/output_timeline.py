@@ -177,7 +177,7 @@ def build_output_cues(
             cues.extend(
                 build_readable_cues(
                     tuple(word for word in mapped if word.clip_id == clip.clip_id),
-                    timeline.estimated_duration_ms,
+                    clip.output_range.end_ms,
                 )
             )
     return tuple(cues)
