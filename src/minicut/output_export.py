@@ -8,9 +8,13 @@ from minicut.errors import UserInputError
 from minicut.highlight_service import source_segments
 from minicut.output_render import OutputRenderRequest, RenderOutputUseCase
 from minicut.output_repository import OutputCollectionRepository
+from minicut.project import ProjectRepository
 from minicut.render_command import SubtitleMode
+from minicut.render_profile import RenderProfile, source_dimensions
 from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
+
+_DEFAULT_PROFILE = RenderProfile()
 
 
 def export_output(
@@ -23,6 +27,7 @@ def export_output(
     audio_fade_ms: int,
     denoiser_id: str,
     cancellation: CancellationToken,
+    profile: RenderProfile = _DEFAULT_PROFILE,
 ) -> dict[str, object]:
     repository = OutputCollectionRepository(project, collection)
     try:
@@ -43,6 +48,12 @@ def export_output(
     if plan is None or plan.revision != revision:
         raise UserInputError("Output version changed; refresh before exporting")
     cancellation.raise_if_cancelled()
+    asset = next(
+        asset
+        for asset in ProjectRepository(project).read().assets
+        if asset.asset_id == asset_id
+    )
+    metadata = profile.metadata(*source_dimensions(Path(asset.source_path)))
     result = RenderOutputUseCase().execute(
         OutputRenderRequest(
             project,
@@ -56,12 +67,18 @@ def export_output(
             export_id=export_id,
             audio_fade_ms=audio_fade_ms,
             denoiser_id=denoiser_id,
+            video_metadata=metadata,
         )
     )
     base = f"/api/projects/{quote(project.name, safe='')}/media/exports/"
     return {
         "output_id": output,
         "revision": revision,
+        "width": metadata.width,
+        "height": metadata.height,
+        "aspect_ratio": profile.aspect_ratio,
+        "resolution": profile.resolution,
+        "fit": profile.fit,
         "duration_ms": result.timeline.estimated_duration_ms,
         "media_url": base
         + quote(str(result.output_path.relative_to(project / "exports")), safe="/"),

@@ -58,6 +58,7 @@ from minicut.media import classify_media
 from minicut.output_export import export_output
 from minicut.output_repository import OutputCollectionRepository
 from minicut.project import ProjectRepository
+from minicut.render_profile import RenderProfile
 from minicut.transcription_task import CancellationToken, TranscriptionCancelled
 
 ProjectId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
@@ -170,6 +171,16 @@ class OutputExportBody(BaseModel):
     subtitle_mode: str = Field(default="soft", pattern=r"^(soft|burned)$")
     audio_fade_ms: int = Field(default=0, ge=0, le=500)
     denoiser_id: str = Field(default="none", pattern=r"^(none|afftdn)$")
+    aspect_ratio: str = Field(
+        default="original", pattern=r"^(original|16:9|9:16|1:1|4:5)$"
+    )
+    resolution: int = 1080
+    fit: str = Field(default="pad", pattern=r"^(pad|crop)$")
+
+    @model_validator(mode="after")
+    def validate_profile(self) -> Self:
+        RenderProfile(self.aspect_ratio, self.resolution, self.fit)
+        return self
 
 
 class OutputExportBatchBody(BaseModel):
@@ -651,6 +662,7 @@ def create_app(
                     body.audio_fade_ms,
                     body.denoiser_id,
                     token,
+                    RenderProfile(body.aspect_ratio, body.resolution, body.fit),
                 )
             finally:
                 export_tokens.pop((project_id, idempotency_key), None)

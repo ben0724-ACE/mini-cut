@@ -1,6 +1,7 @@
 """Explicit-order compilation with validation bound to the source-ID plan."""
 
 from dataclasses import dataclass
+from textwrap import wrap
 
 from minicut.media import MediaAsset, TimeRange
 from minicut.output_plan import OutputPlan
@@ -12,6 +13,7 @@ from minicut.semantic_segment import (
 from minicut.subtitle import (
     MappedWord,
     SubtitleCue,
+    SubtitleLayoutPolicy,
     build_readable_cues,
     map_retained_words,
 )
@@ -158,8 +160,14 @@ def map_output_words(
     return tuple(mapped)
 
 
+_DEFAULT_SUBTITLE_POLICY = SubtitleLayoutPolicy()
+
+
 def build_output_cues(
-    timeline: Timeline, plan: OutputPlan, mapped: tuple[MappedWord, ...]
+    timeline: Timeline,
+    plan: OutputPlan,
+    mapped: tuple[MappedWord, ...],
+    policy: SubtitleLayoutPolicy = _DEFAULT_SUBTITLE_POLICY,
 ) -> tuple[SubtitleCue, ...]:
     by_instance = {item.instance_id: item for item in plan.items}
     cues: list[SubtitleCue] = []
@@ -170,7 +178,9 @@ def build_output_cues(
                 SubtitleCue(
                     clip.output_range.start_ms,
                     clip.output_range.end_ms,
-                    item.display_text,
+                    "\n".join(
+                        wrap(item.display_text, width=policy.max_characters_per_line)
+                    ),
                 )
             )
         else:
@@ -178,6 +188,7 @@ def build_output_cues(
                 build_readable_cues(
                     tuple(word for word in mapped if word.clip_id == clip.clip_id),
                     clip.output_range.end_ms,
+                    policy,
                 )
             )
     return tuple(cues)

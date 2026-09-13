@@ -29,7 +29,7 @@ from minicut.render_command import (
 )
 from minicut.renderer import FfmpegRenderer
 from minicut.semantic_segment import SemanticSegment
-from minicut.subtitle import render_srt
+from minicut.subtitle import SubtitleLayoutPolicy, render_srt
 from minicut.subtitle_font import SubtitleFont, resolve_subtitle_font
 from minicut.timeline import Timeline
 from minicut.timeline_validation import TimelineTrackRequirements
@@ -111,7 +111,16 @@ class RenderOutputUseCase:
             request.transcript.words,
         )
         subtitle_text = render_srt(
-            build_output_cues(timeline, plan, mapped),
+            build_output_cues(
+                timeline,
+                plan,
+                mapped,
+                SubtitleLayoutPolicy(
+                    max_characters_per_line=12
+                    if request.video_metadata.width < request.video_metadata.height
+                    else 18
+                ),
+            ),
             timeline.estimated_duration_ms,
         )
         font = (
@@ -192,6 +201,7 @@ class RenderOutputUseCase:
                     str(staged_video),
                     request.subtitle_mode,
                     subtitle_font=font,
+                    video_metadata=request.video_metadata,
                 )
                 self._renderer.render_to_path(
                     command,

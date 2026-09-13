@@ -16,6 +16,7 @@ from minicut.output_plan import (
 from minicut.output_render import OutputRenderRequest, RenderOutputUseCase
 from minicut.output_repository import OutputCollectionRepository
 from minicut.project import ProjectManifest, ProjectRepository
+from minicut.render_command import VideoOutputMetadata
 from minicut.semantic_segment import SemanticSegment
 from minicut.transcript import Transcript, TranscriptSource, Word
 
@@ -126,6 +127,19 @@ class OutputRenderTest(unittest.TestCase):
             self.assertTrue(independent.record_path.is_file())
             self.assertIn("afftdn", " ".join(renderer.commands[-2]))
             self.assertIn("afade", " ".join(renderer.commands[-2]))
+            portrait = use_case.execute(
+                replace(
+                    request,
+                    export_id="portrait",
+                    video_metadata=VideoOutputMetadata(720, 1280, fit="crop"),
+                )
+            )
+            self.assertNotEqual(portrait.output_path, independent.output_path)
+            self.assertIn("crop=720:1280", " ".join(renderer.commands[-2]))
+            self.assertEqual(
+                json.loads(portrait.record_path.read_text())["video_metadata"]["fit"],
+                "crop",
+            )
             renderer.fail_subtitle = True
             saved_subtitles = first.subtitle_path.read_text(encoding="utf-8")
             with self.assertRaises(ProcessingError):

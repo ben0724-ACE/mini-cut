@@ -42,8 +42,11 @@ class VideoOutputMetadata:
     width: int = 1920
     height: int = 1080
     frame_rate: str = "30"
+    fit: str = "pad"
 
     def __post_init__(self) -> None:
+        if self.fit not in {"pad", "crop"}:
+            raise ValueError("video fit must be pad or crop")
         if self.width <= 0 or self.height <= 0:
             raise ValueError("video output dimensions must be positive")
         if self.width % 2 or self.height % 2:
@@ -182,6 +185,7 @@ class RenderCommandBuilder:
         encoding: RenderEncoding = _DEFAULT_ENCODING,
         *,
         subtitle_font: SubtitleFont | None = None,
+        video_metadata: VideoOutputMetadata | None = None,
     ) -> tuple[str, ...]:
         """Attach a selectable track or render subtitle text into video frames."""
         input_url = _local_file_url(input_path, label="subtitle video input")
@@ -215,7 +219,12 @@ class RenderCommandBuilder:
             subtitle_filter = (
                 f"subtitles=filename={_subtitle_filter_path(subtitle_path)}"
                 f":fontsdir={_subtitle_filter_path(str(subtitle_font.path.parent))}"
-                f":force_style='FontName={subtitle_font.family}'"
+                f":force_style='FontName={subtitle_font.family}"
+                + (
+                    "'"
+                    if video_metadata is None
+                    else f",FontSize={max(10, round(18 * min(1, video_metadata.width / video_metadata.height)))},MarginL=20,MarginR=20,MarginV=12'"
+                )
             )
             command.extend(
                 (
@@ -247,6 +256,7 @@ class RenderCommandBuilder:
         audio_metadata: AudioOutputMetadata = _DEFAULT_AUDIO_METADATA,
         audio_fade: AudioFade = _DEFAULT_AUDIO_FADE,
         denoise_filter: str | None = None,
+        video_metadata: VideoOutputMetadata | None = None,
     ) -> tuple[str, ...]:
         """Build an exact single-clip input-seek command as an argv tuple."""
         if len(timeline.clips) != 1:
@@ -283,6 +293,20 @@ class RenderCommandBuilder:
             "-t",
             _seconds(clip.source_range.duration_ms),
             *audio_filter_arguments,
+            *(
+                (
+                    "-vf",
+                    f"scale={video_metadata.width}:{video_metadata.height}:force_original_aspect_ratio={'decrease' if video_metadata.fit == 'pad' else 'increase'},"
+                    + (
+                        f"pad={video_metadata.width}:{video_metadata.height}:(ow-iw)/2:(oh-ih)/2,"
+                        if video_metadata.fit == "pad"
+                        else f"crop={video_metadata.width}:{video_metadata.height},"
+                    )
+                    + f"setsar=1,fps={video_metadata.frame_rate}",
+                )
+                if video_metadata is not None and StreamType.VIDEO in stream_types
+                else ()
+            ),
             *_encoding_arguments(
                 include_video=StreamType.VIDEO in stream_types,
                 include_audio=StreamType.AUDIO in stream_types,
@@ -394,10 +418,15 @@ class RenderCommandBuilder:
                     f"[{input_index}:{stream_index}]trim=start={start}:end={end},"
                     f"setpts=PTS-STARTPTS,"
                     f"scale={video_metadata.width}:{video_metadata.height}:"
-                    "force_original_aspect_ratio=decrease,"
-                    f"pad={video_metadata.width}:{video_metadata.height}:"
-                    "(ow-iw)/2:(oh-ih)/2,setsar=1,"
-                    f"fps={video_metadata.frame_rate},"
+                    + (
+                        "force_original_aspect_ratio=decrease,"
+                        f"pad={video_metadata.width}:{video_metadata.height}:"
+                        "(ow-iw)/2:(oh-ih)/2,setsar=1,"
+                        if video_metadata.fit == "pad"
+                        else "force_original_aspect_ratio=increase,"
+                        f"crop={video_metadata.width}:{video_metadata.height},setsar=1,"
+                    )
+                    + f"fps={video_metadata.frame_rate},"
                     f"format={encoding.pixel_format}[v{clip_index}]"
                 )
                 concat_inputs.append(f"[v{clip_index}]")

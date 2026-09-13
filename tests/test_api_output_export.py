@@ -79,7 +79,7 @@ def test_running_export_can_be_cancelled(
     started, release = Event(), Event()
 
     def fake_export(*args: object) -> dict[str, object]:
-        token = args[-1]
+        token = args[8]
         assert isinstance(token, CancellationToken)
         started.set()
         assert release.wait(3)
