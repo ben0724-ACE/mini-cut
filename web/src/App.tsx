@@ -67,7 +67,7 @@ function ProjectWorkspace({ projectId, onOpen }: { projectId: string; onOpen: (a
   if (error) return <p role="alert">{error}</p>;
   if (!project) return <p role="status">正在读取项目…</p>;
   return <section><header className="workspace-heading"><h1>{project.name ?? project.project_id}</h1></header>
-    <p>项目已创建</p><AssetLibrary projectId={projectId} onOpen={onOpen} />
+    <AssetLibrary projectId={projectId} onOpen={onOpen} />
   </section>;
 }
 
