@@ -81,6 +81,16 @@ def test_edit_preserves_source_and_other_output_and_rejects_empty_body(
             assert (
                 await client.patch(base + "i-0", json={"deleted": False})
             ).status_code == 200
+            output = "/api/projects/demo/highlights/collection/outputs/video-1"
+            reordered = await client.put(
+                output + "/order",
+                json={"order": ["i-1", "i-0"], "roles": {"i-1": "hook"}},
+            )
+            assert reordered.status_code == 200
+            assert reordered.json()["outputs"][0]["clips"][0]["instance_id"] == "i-1"
+            versions = (await client.get(output + "/versions")).json()
+            assert len(versions) >= 3
+            assert versions[-1]["clips"][0]["role"] == "hook"
 
     asyncio.run(run())
     updated = repository.read(segments)

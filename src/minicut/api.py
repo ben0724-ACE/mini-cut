@@ -49,7 +49,9 @@ from minicut.highlight_brief import HighlightBrief, HighlightPreset
 from minicut.highlight_service import (
     edit_output_item,
     generate_highlights,
+    output_versions,
     read_highlights,
+    reorder_output,
 )
 from minicut.importer import import_media
 from minicut.media import classify_media
@@ -146,6 +148,11 @@ class OutputItemEditBody(BaseModel):
         if self.deleted is None and self.display_text is None:
             raise ValueError("Provide a subtitle or decision change")
         return self
+
+
+class OutputOrderBody(BaseModel):
+    order: list[str]
+    roles: dict[str, str] = Field(default_factory=dict)
 
 
 class RenderTaskBody(BaseModel):
@@ -788,6 +795,37 @@ def create_app(
                 deleted=body.deleted,
                 display_text=body.display_text,
             )
+        except (MiniCutError, ValueError) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @api.put(
+        "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/order"
+    )
+    def put_output_order(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        collection_id: str,
+        output_id: str,
+        body: OutputOrderBody,
+    ) -> dict[str, object]:
+        inspect(project_id)
+        try:
+            return reorder_output(
+                root / project_id, collection_id, output_id, body.order, body.roles
+            )
+        except (MiniCutError, ValueError) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @api.get(
+        "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/versions"
+    )
+    def get_output_versions(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        collection_id: str,
+        output_id: str,
+    ) -> list[dict[str, object]]:
+        inspect(project_id)
+        try:
+            return output_versions(root / project_id, collection_id, output_id)
         except (MiniCutError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
 

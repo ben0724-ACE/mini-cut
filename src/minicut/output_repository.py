@@ -29,7 +29,26 @@ class OutputCollectionRepository:
         validate_output_collection(collection, segments)
         if collection.collection_id != self.collection_id:
             raise ValueError("collection does not match repository ID")
+        if self.path.is_file():
+            prior = OutputCollection.from_dict(
+                json.loads(self.path.read_text(encoding="utf-8"))
+            )
+            for plan in prior.plans:
+                self._write_json(
+                    self.version_path(plan.output_id, plan.revision), plan.to_dict()
+                )
         self._write_json(self.path, collection.to_dict())
+
+    def version_path(self, output_id: str, revision: int) -> Path:
+        validate_output_id(output_id)
+        if revision < 1:
+            raise ValueError("revision must be positive")
+        return (
+            self.path.parent
+            / f"{self.collection_id}-versions"
+            / output_id
+            / f"v{revision:04d}.json"
+        )
 
     def render_record_path(self, output_id: str, revision: int) -> Path:
         validate_output_id(output_id)

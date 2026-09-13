@@ -12,6 +12,7 @@ from minicut.errors import UserInputError
 from minicut.highlight_brief import HighlightBrief
 from minicut.highlight_planner import HighlightPlanner
 from minicut.highlight_workflow import attach_continuation_context, plan_highlights
+from minicut.output_plan import OutputRole
 from minicut.output_repository import OutputCollectionRepository
 from minicut.output_timeline import compile_output_timeline
 from minicut.segmentation import build_utterances
@@ -208,3 +209,96 @@ def edit_output_item(
         segments,
     )
     return read_highlights(project, collection_id)
+
+
+def reorder_output(
+    project: Path,
+    collection_id: str,
+    output_id: str,
+    order: list[str],
+    roles: dict[str, str],
+) -> dict[str, object]:
+    result = read_highlights(project, collection_id)
+    segments = source_segments(project, cast(str, result["asset_id"]))
+    repository = OutputCollectionRepository(project, collection_id)
+    collection = repository.read(segments)
+    plan = next(
+        (plan for plan in collection.plans if plan.output_id == output_id), None
+    )
+    if plan is None:
+        raise UserInputError("Output does not exist")
+    by_id = {item.instance_id: item for item in plan.items}
+    if (
+        len(order) != len(by_id)
+        or set(order) != set(by_id)
+        or not set(roles) <= set(by_id)
+    ):
+        raise UserInputError("Order must contain every instance exactly once")
+    updated = replace(
+        plan,
+        revision=plan.revision + 1,
+        items=tuple(
+            replace(by_id[identity], role=OutputRole(roles[identity]))
+            if identity in roles
+            else by_id[identity]
+            for identity in order
+        ),
+    )
+    repository.write(
+        replace(
+            collection,
+            plans=tuple(
+                updated if existing.output_id == output_id else existing
+                for existing in collection.plans
+            ),
+        ),
+        segments,
+    )
+    return read_highlights(project, collection_id)
+
+
+def output_versions(
+    project: Path, collection_id: str, output_id: str
+) -> list[dict[str, object]]:
+    result = read_highlights(project, collection_id)
+    segments = source_segments(project, cast(str, result["asset_id"]))
+    repository = OutputCollectionRepository(project, collection_id)
+    current = next(
+        (
+            plan
+            for plan in repository.read(segments).plans
+            if plan.output_id == output_id
+        ),
+        None,
+    )
+    if current is None:
+        raise UserInputError("Output does not exist")
+    from minicut.output_plan import OutputPlan
+
+    plans = [
+        OutputPlan.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        for path in repository.version_path(output_id, 1).parent.glob("*.json")
+    ]
+    plans = [plan for plan in plans if plan.revision < current.revision] + [current]
+    by_id = {segment.segment_id: segment for segment in segments}
+    return [
+        {
+            "revision": plan.revision,
+            "duration_ms": compile_output_timeline(
+                plan, segments, cast(str, result["asset_id"])
+            ).estimated_duration_ms,
+            "clips": [
+                {
+                    "instance_id": item.instance_id,
+                    "segment_id": item.segment_id,
+                    "role": item.role.value,
+                    "deleted": item.deleted,
+                    "text": item.display_text or by_id[item.segment_id].text,
+                    "start_ms": by_id[item.segment_id].start_ms,
+                    "end_ms": by_id[item.segment_id].end_ms,
+                }
+                for item in plan.items
+            ],
+        }
+        for plan in sorted(plans, key=lambda plan: plan.revision)
+    ]
