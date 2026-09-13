@@ -30,3 +30,14 @@ it("恢复数量不足结果并显示候选标题理由及源素材", async () =
   await userEvent.click(screen.getByRole("checkbox", {name: "只看已选作品"}));
   expect(screen.getByRole("button",{name:"有趣观点"})).toBeInTheDocument();
 });
+
+it("点击候选直接进入编辑，切换作品不回到生成", async () => {
+  const result = {collection_id:"two",asset_id:"asset",brief:{preset:"podcast_highlights",count:2,min_ms:60000,max_ms:90000,hook_ms:null,instructions:"",max_source_overlap:0.3},notes:[],selected_output_ids:[],outputs:[{output_id:"video-1",title:"第一条",reason:"独立观点",duration_ms:61000,clips:[],revision:1},{output_id:"video-2",title:"第二条",reason:"不同观点",duration_ms:62000,clips:[],revision:1}]};
+  vi.mocked(getHighlights).mockResolvedValue(result);
+  render(<HighlightPanel project="demo" asset={{asset_id:"asset",name:"test.mov",duration_ms:100000,has_transcript:true,has_plan:false}} recover={vi.fn().mockResolvedValue({task_id:"job",status:"succeeded",error:null,result})} />);
+  await userEvent.click(await screen.findByRole("button",{name:"第一条"}));
+  expect(screen.getByRole("tab",{name:"编辑"})).toHaveAttribute("aria-selected","true");
+  await userEvent.click(screen.getByRole("tab",{name:"导出"}));
+  await userEvent.click(screen.getByRole("button",{name:"第二条"}));
+  await waitFor(()=>expect(screen.getByRole("tab",{name:"编辑"})).toHaveAttribute("aria-selected","true"));
+});

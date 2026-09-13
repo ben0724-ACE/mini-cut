@@ -9,6 +9,8 @@
 body { margin: 0; }
 * { box-sizing: border-box; }
 .muted { color: #939dab; font-size: 12px; line-height: 1.5; }
+.helper-text { color:#a0a9b7;font-size:12px;line-height:1.6;font-weight:400;margin:8px 0;overflow-wrap:anywhere; }
+.workbench details > p:not([role]),.workbench fieldset > p:not([role]) { color:#a0a9b7;font-size:12px;line-height:1.6;font-weight:400; }
 .workbench { display:grid;grid-template-columns:230px minmax(280px,1fr) 320px;gap:12px;height:calc(100dvh - 220px);min-height:320px; }
 .workbench-sidebar,.workbench-preview,.workbench-tools { min-width:0;background:#1c2026;border:1px solid #303743;border-radius:12px; }
 .workbench-sidebar { padding:14px;overflow:auto; }

@@ -16,7 +16,7 @@ export function OutputExport({project,collection,output,revision}:{project:strin
     <label>字幕方式<select disabled={active||sending} value={options.subtitle_mode} onChange={event=>change({subtitle_mode:event.target.value as OutputExportOptions["subtitle_mode"]})}><option value="soft">软字幕（播放器可开关）</option><option value="burned">烧录字幕（画面内）</option></select></label>
     <label>切点淡入淡出（毫秒）<input type="number" min={0} max={500} disabled={active||sending} value={options.audio_fade_ms} onChange={event=>change({audio_fade_ms:Number(event.target.value)})} /></label>
     <label>降噪<select disabled={active||sending} value={options.denoiser_id} onChange={event=>change({denoiser_id:event.target.value as OutputExportOptions["denoiser_id"]})}><option value="none">关闭</option><option value="afftdn">FFmpeg 降噪</option></select></label>
-    <p>不生成新语音；降噪与淡入淡出默认关闭。每次成功导出保留独立文件。</p></details>
+    <p className="helper-text">音频处理默认关闭，不生成新语音。每次导出独立保存。</p></details>
     <button disabled={active||sending} onClick={()=>void submit()}>导出当前作品</button>
     {active&&<button onClick={()=>{setError("");void cancelOutputExport(project,task.task_id).then(()=>setError("已请求取消，等待后台停止")).catch(reason=>setError(reason instanceof Error?reason.message:"取消失败"));}}>取消导出</button>}
     {task&&<p role="status">导出状态：{task.status}{task.result&&` · 版本 ${task.result.revision}`}</p>}

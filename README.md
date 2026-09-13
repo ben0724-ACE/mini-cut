@@ -124,7 +124,7 @@ Open `http://127.0.0.1:5173/` to list projects, create one by name, and switch p
 
 Expand the media's transcription settings, select MLX (Apple Silicon) or PyTorch Whisper, a model, and Chinese or English, then start transcription. Install the chosen backend first. Existing Hugging Face model caches are shared; start the API with `HF_HUB_OFFLINE=1` to use cached MLX models offline. Refreshing or returning to a project recovers its latest task. Stopping status queries does **not** cancel backend computation. API process restarts do not resume interrupted computation.
 
-The dark workbench keeps the current asset and candidates on the left, one player in the center, and Generate/Edit/Export tabs on the right. Settings and explanations fold away; panels scroll independently and switching tabs preserves drafts.
+The dark workbench keeps the current asset and candidates on the left, one player in the center, and Generate/Edit/Export tabs on the right. Selecting a candidate opens Edit directly; Generate remains available for a new selection. Settings and concise explanations fold away; panels scroll independently and switching tabs preserves drafts.
 
 For a transcribed asset, select a highlight preset, enter custom instructions, and set count, duration limits, source overlap, and an optional original-speech hook. Start the API with `uv run --env-file .env minicut-api` to load your local DeepSeek configuration. Generation sends transcript text, not video, and may incur API charges. Each generation creates a separate collection; the project page recovers the latest generation. Select candidates to persist a shortlist or show selected items only.
 

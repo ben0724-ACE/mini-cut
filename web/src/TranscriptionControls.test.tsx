@@ -3,6 +3,12 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TranscriptionControls } from "./TranscriptionControls";
 
+it("转录辅助文案简短，详细说明默认折叠", () => {
+  render(<TranscriptionControls project="demo" asset="asset" recover={vi.fn().mockResolvedValue(null)} />);
+  expect(screen.getByText("本机转录 · 未缓存模型需联网下载")).toHaveClass("helper-text");
+  expect(screen.getByText("转录说明").closest("details")).not.toHaveAttribute("open");
+});
+
 it("选择模型语言并提交注册素材，不发送路径", async () => {
   const start = vi.fn().mockResolvedValue({task_id: "job", status: "succeeded", result: {word_count: 47}, error: null});
   render(<TranscriptionControls project="demo" asset="asset" recover={vi.fn().mockResolvedValue(null)} start={start} />);
