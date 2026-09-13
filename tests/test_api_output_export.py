@@ -12,6 +12,49 @@ from minicut.project import ProjectManifest, ProjectRepository
 from minicut.transcription_task import CancellationToken, TranscriptionCancelled
 
 
+@pytest.mark.parametrize("failed", [False, True])
+def test_preview_recovery_is_revision_specific(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed: bool
+) -> None:
+    ProjectRepository(tmp_path / "demo").create(ProjectManifest("demo"))
+    calls: list[tuple[object, ...]] = []
+
+    def preview(*args: object) -> dict[str, object]:
+        calls.append(args)
+        if failed:
+            raise ProcessingError("preview failed")
+        return {"revision": 2, "media_url": "/cut.mp4"}
+
+    monkeypatch.setattr(api_module, "preview_output", preview)
+
+    async def run() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(tmp_path)),
+            base_url="http://test",
+        ) as client:
+            route = "/api/projects/demo/tasks/output-preview"
+            payload = {"collection_id": "c", "output_id": "o", "revision": 2}
+            await client.post(
+                route, json=payload, headers={"Idempotency-Key": "preview"}
+            )
+            recovered = await client.get(
+                "/api/projects/demo/highlights/c/outputs/o/preview-task?revision=2"
+            )
+            assert recovered.json()["status"] == ("failed" if failed else "succeeded")
+            assert (recovered.json()["result"] is None) == failed
+            assert (
+                await client.get(
+                    "/api/projects/demo/highlights/c/outputs/o/preview-task?revision=1"
+                )
+            ).json() is None
+            await client.post(
+                route, json=payload, headers={"Idempotency-Key": "preview"}
+            )
+            assert len(calls) == 1
+
+    asyncio.run(run())
+
+
 def test_batch_exports_are_independent_and_failed_output_can_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

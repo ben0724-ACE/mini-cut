@@ -55,7 +55,7 @@ from minicut.highlight_service import (
 )
 from minicut.importer import import_media
 from minicut.media import classify_media
-from minicut.output_export import export_output
+from minicut.output_export import export_output, preview_output
 from minicut.output_repository import OutputCollectionRepository
 from minicut.project import ProjectRepository
 from minicut.render_profile import RenderProfile
@@ -162,6 +162,12 @@ class RenderTaskBody(BaseModel):
     asset_id: str
     output_name: SafeFileName
     timeout_seconds: float = Field(default=600, gt=0)
+
+
+class OutputPreviewBody(BaseModel):
+    collection_id: SafeFileName
+    output_id: SafeFileName
+    revision: int = Field(ge=1)
 
 
 class OutputExportBody(BaseModel):
@@ -699,6 +705,75 @@ def create_app(
             )
             for output in body.outputs
         ]
+
+    @api.post(
+        "/api/projects/{project_id}/tasks/output-preview",
+        response_model=TaskResponse,
+        status_code=202,
+    )
+    def submit_output_preview(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        body: OutputPreviewBody,
+        background_tasks: BackgroundTasks,
+        idempotency_key: Annotated[str, task_key_header],
+    ) -> TaskResponse:
+        token = export_tokens.setdefault(
+            (project_id, idempotency_key), CancellationToken()
+        )
+
+        def operation() -> dict[str, object]:
+            try:
+                return preview_output(
+                    root / project_id,
+                    body.collection_id,
+                    body.output_id,
+                    body.revision,
+                    token,
+                )
+            finally:
+                export_tokens.pop((project_id, idempotency_key), None)
+
+        response = submit_task(
+            project_id,
+            idempotency_key,
+            "output-preview",
+            body.model_dump(mode="json"),
+            background_tasks,
+            operation,
+        )
+        if response.status not in ("pending", "running"):
+            export_tokens.pop((project_id, idempotency_key), None)
+        return response
+
+    @api.get(
+        "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/preview-task",
+        response_model=TaskResponse | None,
+    )
+    def latest_output_preview(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        collection_id: SafeFileName,
+        output_id: SafeFileName,
+        revision: int,
+    ) -> TaskResponse | None:
+        inspect(project_id)
+        paths = sorted(
+            (root / project_id / ".minicut/jobs").glob("*.json"),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )
+        for path in paths:
+            job = _read_job(path)
+            data = job.get("request")
+            if isinstance(data, dict):
+                data = cast(dict[str, object], data)
+                if (
+                    job.get("kind") == "output-preview"
+                    and data.get("collection_id") == collection_id
+                    and data.get("output_id") == output_id
+                    and data.get("revision") == revision
+                ):
+                    return _task_response(job)
+        return None
 
     @api.post(
         "/api/projects/{project_id}/tasks/{task_id}/cancel", response_model=TaskResponse

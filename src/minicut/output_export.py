@@ -6,10 +6,12 @@ from urllib.parse import quote
 
 from minicut.errors import UserInputError
 from minicut.highlight_service import source_segments
+from minicut.output_plan import OutputPlan
 from minicut.output_render import OutputRenderRequest, RenderOutputUseCase
 from minicut.output_repository import OutputCollectionRepository
+from minicut.output_timeline import compile_output_timeline
 from minicut.project import ProjectRepository
-from minicut.render_command import SubtitleMode
+from minicut.render_command import SubtitleMode, VideoOutputMetadata
 from minicut.render_profile import RenderProfile, source_dimensions
 from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
@@ -28,6 +30,7 @@ def export_output(
     denoiser_id: str,
     cancellation: CancellationToken,
     profile: RenderProfile = _DEFAULT_PROFILE,
+    preview: bool = False,
 ) -> dict[str, object]:
     repository = OutputCollectionRepository(project, collection)
     try:
@@ -45,6 +48,17 @@ def export_output(
     segments = source_segments(project, asset_id)
     plans = repository.read(segments).plans
     plan = next((plan for plan in plans if plan.output_id == output), None)
+    if preview and plan is not None and plan.revision != revision:
+        try:
+            plan = OutputPlan.from_dict(
+                json.loads(
+                    repository.version_path(output, revision).read_text(
+                        encoding="utf-8"
+                    )
+                )
+            )
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise UserInputError("Requested preview version is unavailable") from error
     if plan is None or plan.revision != revision:
         raise UserInputError("Output version changed; refresh before exporting")
     cancellation.raise_if_cancelled()
@@ -54,6 +68,12 @@ def export_output(
         if asset.asset_id == asset_id
     )
     metadata = profile.metadata(*source_dimensions(Path(asset.source_path)))
+    if preview:
+        scale = min(1, 640 / max(metadata.width, metadata.height))
+        metadata = VideoOutputMetadata(
+            max(2, int(metadata.width * scale) // 2 * 2),
+            max(2, int(metadata.height * scale) // 2 * 2),
+        )
     result = RenderOutputUseCase().execute(
         OutputRenderRequest(
             project,
@@ -68,6 +88,7 @@ def export_output(
             audio_fade_ms=audio_fade_ms,
             denoiser_id=denoiser_id,
             video_metadata=metadata,
+            plan_revision=revision,
         )
     )
     base = f"/api/projects/{quote(project.name, safe='')}/media/exports/"
@@ -84,4 +105,73 @@ def export_output(
         + quote(str(result.output_path.relative_to(project / "exports")), safe="/"),
         "subtitle_url": base
         + quote(str(result.subtitle_path.relative_to(project / "exports")), safe="/"),
+    }
+
+
+def preview_output(
+    project: Path,
+    collection: str,
+    output: str,
+    revision: int,
+    cancellation: CancellationToken,
+) -> dict[str, object]:
+    repository = OutputCollectionRepository(project, collection)
+    try:
+        asset_id = json.loads(repository.path.read_text(encoding="utf-8"))["asset_id"]
+        segments = source_segments(project, asset_id)
+        plan = next(
+            plan for plan in repository.read(segments).plans if plan.output_id == output
+        )
+        if plan.revision != revision:
+            plan = OutputPlan.from_dict(
+                json.loads(
+                    repository.version_path(output, revision).read_text(
+                        encoding="utf-8"
+                    )
+                )
+            )
+        if plan.output_id != output or plan.revision != revision:
+            raise ValueError("Preview version does not match")
+    except (OSError, ValueError, KeyError, TypeError, StopIteration) as error:
+        raise UserInputError("Requested preview version is unavailable") from error
+    cancellation.raise_if_cancelled()
+    export_id = f"preview-v{revision:04d}"
+    path = (
+        project / "exports" / collection / output / export_id / f"v{revision:04d}.mp4"
+    )
+    record = repository.render_record_path(output, revision)
+    record = record.parent / export_id / record.name
+    if path.is_file() and path.with_suffix(".srt").is_file() and record.is_file():
+        saved = json.loads(record.read_text(encoding="utf-8"))
+        if OutputPlan.from_dict(saved["plan"]) == plan:
+            base = f"/api/projects/{quote(project.name, safe='')}/media/exports/"
+            return {
+                "output_id": output,
+                "revision": revision,
+                "reused": True,
+                "duration_ms": compile_output_timeline(
+                    plan, segments, asset_id
+                ).estimated_duration_ms,
+                "media_url": base
+                + quote(str(path.relative_to(project / "exports")), safe="/"),
+                "subtitle_url": base
+                + quote(
+                    str(path.with_suffix(".srt").relative_to(project / "exports")),
+                    safe="/",
+                ),
+            }
+    return {
+        **export_output(
+            project,
+            collection,
+            output,
+            export_id,
+            revision,
+            "burned",
+            0,
+            "none",
+            cancellation,
+            preview=True,
+        ),
+        "reused": False,
     }
