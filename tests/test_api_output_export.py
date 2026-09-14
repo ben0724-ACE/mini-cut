@@ -23,7 +23,11 @@ def test_preview_recovery_is_revision_specific(
         calls.append(args)
         if failed:
             raise ProcessingError("preview failed")
-        return {"revision": 2, "media_url": "/cut.mp4"}
+        return {
+            "revision": 2,
+            "media_url": "/cut.mp4",
+            "render_engine_version": api_module.RENDER_ENGINE_VERSION,
+        }
 
     monkeypatch.setattr(api_module, "preview_output", preview)
 
@@ -51,6 +55,13 @@ def test_preview_recovery_is_revision_specific(
                 route, json=payload, headers={"Idempotency-Key": "preview"}
             )
             assert len(calls) == 1
+            if not failed:
+                monkeypatch.setattr(api_module, "RENDER_ENGINE_VERSION", 999)
+                assert (
+                    await client.get(
+                        "/api/projects/demo/highlights/c/outputs/o/preview-task?revision=2"
+                    )
+                ).json() is None
 
     asyncio.run(run())
 

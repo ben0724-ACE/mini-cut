@@ -103,3 +103,48 @@ def test_long_source_ids_use_local_aliases_and_resolve_back() -> None:
         json.loads(provider.requests[0].user_prompt)["segments"][0]["segment_id"]
         == "s-1"
     )
+
+
+def test_variable_brief_follows_identical_source_prefix() -> None:
+    import asyncio
+    from dataclasses import replace
+
+    provider = FakeProvider({"candidates": [], "notes": []})
+    brief = HighlightBrief.for_preset(HighlightPreset.KNOWLEDGE)
+    asyncio.run(HighlightPlanner(provider).plan(brief, source()))
+    asyncio.run(
+        HighlightPlanner(provider).plan(
+            replace(brief, instructions="different"), source()
+        )
+    )
+    left, right = [r.user_prompt for r in provider.requests]
+    assert left.split('"brief":')[0] == right.split('"brief":')[0]
+    assert left != right
+
+
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+def test_malformed_json_gets_only_one_format_repair(repair_succeeds: bool) -> None:
+    import asyncio
+
+    class MalformedProvider(FakeProvider):
+        async def generate(self, request: TextModelRequest) -> TextModelResponse:
+            self.requests.append(request)
+            content = '{"title": "a "quoted" title"}'
+            if repair_succeeds and len(self.requests) == 2:
+                content = json.dumps({"candidates": [candidate(["a"])], "notes": []})
+            return TextModelResponse(content, request.model)
+
+    provider = MalformedProvider(None)
+    operation = HighlightPlanner(provider).plan(
+        HighlightBrief.for_preset(HighlightPreset.KNOWLEDGE), source()
+    )
+    if repair_succeeds:
+        result = asyncio.run(operation)
+        assert result.suggestions[0].candidate.segment_ids == ("a",)
+    else:
+        with pytest.raises(ValueError, match="一次格式修复"):
+            asyncio.run(operation)
+    assert len(provider.requests) == 2
+    assert json.loads(provider.requests[1].user_prompt)["format_repair"][
+        "invalid_response"
+    ]

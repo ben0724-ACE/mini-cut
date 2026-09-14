@@ -113,6 +113,8 @@ class TranscribeRequest:
     provider: str
     model: str
     language: str
+    cancellation: CancellationToken | None = None
+    on_chunk_progress: Callable[[int, int], None] = lambda done, total: None
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,7 +190,25 @@ class TranscribeProjectUseCase:
         transcript = cache.read(key)
         reused = transcript is not None
         if transcript is None:
-            transcript = self._transcriber(asset, request)
+            if request.cancellation is not None:
+                request.cancellation.raise_if_cancelled()
+            if asset.duration_ms > 600_000:
+                from minicut.chunked_transcription import transcribe_chunks
+
+                transcript = transcribe_chunks(
+                    asset,
+                    request.project_directory
+                    / ".minicut/transcript-chunks"
+                    / asset.asset_id,
+                    key,
+                    lambda chunk: self._transcriber(chunk, request),
+                    cancellation=request.cancellation,
+                    on_progress=request.on_chunk_progress,
+                )
+            else:
+                transcript = self._transcriber(asset, request)
+            if request.cancellation is not None:
+                request.cancellation.raise_if_cancelled()
             cache.write(key, transcript)
         return TranscribeResult(
             transcript.transcript_id, asset.asset_id, len(transcript.words), reused

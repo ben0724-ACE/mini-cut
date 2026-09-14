@@ -11,3 +11,17 @@ it("单播放器与标签面板，切换后保留草稿",async()=>{
   await userEvent.click(screen.getByRole("tab",{name:"生成"}));
   expect(screen.getByLabelText("草稿")).toHaveValue("要求");
 });
+it("键盘切换面板，收起再展开不丢草稿",async()=>{
+  const user=userEvent.setup();
+  render(<Workbench sidebar={null} preview={null} generate={<input aria-label="生成草稿" />} edit={<p>编辑</p>} exportPanel={<p>导出</p>} />);
+  await user.type(screen.getByLabelText("生成草稿"),"保留");
+  screen.getByRole("tab",{name:"生成"}).focus();
+  await user.keyboard("{ArrowRight}");
+  expect(screen.getByRole("tab",{name:"编辑"})).toHaveFocus();
+  expect(screen.getByRole("tab",{name:"编辑"})).toHaveAttribute("aria-selected","true");
+  await user.click(screen.getByRole("button",{name:"收起工作面板"}));
+  expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button",{name:"展开工作面板"}));
+  await user.click(screen.getByRole("tab",{name:"生成"}));
+  expect(screen.getByLabelText("生成草稿")).toHaveValue("保留");
+});

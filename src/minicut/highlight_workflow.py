@@ -114,7 +114,15 @@ async def plan_highlights(
     review_notes: tuple[str, ...] = (),
 ) -> HighlightWorkflowResult:
     segments = attach_continuation_context(segments)
-    proposal = previous or await planner.plan(brief, segments)
+    from minicut.chapter_planner import CHAPTER_CHAR_BUDGET, plan_chapters, source_size
+
+    planning_segments = segments
+    if previous is not None:
+        proposal = previous
+    elif source_size(segments) > CHAPTER_CHAR_BUDGET:
+        proposal, planning_segments = await plan_chapters(planner, brief, segments)
+    else:
+        proposal = await planner.plan(brief, segments)
     selected = select_highlights(proposal, brief, segments, asset_id, collection_id)
     needs_revision = any(
         "时长超限" in n or "时长不足" in n or "源内容重复超过" in n
@@ -129,9 +137,9 @@ async def plan_highlights(
     ):
         proposal = await planner.plan(
             brief,
-            segments,
+            planning_segments,
             revision=revision_feedback(
-                proposal, brief, segments, (*selected.notes, *review_notes)
+                proposal, brief, planning_segments, (*selected.notes, *review_notes)
             ),
         )
         selected = select_highlights(proposal, brief, segments, asset_id, collection_id)

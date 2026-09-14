@@ -9,7 +9,7 @@ from minicut.semantic_segment import (
     validate_segment_context_dependencies,
 )
 
-EDIT_PLAN_PROMPT_VERSION = "edit-plan-v1"
+EDIT_PLAN_PROMPT_VERSION = "edit-plan-v2"
 
 
 def build_edit_plan_request(
@@ -31,9 +31,8 @@ def build_edit_plan_request(
         f"Allowed actions: {actions}. Allowed reasons: {reasons}. "
         "confidence must be between 0 and 1. Do not return timestamps."
     )
-    payload = {
+    payload: dict[str, object] = {
         "prompt_version": EDIT_PLAN_PROMPT_VERSION,
-        "brief": brief.to_dict(),
         "allowed_segment_ids": [segment.segment_id for segment in segments],
         "segments": [
             {
@@ -47,6 +46,7 @@ def build_edit_plan_request(
             for segment in segments
         ],
     }
+    payload["brief"] = brief.to_dict()
     return TextModelRequest(
         model=model,
         system_prompt=system_prompt,

@@ -6,6 +6,8 @@ import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from threading import BoundedSemaphore, Lock
+from time import monotonic
 from typing import Annotated, Self, cast
 from uuid import uuid4
 
@@ -54,8 +56,9 @@ from minicut.highlight_service import (
     reorder_output,
 )
 from minicut.importer import import_media
+from minicut.llm_provider import TextModelProviderError
 from minicut.media import classify_media
-from minicut.output_export import export_output, preview_output
+from minicut.output_export import RENDER_ENGINE_VERSION, export_output, preview_output
 from minicut.output_repository import OutputCollectionRepository
 from minicut.project import ProjectRepository
 from minicut.render_profile import RenderProfile
@@ -209,6 +212,9 @@ class TaskResponse(BaseModel):
     status: str
     result: dict[str, object] | None = None
     error: str | None = None
+    progress: dict[str, object] | None = None
+    resumable: bool = False
+    configuration: dict[str, str] | None = None
 
 
 class PlanSegmentResponse(BaseModel):
@@ -309,12 +315,40 @@ def _read_job(path: Path) -> dict[str, object]:
         value = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(value, dict):
             raise ValueError("job is not an object")
-        return cast(dict[str, object], value)
+        job = cast(dict[str, object], value)
+        if job.get("status") in ("running", "pending"):
+            pid = job.get("owner_pid")
+            alive = False
+            if type(pid) is int and pid > 0:
+                try:
+                    os.kill(pid, 0)
+                    alive = True
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    alive = True
+            if not alive:
+                job.update(
+                    status="failed",
+                    error="服务已重启，任务已中断；可恢复已保存的阶段。",
+                    resumable=True,
+                )
+        return job
     except (OSError, TypeError, UnicodeError, ValueError) as error:
         raise HTTPException(status_code=404, detail="Task does not exist") from error
 
 
 def _task_response(payload: dict[str, object]) -> TaskResponse:
+    if payload.get("kind") == "transcribe":
+        request = cast(dict[str, object], payload.get("request", {}))
+        payload = {
+            **payload,
+            "configuration": {
+                key: request[key]
+                for key in ("provider", "model", "language")
+                if key in request
+            },
+        }
     return TaskResponse.model_validate(payload)
 
 
@@ -456,6 +490,14 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     export_tokens: dict[tuple[str, str], CancellationToken] = {}
+    resource_slot = BoundedSemaphore(1)
+    resume_lock = Lock()
+
+    def progress(project_id: str, task_id: str, done: int, total: int) -> None:
+        path = _job_path(root / project_id, task_id)
+        job = _read_job(path)
+        job["progress"] = {"completed": done, "total": total, "phase": "transcription"}
+        _write_job(path, job)
 
     def submit_task(
         project_id: str,
@@ -470,6 +512,9 @@ def create_app(
         path = _job_path(project_directory, task_id)
         pending: dict[str, object] = {
             "task_id": task_id,
+            "owner_pid": os.getpid(),
+            "resumable": kind
+            in ("transcribe", "highlights", "output-export", "output-preview"),
             "kind": kind,
             "status": "pending",
             "request": request_data,
@@ -488,17 +533,39 @@ def create_app(
             return _task_response(existing)
 
         def run() -> None:
+            # One heavy operation at a time bounds MLX and FFmpeg resource usage.
+            token = export_tokens.setdefault((project_id, task_id), CancellationToken())
+            while not resource_slot.acquire(timeout=0.2):
+                if token.is_cancelled:
+                    _write_job(path, {**pending, "status": "cancelled"})
+                    export_tokens.pop((project_id, task_id), None)
+                    return
+            started = monotonic()
             running = {**pending, "status": "running"}
             _write_job(path, running)
             try:
+                token.raise_if_cancelled()
                 result = operation()
                 _write_job(
                     path,
-                    {**running, "status": "succeeded", "result": result},
+                    {
+                        **running,
+                        "status": "succeeded",
+                        "result": result,
+                        "progress": {
+                            "phase": "completed",
+                            "elapsed_seconds": round(monotonic() - started, 2),
+                        },
+                    },
                 )
             except TranscriptionCancelled:
                 _write_job(path, {**running, "status": "cancelled"})
-            except MiniCutError as error:
+            except (
+                MiniCutError,
+                TextModelProviderError,
+                ValueError,
+                TimeoutError,
+            ) as error:
                 _write_job(
                     path,
                     {**running, "status": "failed", "error": str(error)},
@@ -506,11 +573,41 @@ def create_app(
             except Exception:
                 _write_job(
                     path,
-                    {**running, "status": "failed", "error": "Task failed"},
+                    {
+                        **running,
+                        "status": "failed",
+                        "error": "Task failed; completed stages are retained for recovery",
+                    },
                 )
+            finally:
+                resource_slot.release()
+                export_tokens.pop((project_id, task_id), None)
 
         background_tasks.add_task(run)
         return _task_response(pending)
+
+    @api.get("/api/projects/{project_id}/activity")
+    def project_activity(project_id: ProjectId) -> dict[str, object]:  # pyright: ignore[reportUnusedFunction]
+        from minicut.model_journal import ModelJournal
+
+        inspect(project_id)
+        directory = root / project_id
+        paths = sorted(
+            (directory / ".minicut/jobs").glob("*.json"),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )[:20]
+        jobs = [_task_response(_read_job(path)).model_dump() for path in paths]
+        receipts: list[dict[str, object]] = []
+        if (directory / ".minicut/model-requests.sqlite3").is_file():
+            with ModelJournal(directory).connect() as db:
+                for identity, state, receipt in db.execute(
+                    "SELECT id,status,receipt FROM requests ORDER BY id DESC LIMIT 100"
+                ):
+                    receipts.append(
+                        {**json.loads(receipt), "request_id": identity, "status": state}
+                    )
+        return {"tasks": jobs, "model_requests": receipts, "heavy_task_concurrency": 1}
 
     @api.post(
         "/api/projects",
@@ -772,6 +869,13 @@ def create_app(
                     and data.get("output_id") == output_id
                     and data.get("revision") == revision
                 ):
+                    result = job.get("result")
+                    if job.get("status") == "succeeded" and (
+                        not isinstance(result, dict)
+                        or cast(dict[str, object], result).get("render_engine_version")
+                        != RENDER_ENGINE_VERSION
+                    ):
+                        continue
                     return _task_response(job)
         return None
 
@@ -859,6 +963,12 @@ def create_app(
                     body.provider,
                     body.model,
                     body.language,
+                    export_tokens.setdefault(
+                        (project_id, idempotency_key), CancellationToken()
+                    ),
+                    lambda done, total: progress(
+                        project_id, idempotency_key, done, total
+                    ),
                 )
             )
             return {
@@ -929,18 +1039,30 @@ def create_app(
             root / project_id / ".minicut/transcripts" / f"{body.asset_id}.json"
         ).is_file():
             raise HTTPException(400, "Transcription is required")
+
+        def operation() -> dict[str, object]:
+            collection = f"highlights-{idempotency_key}"
+            if highlights is generate_highlights:
+                return generate_highlights(
+                    root / project_id,
+                    body.asset_id,
+                    collection,
+                    body.brief(),
+                    cancellation=export_tokens.setdefault(
+                        (project_id, idempotency_key), CancellationToken()
+                    ),
+                )
+            return highlights(
+                root / project_id, body.asset_id, collection, body.brief()
+            )
+
         return submit_task(
             project_id,
             idempotency_key,
             "highlights",
             body.model_dump(mode="json"),
             background_tasks,
-            lambda: highlights(
-                root / project_id,
-                body.asset_id,
-                f"highlights-{uuid4().hex}",
-                body.brief(),
-            ),
+            operation,
         )
 
     @api.get(
@@ -1140,6 +1262,64 @@ def create_app(
             background_tasks,
             operation,
         )
+
+    @api.post(
+        "/api/projects/{project_id}/tasks/{task_id}/resume",
+        response_model=TaskResponse,
+        status_code=202,
+    )
+    def resume_task(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId, task_id: SafeFileName, background_tasks: BackgroundTasks
+    ) -> TaskResponse:  # pyright: ignore[reportUnusedFunction]
+        inspect(project_id)
+        with resume_lock:
+            path = _job_path(root / project_id, task_id)
+            job = _read_job(path)
+            existing = job.get("resumed_task_id")
+            if isinstance(existing, str):
+                return _task_response(_read_job(_job_path(root / project_id, existing)))
+            if job.get("status") not in ("failed", "cancelled"):
+                raise HTTPException(
+                    409, "Only interrupted, failed or cancelled tasks can be resumed"
+                )
+            response = dispatch_resume(project_id, job, background_tasks)
+            _write_job(path, {**job, "resumed_task_id": response.task_id})
+            return response
+
+    def dispatch_resume(
+        project_id: str, job: dict[str, object], background_tasks: BackgroundTasks
+    ) -> TaskResponse:
+        request = job.get("request")
+        identity = f"resume-{uuid4().hex}"
+        if job.get("kind") == "transcribe":
+            return submit_transcription(
+                project_id,
+                TranscribeTaskBody.model_validate(request),
+                background_tasks,
+                identity,
+            )
+        if job.get("kind") == "highlights":
+            return submit_highlights(
+                project_id,
+                HighlightTaskBody.model_validate(request),
+                background_tasks,
+                identity,
+            )
+        if job.get("kind") == "output-export":
+            return submit_output_export(
+                project_id,
+                OutputExportBody.model_validate(request),
+                background_tasks,
+                identity,
+            )
+        if job.get("kind") == "output-preview":
+            return submit_output_preview(
+                project_id,
+                OutputPreviewBody.model_validate(request),
+                background_tasks,
+                identity,
+            )
+        raise HTTPException(400, "This task type does not support recovery")
 
     @api.get(
         "/api/projects/{project_id}/tasks/{task_id}",

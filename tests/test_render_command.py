@@ -135,19 +135,19 @@ class MultiClipRenderCommandTest(unittest.TestCase):
         )
         self.assertEqual(
             graph,
-            "[0:2]trim=start=0.100:end=0.500,setpts=PTS-STARTPTS,"
+            "[0:2]trim=start=0.100:end=0.500,settb=AVTB,setpts=PTS-STARTPTS+0.000/TB,"
             "scale=1920:1080:force_original_aspect_ratio=decrease,"
-            "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,"
+            "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,"
             "format=yuv420p[v0];"
             "[0:3]atrim=start=0.100:end=0.500,asetpts=PTS-STARTPTS,"
             "aresample=48000,aformat=channel_layouts=stereo[a0];"
-            "[0:2]trim=start=0.800:end=1.300,setpts=PTS-STARTPTS,"
+            "[0:2]trim=start=0.800:end=1.300,settb=AVTB,setpts=PTS-STARTPTS+0.400/TB,"
             "scale=1920:1080:force_original_aspect_ratio=decrease,"
-            "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,"
+            "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,"
             "format=yuv420p[v1];"
             "[0:3]atrim=start=0.800:end=1.300,asetpts=PTS-STARTPTS,"
             "aresample=48000,aformat=channel_layouts=stereo[a1];"
-            "[v0][a0][v1][a1]concat=n=2:v=1:a=1[outv][outa]",
+            "[v0][v1]interleave=nb_inputs=2:duration=longest,fps=30[outv];[a0][a1]concat=n=2:v=0:a=1[outa]",
         )
         self.assertEqual(
             command[-15:],

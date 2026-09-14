@@ -137,7 +137,14 @@ class RealOutputRenderTest(unittest.TestCase):
                     video_metadata=VideoOutputMetadata(160, 120, "25"),
                 )
             )
-            for timestamp, channel in (("0.4", 2), ("1.2", 0), ("2.0", 2)):
+            for timestamp, channel, low, high in (
+                ("0.4", 2, 150, 256),
+                ("0.72", 2, 1, 120),
+                ("0.8", 0, -1, 10),
+                ("0.88", 0, 1, 120),
+                ("1.2", 0, 150, 256),
+                ("2.0", 2, 150, 256),
+            ):
                 frame = subprocess.run(
                     (
                         "ffmpeg",
@@ -161,8 +168,39 @@ class RealOutputRenderTest(unittest.TestCase):
                 ).stdout
                 self.assertEqual(len(frame), 160 * 120 * 3)
                 pixel = frame[(60 * 160 + 80) * 3 : (60 * 160 + 80) * 3 + 3]
-                self.assertGreater(pixel[channel], 150)
-                self.assertEqual(pixel.index(max(pixel)), channel)
+                self.assertGreater(pixel[channel], low)
+                self.assertLess(pixel[channel], high)
+                if high == 256:
+                    self.assertEqual(pixel.index(max(pixel)), channel)
+            import array
+
+            levels: list[float] = []
+            for timestamp in ("0.4", "0.77", "0.82", "1.2", "2.0"):
+                raw = subprocess.check_output(
+                    [
+                        "ffmpeg",
+                        "-v",
+                        "error",
+                        "-ss",
+                        timestamp,
+                        "-i",
+                        str(result.output_path),
+                        "-t",
+                        "0.02",
+                        "-vn",
+                        "-ac",
+                        "1",
+                        "-f",
+                        "s16le",
+                        "-",
+                    ]
+                )
+                samples = array.array("h", raw)
+                levels.append(sum(abs(value) for value in samples) / len(samples))
+            self.assertLess(levels[1], levels[0] * 0.3)
+            self.assertLess(levels[2], levels[0] * 0.3)
+            self.assertGreater(levels[3], levels[0] * 0.8)
+            self.assertGreater(levels[4], levels[0] * 0.8)
             extracted = subprocess.run(
                 (
                     "ffmpeg",

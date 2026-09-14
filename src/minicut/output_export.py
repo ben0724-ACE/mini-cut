@@ -17,6 +17,7 @@ from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
 
 _DEFAULT_PROFILE = RenderProfile()
+RENDER_ENGINE_VERSION = 3
 
 
 def export_output(
@@ -94,6 +95,7 @@ def export_output(
     base = f"/api/projects/{quote(project.name, safe='')}/media/exports/"
     return {
         "output_id": output,
+        "render_engine_version": RENDER_ENGINE_VERSION,
         "revision": revision,
         "width": metadata.width,
         "height": metadata.height,
@@ -135,7 +137,7 @@ def preview_output(
     except (OSError, ValueError, KeyError, TypeError, StopIteration) as error:
         raise UserInputError("Requested preview version is unavailable") from error
     cancellation.raise_if_cancelled()
-    export_id = f"preview-v{revision:04d}"
+    export_id = f"preview-r{RENDER_ENGINE_VERSION}-v{revision:04d}"
     path = (
         project / "exports" / collection / output / export_id / f"v{revision:04d}.mp4"
     )
@@ -147,6 +149,7 @@ def preview_output(
             base = f"/api/projects/{quote(project.name, safe='')}/media/exports/"
             return {
                 "output_id": output,
+                "render_engine_version": RENDER_ENGINE_VERSION,
                 "revision": revision,
                 "reused": True,
                 "duration_ms": compile_output_timeline(

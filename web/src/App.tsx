@@ -37,12 +37,13 @@ export function App() {
     setSearch(window.location.search);
   }
   return <div className="app-frame">
-    <header className="app-header">MiniCut <span>本地剪辑工作台</span></header>
+    <a className="skip-link" href="#main-content">跳转到主要内容</a>
+    <header className="app-header"><strong className="brand"><span aria-hidden="true" className="brand-mark">M</span>MiniCut</strong><span>本地剪辑工作台</span><span className="local-badge">本地优先</span></header>
     <div className="app-body">
       <nav aria-label="项目导航"><button onClick={() => navigate()}>我的项目</button>
         {projectId && <button onClick={() => navigate(projectId)}>当前项目</button>}
       </nav>
-      <main className="app-content">
+      <main id="main-content" tabIndex={-1} className="app-content">
         {!projectId ? <ProjectHome loadProjects={listProjects} createProject={createProject} onSelect={(id) => navigate(id)} />
           : collectionId && outputId ? <OutputWorkspace key={`${projectId}:${collectionId}:${outputId}`} project={projectId} collection={collectionId} output={outputId} />
           : !assetId ? <ProjectWorkspace key={projectId} projectId={projectId} onOpen={(asset) => navigate(projectId, asset)} />

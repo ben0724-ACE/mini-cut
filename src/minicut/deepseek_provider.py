@@ -9,6 +9,7 @@ import httpx
 from minicut.errors import UserInputError
 from minicut.llm_planner import LlmPlanner
 from minicut.llm_provider import (
+    ModelUsage,
     TextModelProviderError,
     TextModelRateLimitError,
     TextModelRequest,
@@ -61,7 +62,7 @@ class DeepSeekProvider:
             ],
             "response_format": {"type": "json_object"},
             "thinking": {"type": "disabled"},
-            "max_tokens": 4_096,
+            "max_tokens": request.max_output_tokens,
             "stream": False,
         }
         try:
@@ -92,14 +93,30 @@ class DeepSeekProvider:
             first_choice = choices[0]
             if not isinstance(first_choice, dict):
                 raise TypeError("response choice must be an object")
-            message = cast(dict[str, object], first_choice)["message"]
+            choice = cast(dict[str, object], first_choice)
+            usage = ModelUsage.from_dict(data.get("usage"))
+            finish = choice.get("finish_reason")
+            if finish is not None and finish != "stop":
+                raise TextModelProviderError(
+                    "DeepSeek output was truncated; increase the output budget or reduce the chapter size."
+                    if finish == "length"
+                    else "DeepSeek did not complete the requested JSON response.",
+                    usage=usage,
+                    finish_reason=str(finish),
+                )
+            message = choice["message"]
             if not isinstance(message, dict):
                 raise TypeError("response message must be an object")
             content = cast(dict[str, object], message)["content"]
             model = data.get("model", request.model)
             if not isinstance(content, str) or not isinstance(model, str):
                 raise TypeError("response content or model has an invalid type")
-            return TextModelResponse(content=content, model=model)
+            return TextModelResponse(
+                content=content,
+                model=model,
+                usage=usage,
+                finish_reason=cast(str | None, finish),
+            )
         except (KeyError, TypeError, ValueError) as error:
             raise TextModelProviderError(
                 "DeepSeek returned an invalid response."

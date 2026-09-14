@@ -69,3 +69,31 @@ def test_empty_zero_length_decoder_segment_is_omitted() -> None:
     with pytest.warns(RuntimeWarning):
         result = map_mlx_transcription(raw, asset_id="asset", config=MlxWhisperConfig())
     assert len(result.utterances) == 1
+
+
+def test_word_alignment_can_extend_decoder_sentence_without_cutting_word() -> None:
+    raw: dict[str, object] = {
+        "language": "en",
+        "segments": [
+            {
+                "start": 14.14,
+                "end": 21.76,
+                "text": "complete",
+                "words": [
+                    {
+                        "word": "complete",
+                        "start": 21.74,
+                        "end": 22.06,
+                        "probability": 0.9,
+                    }
+                ],
+            }
+        ],
+    }
+    original = deepcopy(raw)
+    result = map_mlx_transcription(
+        raw, asset_id="asset", config=MlxWhisperConfig(language="en")
+    )
+    assert result.words[0].end_ms == 22060
+    assert result.utterances[0].end_ms == 22060
+    assert raw == original

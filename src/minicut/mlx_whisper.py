@@ -173,6 +173,15 @@ def _coalesce_zero_duration_tokens(
         if words and not timed:
             skipped += 1
             continue
+        # Word alignment is more precise than the decoder's sentence envelope.
+        # Expand a valid envelope; do not change word timing or repair invalid ranges.
+        if timed and 0 <= cast(float, segment["start"]) < cast(float, segment["end"]):
+            segment["start"] = min(
+                cast(float, segment["start"]), cast(float, timed[0]["start"])
+            )
+            segment["end"] = max(
+                cast(float, segment["end"]), cast(float, timed[-1]["end"])
+            )
         segment["words"] = timed
         retained.append(segment)
     data["segments"] = retained

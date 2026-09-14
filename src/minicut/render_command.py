@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from minicut.media import MediaAsset, StreamType
-from minicut.output_plan import OutputPlan
+from minicut.output_plan import OutputPlan, OutputRole
 from minicut.output_timeline import validate_output_timeline
 from minicut.semantic_segment import SemanticSegment
 from minicut.subtitle_font import SubtitleFont
@@ -372,6 +372,19 @@ class RenderCommandBuilder:
             _DEFAULT_AUDIO_METADATA,
             audio_fade,
             denoise_filter,
+            hook_boundary_ms=next(
+                (
+                    clip.output_range.start_ms
+                    for clip in timeline.clips
+                    if next(
+                        item.role
+                        for item in plan.items
+                        if item.instance_id == clip.clip_id
+                    )
+                    is OutputRole.BODY
+                ),
+                0,
+            ),
         )
 
     def _build_concat_arguments(
@@ -385,6 +398,7 @@ class RenderCommandBuilder:
         audio_metadata: AudioOutputMetadata,
         audio_fade: AudioFade,
         denoise_filter: str | None,
+        hook_boundary_ms: int = 0,
     ) -> tuple[str, ...]:
         output_url = _local_file_url(output_path, label="render output")
         if denoise_filter is not None and not denoise_filter.strip():
@@ -406,7 +420,8 @@ class RenderCommandBuilder:
             command.extend(("-i", source_url))
 
         filters: list[str] = []
-        concat_inputs: list[str] = []
+        video_inputs: list[str] = []
+        audio_inputs: list[str] = []
         for clip_index, clip in enumerate(timeline.clips):
             asset = assets_by_id[clip.source_asset_id]
             input_index = input_indexes[clip.source_asset_id]
@@ -416,7 +431,7 @@ class RenderCommandBuilder:
                 stream_index = _first_stream_index(asset, StreamType.VIDEO)
                 filters.append(
                     f"[{input_index}:{stream_index}]trim=start={start}:end={end},"
-                    f"setpts=PTS-STARTPTS,"
+                    f"settb=AVTB,setpts=PTS-STARTPTS+{_seconds(clip.output_range.start_ms)}/TB,"
                     f"scale={video_metadata.width}:{video_metadata.height}:"
                     + (
                         "force_original_aspect_ratio=decrease,"
@@ -426,10 +441,9 @@ class RenderCommandBuilder:
                         else "force_original_aspect_ratio=increase,"
                         f"crop={video_metadata.width}:{video_metadata.height},setsar=1,"
                     )
-                    + f"fps={video_metadata.frame_rate},"
-                    f"format={encoding.pixel_format}[v{clip_index}]"
+                    + f"format={encoding.pixel_format}[v{clip_index}]"
                 )
-                concat_inputs.append(f"[v{clip_index}]")
+                video_inputs.append(f"[v{clip_index}]")
             if requirements.require_audio:
                 stream_index = _first_stream_index(asset, StreamType.AUDIO)
                 audio_filters = [
@@ -445,16 +459,49 @@ class RenderCommandBuilder:
                     audio_filters.append("," + ",".join(fades))
                 audio_filters.append(f"[a{clip_index}]")
                 filters.append("".join(audio_filters))
-                concat_inputs.append(f"[a{clip_index}]")
+                audio_inputs.append(f"[a{clip_index}]")
 
         video_outputs = 1 if requirements.require_video else 0
         audio_outputs = 1 if requirements.require_audio else 0
-        output_labels = "[outv]" if video_outputs else ""
-        output_labels += "[outa]" if audio_outputs else ""
-        filters.append(
-            f"{''.join(concat_inputs)}concat=n={len(timeline.clips)}:"
-            f"v={video_outputs}:a={audio_outputs}{output_labels}"
-        )
+        # Audio concatenation must not be padded to individually rounded video
+        # lengths. Place video on the absolute output clock and resample frames
+        # once, so per-cut rounding cannot accumulate over a long edit.
+        if video_outputs:
+            filters.append(
+                f"{''.join(video_inputs)}interleave=nb_inputs={len(video_inputs)}:duration=longest,"
+                f"fps={video_metadata.frame_rate}[outv]"
+            )
+        if audio_outputs:
+            filters.append(
+                f"{''.join(audio_inputs)}concat=n={len(audio_inputs)}:v=0:a=1[outa]"
+            )
+        if hook_boundary_ms > 0:
+            # Fade through black/silence without overlapping speech or shifting subtitles.
+            duration = min(
+                300,
+                hook_boundary_ms // 2,
+                (timeline.estimated_duration_ms - hook_boundary_ms) // 2,
+            )
+            if duration > 0:
+                before, boundary, length = (
+                    _seconds(hook_boundary_ms - duration),
+                    _seconds(hook_boundary_ms),
+                    _seconds(duration),
+                )
+                if video_outputs:
+                    filters = [
+                        value.replace("[outv]", "[prefadev]") for value in filters
+                    ]
+                    filters.append(
+                        f"[prefadev]fade=t=out:st={before}:d={length}:enable='between(t,{before},{boundary})',fade=t=in:st={boundary}:d={length}:enable='between(t,{boundary},{_seconds(hook_boundary_ms + duration)})'[outv]"
+                    )
+                if audio_outputs:
+                    filters = [
+                        value.replace("[outa]", "[prefadea]") for value in filters
+                    ]
+                    filters.append(
+                        f"[prefadea]afade=t=out:st={before}:d={length}:enable='between(t,{before},{boundary})',afade=t=in:st={boundary}:d={length}:enable='between(t,{boundary},{_seconds(hook_boundary_ms + duration)})'[outa]"
+                    )
         command.extend(("-filter_complex", ";".join(filters)))
         if video_outputs:
             command.extend(("-map", "[outv]"))

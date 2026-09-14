@@ -87,10 +87,25 @@ def test_edit_preserves_source_and_other_output_and_rejects_empty_body(
                 json={"order": ["i-1", "i-0"], "roles": {"i-1": "hook"}},
             )
             assert reordered.status_code == 200
-            assert reordered.json()["outputs"][0]["clips"][0]["instance_id"] == "i-1"
+            clips = reordered.json()["outputs"][0]["clips"]
+            assert clips[0]["role"] == "hook"
+            assert [clip["instance_id"] for clip in clips[1:]] == ["i-0", "i-1"]
+            assert clips[0]["segment_id"] == clips[2]["segment_id"]
+            assert reordered.json()["outputs"][0]["duration_ms"] == 3000
+            removed = await client.put(
+                output + "/order",
+                json={
+                    "order": ["i-0", "i-1", clips[0]["instance_id"]],
+                    "roles": {clips[0]["instance_id"]: "body"},
+                },
+            )
+            assert removed.status_code == 200
+            assert [
+                clip["instance_id"] for clip in removed.json()["outputs"][0]["clips"]
+            ] == ["i-0", "i-1"]
             versions = (await client.get(output + "/versions")).json()
             assert len(versions) >= 3
-            assert versions[-1]["clips"][0]["role"] == "hook"
+            assert versions[-2]["clips"][0]["role"] == "hook"
 
     asyncio.run(run())
     updated = repository.read(segments)

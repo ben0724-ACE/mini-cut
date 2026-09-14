@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { recoverTranscription, readTranscription, startTranscription, type TranscriptionTask, type TranscriptionOptions } from "./api";
+import { recoverTranscription, readTranscription, startTranscription, resumeTask, cancelOutputExport, type TranscriptionTask, type TranscriptionOptions } from "./api";
 
 interface Props {project: string; asset: string; onComplete?: () => void; recover?: typeof recoverTranscription; read?: typeof readTranscription; start?: typeof startTranscription}
 export function TranscriptionControls({project, asset, onComplete, recover = recoverTranscription, read = readTranscription, start = startTranscription}: Props) {
@@ -13,7 +13,7 @@ export function TranscriptionControls({project, asset, onComplete, recover = rec
   const complete = useRef(onComplete); complete.current = onComplete;
   useEffect(() => {
     const controller = new AbortController();
-    recover(project, asset, controller.signal).then(value => {if (!controller.signal.aborted) {setTask(value); setLoading(false);}}).catch((reason: unknown) => {if (!controller.signal.aborted) {setError(reason instanceof Error ? reason.message : "无法恢复任务"); setLoading(false);}});
+    recover(project, asset, controller.signal).then(value => {if (!controller.signal.aborted) {setTask(value); if(value?.configuration)setOptions(value.configuration); setLoading(false);}}).catch((reason: unknown) => {if (!controller.signal.aborted) {setError(reason instanceof Error ? reason.message : "无法恢复任务"); setLoading(false);}});
     return () => controller.abort();
   }, [project, asset, recover, retry]);
   const active = task?.status === "pending" || task?.status === "running";
@@ -41,7 +41,10 @@ export function TranscriptionControls({project, asset, onComplete, recover = rec
     <button disabled={loading || submitting || active || !!error} onClick={submit}>{loading ? "正在恢复任务…" : submitting ? "正在提交…" : "开始转录"}</button>
     {error && <p role="alert">{error}<button onClick={() => {setError(""); setPaused(false); setLoading(true); setRetry(value => value + 1);}}>重试查询</button></p>}
     {task?.status === "failed" && <p role="alert">转录失败：{task.error}</p>}
+    {(task?.status==="failed"||task?.status==="cancelled")&&task.resumable&&<button disabled={submitting} onClick={async()=>{setSubmitting(true);setError("");try{const resumed=await resumeTask<TranscriptionTask>(project,task.task_id);setTask(resumed);if(resumed.configuration)setOptions(resumed.configuration);setPaused(false);}catch(reason){setError(reason instanceof Error?reason.message:"恢复失败");}finally{setSubmitting(false);}}}>继续未完成的转录</button>}
+    {task?.status==="cancelled"&&<p role="status">转录已取消，完成的分块已保留。</p>}
+    {task?.progress?.total!=null&&<p role="status">已完成 {task.progress.completed} / {task.progress.total} 个转录块</p>}
     {task?.status === "succeeded" && <p role="status">转录完成：{task.result?.word_count ?? "未知数量"} 个词{task.result?.reused ? "（复用已有转录）" : ""}</p>}
-    {active && <><p role="status">{task.status === "pending" ? "等待执行" : "正在转录"}{paused ? " · 已停止查询" : ""}</p><button onClick={() => setPaused(!paused)}>{paused ? "恢复查询" : "停止查询"}</button><p className="helper-text">停止查询不取消转录。刷新可恢复进度；暂不支持取消计算。</p></>}
+    {active && <><p role="status">{task.status === "pending" ? "等待执行" : "正在转录"}{paused ? " · 已停止查询" : ""}</p><button onClick={() => setPaused(!paused)}>{paused ? "恢复查询" : "停止查询"}</button><button onClick={()=>void cancelOutputExport(project,task.task_id).catch(reason=>setError(reason instanceof Error?reason.message:"取消失败"))}>取消转录</button><p className="helper-text">取消将在当前分块结束后生效，已完成分块会保留。停止查询只暂停界面更新。</p></>}
   </div>;
 }

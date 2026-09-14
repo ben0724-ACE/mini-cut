@@ -50,16 +50,18 @@ export class ApiError extends Error {}
 export interface ProjectSummary { project_id: string; name?: string; asset_count: number }
 export interface ProjectDetail extends ProjectSummary { asset_ids: string[] }
 export interface AssetDetail { asset_id: string; name: string; duration_ms: number; has_transcript: boolean; has_plan: boolean }
-export interface TranscriptionTask {task_id: string; status: "pending" | "running" | "succeeded" | "failed"; result: {word_count?: number; reused?: boolean} | null; error: string | null}
+export interface TaskProgress {completed?:number;total?:number;phase?:string;elapsed_seconds?:number}
+export interface ModelReceipt {model:string;reused:boolean;usage:{prompt_tokens:number|null;completion_tokens:number|null;prompt_cache_hit_tokens:number|null;prompt_cache_miss_tokens:number|null};estimated_cost_usd:number|null;finish_reason?:string|null;price_date?:string|null}
+export interface TranscriptionTask {configuration?:TranscriptionOptions;progress?:TaskProgress;resumable?:boolean;task_id: string; status: "pending" | "running" | "succeeded" | "failed" | "cancelled"; result: {word_count?: number; reused?: boolean} | null; error: string | null}
 export interface TranscriptionOptions {provider: "mlx" | "whisper"; model: string; language: string}
 export interface HighlightClip {instance_id: string; segment_id: string; role: string; text: string; source_text?: string; deleted?: boolean; start_ms: number; end_ms: number}
 export const editOutputItem = (project: string, collection: string, output: string, instance: string, changes: {deleted?: boolean; display_text?: string}) => projectRequest<HighlightResult>(`/api/projects/${encodeURIComponent(project)}/highlights/${encodeURIComponent(collection)}/outputs/${encodeURIComponent(output)}/items/${encodeURIComponent(instance)}`, {method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(changes)});
 export interface HighlightOutput {output_id: string; title: string; reason: string; revision: number; duration_ms: number; clips: HighlightClip[]}
 export const reorderOutput = (project:string,collection:string,output:string,order:string[],roles:Record<string,string>) => projectRequest<HighlightResult>(`/api/projects/${encodeURIComponent(project)}/highlights/${encodeURIComponent(collection)}/outputs/${encodeURIComponent(output)}/order`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({order,roles})});
 export const getOutputVersions = (project:string,collection:string,output:string) => projectRequest<{revision:number;duration_ms:number;clips:HighlightClip[]}[]>(`/api/projects/${encodeURIComponent(project)}/highlights/${encodeURIComponent(collection)}/outputs/${encodeURIComponent(output)}/versions`);
-export interface HighlightResult {collection_id: string; asset_id: string; brief: import("./HighlightForm").HighlightBrief; notes: string[]; outputs: HighlightOutput[]; selected_output_ids?: string[]}
+export interface HighlightResult {model_requests?:ModelReceipt[];collection_id: string; asset_id: string; brief: import("./HighlightForm").HighlightBrief; notes: string[]; outputs: HighlightOutput[]; selected_output_ids?: string[]}
 export const saveHighlightSelection = (project: string, collection: string, output_ids: string[]) => projectRequest<HighlightResult>(`/api/projects/${encodeURIComponent(project)}/highlights/${encodeURIComponent(collection)}/selection`, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({output_ids})});
-export interface HighlightTask {task_id: string; status: TranscriptionTask["status"]; result: HighlightResult | null; error: string | null}
+export interface HighlightTask {progress?:TaskProgress;resumable?:boolean;task_id: string; status: TranscriptionTask["status"]; result: HighlightResult | null; error: string | null}
 export const recoverHighlights = (project: string, asset: string, signal?: AbortSignal) => projectRequest<HighlightTask | null>(`/api/projects/${encodeURIComponent(project)}/assets/${encodeURIComponent(asset)}/highlight-task`, {signal});
 export const readHighlightTask = (project: string, task: string, signal?: AbortSignal) => projectRequest<HighlightTask>(`/api/projects/${encodeURIComponent(project)}/tasks/${encodeURIComponent(task)}`, {signal});
 export const startHighlights = (project: string, asset: string, brief: import("./HighlightForm").HighlightBrief, key: string) => projectRequest<HighlightTask>(`/api/projects/${encodeURIComponent(project)}/tasks/highlights`, {method: "POST", headers: {"Content-Type": "application/json", "Idempotency-Key": key}, body: JSON.stringify({asset_id: asset, ...brief})});
@@ -101,7 +103,7 @@ export const recoverOutputExport=(project:string,collection:string,output:string
 
 interface TaskStatus {
   task_id: string;
-  status: "pending" | "running" | "succeeded" | "failed";
+  status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
   result: { duration_ms?: number } | null;
   error: string | null;
 }
@@ -207,3 +209,5 @@ export async function renderAndWait(
     duration_ms: task.result.duration_ms,
   };
 }
+
+export const resumeTask=<T,>(project:string,task:string)=>projectRequest<T>(`/api/projects/${encodeURIComponent(project)}/tasks/${encodeURIComponent(task)}/resume`,{method:"POST"});

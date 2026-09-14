@@ -12,7 +12,8 @@ from minicut.errors import UserInputError
 from minicut.highlight_brief import HighlightBrief
 from minicut.highlight_planner import HighlightPlanner
 from minicut.highlight_workflow import attach_continuation_context, plan_highlights
-from minicut.output_plan import OutputRole
+from minicut.model_journal import ModelJournal, RecordedProvider
+from minicut.output_plan import OutputItem, OutputRole
 from minicut.output_repository import OutputCollectionRepository
 from minicut.output_timeline import compile_output_timeline
 from minicut.segmentation import build_utterances
@@ -23,10 +24,16 @@ from minicut.semantic_segmentation import (
 )
 from minicut.text_normalization import normalize_transcript_words
 from minicut.transcript import Transcript
+from minicut.transcription_task import CancellationToken
 
 
 def generate_highlights(
-    project: Path, asset_id: str, collection_id: str, brief: HighlightBrief
+    project: Path,
+    asset_id: str,
+    collection_id: str,
+    brief: HighlightBrief,
+    *,
+    cancellation: CancellationToken | None = None,
 ) -> dict[str, object]:
     try:
         cache = json.loads(
@@ -50,12 +57,18 @@ def generate_highlights(
     segments = attach_continuation_context(
         mark_segment_candidates(build_rule_based_segments(transcript, utterances))
     )
-    planner = HighlightPlanner(
+    recorded = RecordedProvider(
         DeepSeekProvider(
             key,
             base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
         ),
+        ModelJournal(project),
+        cancellation,
+    )
+    planner = HighlightPlanner(
+        recorded,
         model=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+        timeout=180,
     )
     workflow = asyncio.run(
         plan_highlights(planner, brief, segments, asset_id, collection_id)
@@ -98,6 +111,7 @@ def generate_highlights(
         "brief": brief.to_dict(),
         "notes": list(selection.notes),
         "outputs": outputs,
+        "model_requests": recorded.receipts,
     }
     repository.write_highlight_result(result)
     return result
@@ -234,16 +248,42 @@ def reorder_output(
         or not set(roles) <= set(by_id)
     ):
         raise UserInputError("Order must contain every instance exactly once")
-    updated = replace(
-        plan,
-        revision=plan.revision + 1,
-        items=tuple(
-            replace(by_id[identity], role=OutputRole(roles[identity]))
-            if identity in roles
-            else by_id[identity]
-            for identity in order
-        ),
-    )
+    promoted = {
+        identity
+        for identity, role in roles.items()
+        if role == "hook" and by_id[identity].role is OutputRole.BODY
+    }
+    if any(by_id[identity].deleted for identity in promoted):
+        raise UserInputError("Restore the body excerpt before adding an opening hook")
+    arranged: list[OutputItem] = []
+    for identity in order:
+        item = by_id[identity]
+        target = OutputRole(roles.get(identity, item.role.value))
+        if identity in promoted:
+            arranged.append(
+                replace(
+                    item,
+                    instance_id=f"{identity}-hook-v{plan.revision + 1}",
+                    role=OutputRole.HOOK,
+                )
+            )
+        elif (
+            item.role is OutputRole.HOOK
+            and target is OutputRole.BODY
+            and any(
+                other.role is OutputRole.BODY and other.segment_id == item.segment_id
+                for other in plan.items
+            )
+        ):
+            continue  # Removing the teaser leaves its existing body occurrence intact.
+        else:
+            arranged.append(replace(item, role=target))
+    if promoted:
+        hooks = [item for item in arranged if item.role is OutputRole.HOOK]
+        # Promoting a teaser must not reorder or remove the complete body.
+        body = [item for item in plan.items if item.role is OutputRole.BODY]
+        arranged = hooks + body
+    updated = replace(plan, revision=plan.revision + 1, items=tuple(arranged))
     repository.write(
         replace(
             collection,
