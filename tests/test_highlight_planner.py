@@ -148,3 +148,32 @@ def test_malformed_json_gets_only_one_format_repair(repair_succeeds: bool) -> No
     assert json.loads(provider.requests[1].user_prompt)["format_repair"][
         "invalid_response"
     ]
+
+
+@pytest.mark.parametrize("notes, expected", [("素材说明", ("素材说明",)), ("", ())])
+def test_single_note_text_is_preserved_without_model_retry(
+    notes: str, expected: tuple[str, ...]
+) -> None:
+    import asyncio
+
+    provider = FakeProvider({"candidates": [candidate(["a"])], "notes": notes})
+    result = asyncio.run(
+        HighlightPlanner(provider).plan(
+            HighlightBrief.for_preset(HighlightPreset.PODCAST), source()
+        )
+    )
+    assert result.notes == expected
+    assert len(result.suggestions) == 1
+    assert len(provider.requests) == 1
+
+
+@pytest.mark.parametrize("notes", [None, {}, [1]])
+def test_invalid_notes_are_still_rejected(notes: object) -> None:
+    import asyncio
+
+    with pytest.raises(ValueError, match="模型返回"):
+        asyncio.run(
+            HighlightPlanner(FakeProvider({"candidates": [], "notes": notes})).plan(
+                HighlightBrief.for_preset(HighlightPreset.PODCAST), source()
+            )
+        )

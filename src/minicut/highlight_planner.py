@@ -169,12 +169,18 @@ class HighlightPlanner:
         if set(root) != {"candidates", "notes"}:
             raise ValueError("invalid highlight response")
         rows, notes = root["candidates"], root["notes"]
+        # Notes are descriptive metadata; preserve a single text response verbatim.
+        # Candidate structure and source references remain strictly validated.
+        if isinstance(notes, str):
+            notes = [notes] if notes.strip() else []
         if (
             not isinstance(rows, list)
             or not isinstance(notes, list)
             or any(not isinstance(n, str) for n in cast(list[object], notes))
         ):
-            raise ValueError("invalid candidates or notes")
+            raise ValueError(
+                "模型返回的候选或说明格式不正确：候选须为列表，说明须为文字或文字列表。"
+            )
         allowed = set(sources)
         suggestions: list[HighlightSuggestion] = []
         for i, raw in enumerate(cast(list[object], rows)):
