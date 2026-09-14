@@ -190,3 +190,6 @@ hr { border:0;border-top:1px solid #343d4c;margin:24px 0; }
 .project-activity { margin:0 0 8px;font-size:12px; }
 .project-activity>summary { padding:4px 0;color:#a6b3c9; }
 .project-activity[open] { padding:12px;border:1px solid #354154;border-radius:10px;max-height:300px;overflow:auto; }
+
+.workbench .transcription-controls label.checkbox-field { display: flex; align-items: center; gap: 10px; margin: 16px 0; cursor: pointer; }
+.checkbox-field input[type="checkbox"] { flex: 0 0 auto; width: 18px; height: 18px; margin: 0; }

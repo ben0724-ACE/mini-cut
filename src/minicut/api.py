@@ -159,6 +159,7 @@ class OutputItemEditBody(BaseModel):
 class OutputOrderBody(BaseModel):
     order: list[str]
     roles: dict[str, str] = Field(default_factory=dict)
+    hook_transition_ms: int | None = Field(default=None, ge=0, le=1000, strict=True)
 
 
 class RenderTaskBody(BaseModel):
@@ -1160,7 +1161,12 @@ def create_app(
         inspect(project_id)
         try:
             return reorder_output(
-                root / project_id, collection_id, output_id, body.order, body.roles
+                root / project_id,
+                collection_id,
+                output_id,
+                body.order,
+                body.roles,
+                body.hook_transition_ms,
             )
         except (MiniCutError, ValueError) as error:
             raise HTTPException(400, str(error)) from error

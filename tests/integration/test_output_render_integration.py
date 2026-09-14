@@ -118,6 +118,9 @@ class RealOutputRenderTest(unittest.TestCase):
                     OutputItem("body-c", "c", OutputRole.BODY),
                 ),
             )
+            from dataclasses import replace
+
+            plan = replace(plan, hook_transition_ms=150)
             second_plan = OutputPlan("video-2", "candidate", "原始节选", plan.items[1:])
             collection = OutputCollection(
                 "selected",
@@ -139,9 +142,9 @@ class RealOutputRenderTest(unittest.TestCase):
             )
             for timestamp, channel, low, high in (
                 ("0.4", 2, 150, 256),
-                ("0.72", 2, 1, 120),
+                ("0.72", 2, 100, 160),
                 ("0.8", 0, -1, 10),
-                ("0.88", 0, 1, 120),
+                ("0.88", 0, 100, 160),
                 ("1.2", 0, 150, 256),
                 ("2.0", 2, 150, 256),
             ):

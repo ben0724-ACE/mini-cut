@@ -56,3 +56,6 @@ outputs/
 # Editors
 .idea/
 .vscode/
+
+# Default local project data
+/projects/

@@ -100,3 +100,16 @@ class OutputPlanTest(unittest.TestCase):
             OutputItem("x", "a", "invalid")  # type: ignore[arg-type]
         with self.assertRaises(ValueError):
             OutputCollectionRepository(Path("/project"), "../escape")
+
+
+def test_transition_round_trip_legacy_default_and_invalid_values() -> None:
+    plan = collection().plans[0]
+    legacy = plan.to_dict()
+    legacy.pop("hook_transition_ms")
+    assert OutputPlan.from_dict(legacy).hook_transition_ms == 300
+    for duration in (0, 150, 300, 500, 1000):
+        updated = replace(plan, hook_transition_ms=duration)
+        assert OutputPlan.from_dict(updated.to_dict()) == updated
+    for invalid in (-1, 1001, True):
+        with unittest.TestCase().assertRaises(ValueError):
+            replace(plan, hook_transition_ms=invalid)

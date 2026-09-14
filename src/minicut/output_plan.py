@@ -79,8 +79,14 @@ class OutputPlan:
     title: str
     items: tuple[OutputItem, ...]
     revision: int = 1
+    hook_transition_ms: int = 300
 
     def __post_init__(self) -> None:
+        if (
+            type(self.hook_transition_ms) is not int
+            or not 0 <= self.hook_transition_ms <= 1000
+        ):
+            raise ValueError("hook transition must be an integer between 0 and 1000 ms")
         validate_output_id(self.output_id)
         _text(self.candidate_id)
         _text(self.title)
@@ -128,6 +134,7 @@ class OutputPlan:
                 for item in items
             ),
             cast(int, data.get("revision", 1)),
+            cast(int, data.get("hook_transition_ms", 300)),
         )
 
 

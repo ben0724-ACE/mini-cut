@@ -372,6 +372,7 @@ class RenderCommandBuilder:
             _DEFAULT_AUDIO_METADATA,
             audio_fade,
             denoise_filter,
+            hook_transition_ms=plan.hook_transition_ms,
             hook_boundary_ms=next(
                 (
                     clip.output_range.start_ms
@@ -399,6 +400,7 @@ class RenderCommandBuilder:
         audio_fade: AudioFade,
         denoise_filter: str | None,
         hook_boundary_ms: int = 0,
+        hook_transition_ms: int = 300,
     ) -> tuple[str, ...]:
         output_url = _local_file_url(output_path, label="render output")
         if denoise_filter is not None and not denoise_filter.strip():
@@ -478,7 +480,7 @@ class RenderCommandBuilder:
         if hook_boundary_ms > 0:
             # Fade through black/silence without overlapping speech or shifting subtitles.
             duration = min(
-                300,
+                hook_transition_ms,
                 hook_boundary_ms // 2,
                 (timeline.estimated_duration_ms - hook_boundary_ms) // 2,
             )

@@ -91,6 +91,7 @@ def generate_highlights(
                     "title": plan.title,
                     "reason": candidates[plan.candidate_id].reason,
                     "revision": plan.revision,
+                    "hook_transition_ms": plan.hook_transition_ms,
                     "duration_ms": timeline.estimated_duration_ms,
                     "clips": [
                         {
@@ -139,6 +140,7 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
             for plan in collection.plans:
                 row = rows[plan.output_id]
                 row["revision"] = plan.revision
+                row["hook_transition_ms"] = plan.hook_transition_ms
                 row["duration_ms"] = compile_output_timeline(
                     plan, segments, collection.asset_id
                 ).estimated_duration_ms
@@ -231,6 +233,7 @@ def reorder_output(
     output_id: str,
     order: list[str],
     roles: dict[str, str],
+    hook_transition_ms: int | None = None,
 ) -> dict[str, object]:
     result = read_highlights(project, collection_id)
     segments = source_segments(project, cast(str, result["asset_id"]))
@@ -283,7 +286,14 @@ def reorder_output(
         # Promoting a teaser must not reorder or remove the complete body.
         body = [item for item in plan.items if item.role is OutputRole.BODY]
         arranged = hooks + body
-    updated = replace(plan, revision=plan.revision + 1, items=tuple(arranged))
+    updated = replace(
+        plan,
+        revision=plan.revision + 1,
+        items=tuple(arranged),
+        hook_transition_ms=plan.hook_transition_ms
+        if hook_transition_ms is None
+        else hook_transition_ms,
+    )
     repository.write(
         replace(
             collection,
@@ -324,6 +334,7 @@ def output_versions(
     return [
         {
             "revision": plan.revision,
+            "hook_transition_ms": plan.hook_transition_ms,
             "duration_ms": compile_output_timeline(
                 plan, segments, cast(str, result["asset_id"])
             ).estimated_duration_ms,
