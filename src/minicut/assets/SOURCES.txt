@@ -1,0 +1,7 @@
+TV static transition
+Visual source: Static with white noise.webm by MennasDosbin (2017).
+https://commons.wikimedia.org/wiki/File:Static_with_white_noise.webm
+Public domain (PD-ineligible / PD-self on the source page).
+Modified: first second, grayscale, contrast increased, nearest-neighbor resize to 320x240, original noise audio removed.
+Audio: locally synthesized 1000 Hz sine tone, reduced level, no third-party recording.
+Bundled asset is used only when the TV-static transition is selected.

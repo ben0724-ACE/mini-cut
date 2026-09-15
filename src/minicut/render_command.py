@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from minicut.media import MediaAsset, StreamType
-from minicut.output_plan import OutputPlan, OutputRole
+from minicut.output_plan import OutputPlan, OutputRole, transition_gap_ms
 from minicut.output_timeline import validate_output_timeline
 from minicut.semantic_segment import SemanticSegment
 from minicut.subtitle_font import SubtitleFont
@@ -373,9 +373,10 @@ class RenderCommandBuilder:
             audio_fade,
             denoise_filter,
             hook_transition_ms=plan.hook_transition_ms,
+            hook_transition_kind=plan.hook_transition_kind,
             hook_boundary_ms=next(
                 (
-                    clip.output_range.start_ms
+                    clip.output_range.start_ms - transition_gap_ms(plan)
                     for clip in timeline.clips
                     if next(
                         item.role
@@ -401,6 +402,7 @@ class RenderCommandBuilder:
         denoise_filter: str | None,
         hook_boundary_ms: int = 0,
         hook_transition_ms: int = 300,
+        hook_transition_kind: str = "fade",
     ) -> tuple[str, ...]:
         output_url = _local_file_url(output_path, label="render output")
         if denoise_filter is not None and not denoise_filter.strip():
@@ -480,6 +482,35 @@ class RenderCommandBuilder:
                 filters.append("".join(audio_filters))
                 audio_inputs.append(f"[a{clip_index}]")
 
+        if (
+            hook_boundary_ms > 0
+            and hook_transition_ms > 0
+            and hook_transition_kind == "tv_static"
+        ):
+            effect_index = command.count("-i")
+            effect_path = Path(__file__).parent / "assets" / "tv-static-beep.mp4"
+            command.extend(
+                ("-i", _local_file_url(str(effect_path), label="transition asset"))
+            )
+            duration = _seconds(hook_transition_ms)
+            if requirements.require_video:
+                filters.append(
+                    f"[{effect_index}:v:0]trim=duration={duration},settb=AVTB,setpts=PTS-STARTPTS+{_seconds(hook_boundary_ms)}/TB,"
+                    f"scale={video_metadata.width}:{video_metadata.height},setsar=1,format={encoding.pixel_format}[effectv]"
+                )
+                video_inputs.append("[effectv]")
+            if requirements.require_audio:
+                filters.append(
+                    f"[{effect_index}:a:0]atrim=duration={duration},asetpts=PTS-STARTPTS,aresample={audio_metadata.sample_rate},"
+                    f"aformat=channel_layouts={audio_metadata.channel_layout},afade=t=in:d=0.01,afade=t=out:st={_seconds(max(0, hook_transition_ms - 10))}:d=0.01[effecta]"
+                )
+                body_index = next(
+                    i
+                    for i, c in enumerate(timeline.clips)
+                    if c.output_range.start_ms > hook_boundary_ms
+                )
+                audio_inputs.insert(body_index, "[effecta]")
+
         video_outputs = 1 if requirements.require_video else 0
         audio_outputs = 1 if requirements.require_audio else 0
         # Audio concatenation must not be padded to individually rounded video
@@ -494,7 +525,7 @@ class RenderCommandBuilder:
             filters.append(
                 f"{''.join(audio_inputs)}concat=n={len(audio_inputs)}:v=0:a=1[outa]"
             )
-        if hook_boundary_ms > 0:
+        if hook_boundary_ms > 0 and hook_transition_kind == "fade":
             # Fade through black/silence without overlapping speech or shifting subtitles.
             duration = min(
                 hook_transition_ms,

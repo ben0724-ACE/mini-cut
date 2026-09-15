@@ -42,3 +42,12 @@ def test_defaults_and_explicit_overrides() -> None:
 def test_invalid_parameters(kwargs: dict[str, object]) -> None:
     with pytest.raises(ValueError):
         HighlightBrief.for_preset(HighlightPreset.PODCAST, **kwargs)
+
+
+def test_editable_preset_prompt_is_sent_to_model_payload() -> None:
+    brief = HighlightBrief.for_preset(HighlightPreset.PODCAST)
+    assert "故事" in str(brief.to_dict()["preset_prompt"])
+    custom = HighlightBrief.for_preset(
+        HighlightPreset.PODCAST, preset_prompt="只选完整的幽默故事"
+    )
+    assert custom.to_dict()["preset_prompt"] == "只选完整的幽默故事"

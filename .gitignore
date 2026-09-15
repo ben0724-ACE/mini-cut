@@ -59,3 +59,6 @@ outputs/
 
 # Default local project data
 /projects/
+
+# Small bundled transition asset and public source attribution
+!/src/minicut/assets/tv-static-beep.mp4

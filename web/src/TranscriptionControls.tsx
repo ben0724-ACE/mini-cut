@@ -37,14 +37,14 @@ export function TranscriptionControls({project, asset, onComplete, recover = rec
     <label>模型<select aria-label="模型" disabled={active || submitting} value={options.model} onChange={event => setOptions({...options, model: event.target.value})}>{["tiny", "base", "small", "medium", "large", "large-v2", "large-v3", "large-v3-turbo"].map(model => <option key={model}>{model}</option>)}</select></label>
     <label>语言<select aria-label="语言" disabled={active || submitting} value={options.language} onChange={event => setOptions({...options, language: event.target.value})}><option value="zh">中文</option><option value="en">英文</option></select></label>
     <p className="helper-text">本机转录 · 未缓存模型需联网下载</p>
-    <details className="helper-details"><summary>转录说明</summary><p className="helper-text">需安装所选引擎。设置仅用于下次转录；刷新恢复任务结果，不恢复设置。</p></details>
+    <details className="helper-details"><summary>转录说明</summary><p className="helper-text">需安装所选引擎。设置仅用于下次转录；刷新后恢复任务与设置。</p></details>
     <button disabled={loading || submitting || active || !!error} onClick={submit}>{loading ? "正在恢复任务…" : submitting ? "正在提交…" : "开始转录"}</button>
     {error && <p role="alert">{error}<button onClick={() => {setError(""); setPaused(false); setLoading(true); setRetry(value => value + 1);}}>重试查询</button></p>}
     {task?.status === "failed" && <p role="alert">转录失败：{task.error}</p>}
     {(task?.status==="failed"||task?.status==="cancelled")&&task.resumable&&<button disabled={submitting} onClick={async()=>{setSubmitting(true);setError("");try{const resumed=await resumeTask<TranscriptionTask>(project,task.task_id);setTask(resumed);if(resumed.configuration)setOptions(resumed.configuration);setPaused(false);}catch(reason){setError(reason instanceof Error?reason.message:"恢复失败");}finally{setSubmitting(false);}}}>继续未完成的转录</button>}
     {task?.status==="cancelled"&&<p role="status">转录已取消，完成的分块已保留。</p>}
-    {task?.progress?.total!=null&&<p role="status">已完成 {task.progress.completed} / {task.progress.total} 个转录块</p>}
+    {task && <div className="transcription-progress"><progress aria-label="转录进度" max={task.status === "succeeded" ? 1 : task.progress?.total ?? 1} value={task.status === "succeeded" ? 1 : task.progress?.total ? task.progress.completed ?? 0 : undefined} />{task.progress?.total != null && <p>已完成 {task.progress.completed ?? 0} / {task.progress.total} 个转录块</p>}</div>}
     {task?.status === "succeeded" && <p role="status">转录完成：{task.result?.word_count ?? "未知数量"} 个词{task.result?.reused ? "（复用已有转录）" : ""}</p>}
-    {active && <><p role="status">{task.status === "pending" ? "等待执行" : "正在转录"}{paused ? " · 已停止查询" : ""}</p><button onClick={() => setPaused(!paused)}>{paused ? "恢复查询" : "停止查询"}</button><button onClick={()=>void cancelOutputExport(project,task.task_id).catch(reason=>setError(reason instanceof Error?reason.message:"取消失败"))}>取消转录</button><p className="helper-text">取消将在当前分块结束后生效，已完成分块会保留。停止查询只暂停界面更新。</p></>}
+    {active && <><p role="status">{task.status === "pending" ? "等待执行" : "正在转录"}{paused ? " · 连接中断，请重试" : ""}</p><button onClick={()=>void cancelOutputExport(project,task.task_id).catch(reason=>setError(reason instanceof Error?reason.message:"取消失败"))}>取消转录</button><p className="helper-text">取消将在当前分块结束后生效，已完成分块会保留。</p></>}
   </div>;
 }

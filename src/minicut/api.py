@@ -130,6 +130,7 @@ class HighlightTaskBody(BaseModel):
     max_ms: int | None = Field(default=None, gt=0)
     hook_ms: int | None = Field(default=None, gt=0)
     instructions: str = Field(default="", max_length=12000)
+    preset_prompt: str | None = Field(default=None, min_length=1, max_length=12000)
     max_source_overlap: float = Field(default=0.3, ge=0, le=1)
 
     def brief(self) -> HighlightBrief:
@@ -146,12 +147,20 @@ class HighlightSelectionBody(BaseModel):
 
 
 class OutputItemEditBody(BaseModel):
+    source_start_ms: int | None = Field(default=None, ge=0, strict=True)
+    source_end_ms: int | None = Field(default=None, gt=0, strict=True)
     deleted: bool | None = None
     display_text: str | None = Field(default=None, min_length=1, max_length=2000)
 
     @model_validator(mode="after")
     def require_change(self) -> Self:
-        if self.deleted is None and self.display_text is None:
+        if (self.source_start_ms is None) != (self.source_end_ms is None):
+            raise ValueError("Both source boundaries are required")
+        if (
+            self.deleted is None
+            and self.display_text is None
+            and self.source_start_ms is None
+        ):
             raise ValueError("Provide a subtitle or decision change")
         return self
 
@@ -160,6 +169,9 @@ class OutputOrderBody(BaseModel):
     order: list[str]
     roles: dict[str, str] = Field(default_factory=dict)
     hook_transition_ms: int | None = Field(default=None, ge=0, le=1000, strict=True)
+    hook_transition_kind: str | None = Field(
+        default=None, pattern=r"^(fade|tv_static)$"
+    )
 
 
 class RenderTaskBody(BaseModel):
@@ -1145,6 +1157,8 @@ def create_app(
                 instance_id,
                 deleted=body.deleted,
                 display_text=body.display_text,
+                source_start_ms=body.source_start_ms,
+                source_end_ms=body.source_end_ms,
             )
         except (MiniCutError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
@@ -1167,6 +1181,7 @@ def create_app(
                 body.order,
                 body.roles,
                 body.hook_transition_ms,
+                body.hook_transition_kind,
             )
         except (MiniCutError, ValueError) as error:
             raise HTTPException(400, str(error)) from error

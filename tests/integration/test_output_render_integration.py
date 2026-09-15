@@ -262,3 +262,109 @@ class RealOutputRenderTest(unittest.TestCase):
             self.assertEqual(record["plan"]["output_id"], "video-1")
             self.assertEqual(record["timeline"]["clips"][0]["segment_id"], "c")
             self.assertEqual(probe_media(source).duration_ms, probed.duration_ms)
+
+            # The effect occupies its own interval; neither source speech nor
+            # body subtitles may be overwritten by the inserted static/beep.
+            static_plan = replace(
+                plan,
+                revision=2,
+                hook_transition_kind="tv_static",
+                hook_transition_ms=300,
+            )
+            OutputCollectionRepository(root, "selected").write(
+                replace(collection, plans=(static_plan, second_plan)), segments
+            )
+            static_result = use_case.execute(
+                OutputRenderRequest(
+                    root,
+                    "selected",
+                    "video-1",
+                    segments,
+                    transcript,
+                    video_metadata=VideoOutputMetadata(160, 120, "25"),
+                )
+            )
+            self.assertEqual(static_result.timeline.estimated_duration_ms, 2700)
+            self.assertEqual(
+                [c.output_range.start_ms for c in static_result.timeline.clips],
+                [0, 1100, 1900],
+            )
+            static_cues = parse_srt(static_result.subtitle_path.read_text())
+            self.assertEqual([c.start_ms for c in static_cues], [0, 1100, 1900])
+            raw = subprocess.check_output(
+                [
+                    "ffmpeg",
+                    "-v",
+                    "error",
+                    "-ss",
+                    "0.92",
+                    "-i",
+                    str(static_result.output_path),
+                    "-frames:v",
+                    "1",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-f",
+                    "rawvideo",
+                    "-",
+                ]
+            )
+            values = list(raw[::3])
+            mean = sum(values) / len(values)
+            self.assertGreater(sum((x - mean) ** 2 for x in values) / len(values), 100)
+            audio = subprocess.check_output(
+                [
+                    "ffmpeg",
+                    "-v",
+                    "error",
+                    "-ss",
+                    "0.85",
+                    "-i",
+                    str(static_result.output_path),
+                    "-t",
+                    "0.1",
+                    "-vn",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "8000",
+                    "-f",
+                    "s16le",
+                    "-",
+                ]
+            )
+            samples = array.array("h", audio)
+            crossings = sum(
+                (a < 0) != (b < 0) for a, b in zip(samples, samples[1:], strict=False)
+            )
+            self.assertTrue(
+                185 <= crossings <= 215, crossings
+            )  # 1 kHz tone, 0.1 seconds
+            cropped_plan = replace(
+                static_plan,
+                revision=3,
+                items=(
+                    replace(
+                        static_plan.items[0], source_start_ms=2100, source_end_ms=2500
+                    ),
+                    *static_plan.items[1:],
+                ),
+            )
+            OutputCollectionRepository(root, "selected").write(
+                replace(collection, plans=(cropped_plan, second_plan)), segments
+            )
+            cropped = use_case.execute(
+                OutputRenderRequest(
+                    root,
+                    "selected",
+                    "video-1",
+                    segments,
+                    transcript,
+                    video_metadata=VideoOutputMetadata(160, 120, "25"),
+                )
+            )
+            self.assertEqual(cropped.timeline.estimated_duration_ms, 2300)
+            self.assertEqual(cropped.timeline.clips[1].source_range.start_ms, 0)
+            self.assertEqual(
+                parse_srt(cropped.subtitle_path.read_text())[0].end_ms, 400
+            )

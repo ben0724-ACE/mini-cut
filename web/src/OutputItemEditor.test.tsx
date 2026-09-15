@@ -13,3 +13,12 @@ it("保存失败保留修改文字，不假报成功；跳转使用原时间", a
   expect(screen.getByLabelText("字幕 i")).toHaveValue("术语更正");
   await userEvent.click(screen.getByRole("button",{name:"跳转 2.00 秒"})); expect(jump).toHaveBeenCalledOnce();
 });
+
+it("手动向前补范围可保存，字幕区域只出现一次", async () => {
+  const save=vi.fn().mockResolvedValue(undefined);
+  render(<OutputItemEditor clip={{instance_id:"i",segment_id:"source",role:"body",text:"旧字幕",source_text:"原始转录",start_ms:2000,end_ms:3000}} busy={false} onSave={save} onJump={vi.fn()} />);
+  expect(screen.queryByText(/原文：/)).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button",{name:"向前补 0.5 秒"}));
+  await userEvent.click(screen.getByRole("button",{name:"保存范围"}));
+  expect(save).toHaveBeenCalledWith({source_start_ms:1500,source_end_ms:3000});
+});

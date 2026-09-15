@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from textwrap import wrap
 
 from minicut.media import MediaAsset, TimeRange
-from minicut.output_plan import OutputPlan
+from minicut.output_plan import OutputPlan, OutputRole, transition_gap_ms
 from minicut.semantic_segment import (
     ContextDirection,
     SemanticSegment,
@@ -41,13 +41,20 @@ def compile_output_timeline(
     by_id = {segment.segment_id: segment for segment in segments}
     clips: list[Clip] = []
     cursor = 0
+    gap_added = False
     for item in plan.items:
         if item.deleted:
             continue
+        if item.role is OutputRole.BODY and not gap_added:
+            cursor += transition_gap_ms(plan)
+            gap_added = True
         segment = by_id.get(item.segment_id)
         if segment is None:
             raise ValueError("output references an unknown source segment")
-        source = TimeRange(segment.start_ms, segment.end_ms)
+        source = TimeRange(
+            segment.start_ms if item.source_start_ms is None else item.source_start_ms,
+            segment.end_ms if item.source_end_ms is None else item.source_end_ms,
+        )
         clips.append(
             Clip(
                 item.instance_id,
@@ -79,6 +86,9 @@ def validate_output_timeline(
         TimelineValidationCode.SOURCE_ORDER,
         TimelineValidationCode.SOURCE_OVERLAP,
     }
+    if transition_gap_ms(plan):
+        # Exact plan compilation above permits only its deliberate effect interval.
+        intentional.add(TimelineValidationCode.OUTPUT_DISCONTINUITY)
     issues = tuple(
         issue
         for issue in inspect_timeline_structure(timeline, assets)
@@ -152,7 +162,26 @@ def map_output_words(
     if timeline.to_dict() != expected.to_dict():
         raise ValueError("subtitle timeline does not match its output plan")
     mapped: list[MappedWord] = []
+    by_instance = {item.instance_id: item for item in plan.items}
     for clip in timeline.clips:
+        if by_instance[clip.clip_id].source_start_ms is not None:
+            # User-approved boundaries can extend beyond the original AI segment.
+            # Keep source word identities and clip intersecting words to that range.
+            offset = clip.output_range.start_ms - clip.source_range.start_ms
+            for word in words:
+                start = max(word.start_ms, clip.source_range.start_ms)
+                end = min(word.end_ms, clip.source_range.end_ms)
+                if start < end:
+                    mapped.append(
+                        MappedWord(
+                            word.word_id,
+                            word.text,
+                            start + offset,
+                            end + offset,
+                            clip.clip_id,
+                        )
+                    )
+            continue
         # Reuse the existing strict mapper per occurrence. Its global duplicate
         # protection remains unchanged for the legacy keep/delete timeline.
         occurrence = Timeline((clip,), clip.output_range.end_ms)

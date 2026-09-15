@@ -16,13 +16,14 @@ from minicut.model_journal import ModelJournal, RecordedProvider
 from minicut.output_plan import OutputItem, OutputRole
 from minicut.output_repository import OutputCollectionRepository
 from minicut.output_timeline import compile_output_timeline
+from minicut.project import ProjectRepository
 from minicut.segmentation import build_utterances
 from minicut.semantic_segment import SemanticSegment
 from minicut.semantic_segmentation import (
     build_rule_based_segments,
     mark_segment_candidates,
 )
-from minicut.text_normalization import normalize_transcript_words
+from minicut.text_normalization import normalize_text, normalize_transcript_words
 from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
 
@@ -92,6 +93,7 @@ def generate_highlights(
                     "reason": candidates[plan.candidate_id].reason,
                     "revision": plan.revision,
                     "hook_transition_ms": plan.hook_transition_ms,
+                    "hook_transition_kind": plan.hook_transition_kind,
                     "duration_ms": timeline.estimated_duration_ms,
                     "clips": [
                         {
@@ -99,8 +101,12 @@ def generate_highlights(
                             "segment_id": item.segment_id,
                             "role": item.role.value,
                             "text": by_id[item.segment_id].text,
-                            "start_ms": by_id[item.segment_id].start_ms,
-                            "end_ms": by_id[item.segment_id].end_ms,
+                            "start_ms": item.source_start_ms
+                            if item.source_start_ms is not None
+                            else by_id[item.segment_id].start_ms,
+                            "end_ms": item.source_end_ms
+                            if item.source_end_ms is not None
+                            else by_id[item.segment_id].end_ms,
                         }
                         for item in plan.items
                     ],
@@ -141,19 +147,26 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
                 row = rows[plan.output_id]
                 row["revision"] = plan.revision
                 row["hook_transition_ms"] = plan.hook_transition_ms
+                row["hook_transition_kind"] = plan.hook_transition_kind
                 row["duration_ms"] = compile_output_timeline(
                     plan, segments, collection.asset_id
                 ).estimated_duration_ms
+                transcript = _source_transcript(project, collection.asset_id)
                 row["clips"] = [
                     {
                         "instance_id": item.instance_id,
                         "segment_id": item.segment_id,
                         "role": item.role.value,
-                        "text": item.display_text or by_id[item.segment_id].text,
+                        "text": item.display_text
+                        or _item_text(item, by_id[item.segment_id], transcript),
                         "source_text": by_id[item.segment_id].text,
                         "deleted": item.deleted,
-                        "start_ms": by_id[item.segment_id].start_ms,
-                        "end_ms": by_id[item.segment_id].end_ms,
+                        "start_ms": item.source_start_ms
+                        if item.source_start_ms is not None
+                        else by_id[item.segment_id].start_ms,
+                        "end_ms": item.source_end_ms
+                        if item.source_end_ms is not None
+                        else by_id[item.segment_id].end_ms,
                     }
                     for item in plan.items
                 ]
@@ -188,6 +201,8 @@ def edit_output_item(
     *,
     deleted: bool | None = None,
     display_text: str | None = None,
+    source_start_ms: int | None = None,
+    source_end_ms: int | None = None,
 ) -> dict[str, object]:
     result = read_highlights(project, collection_id)
     segments = source_segments(project, cast(str, result["asset_id"]))
@@ -198,6 +213,18 @@ def edit_output_item(
     )
     if plan is None or not any(item.instance_id == instance_id for item in plan.items):
         raise UserInputError("Output item does not exist")
+    if source_start_ms is not None or source_end_ms is not None:
+        asset = next(
+            a
+            for a in ProjectRepository(project).read().assets
+            if a.asset_id == collection.asset_id
+        )
+        if (
+            source_start_ms is None
+            or source_end_ms is None
+            or not 0 <= source_start_ms < source_end_ms <= asset.duration_ms
+        ):
+            raise UserInputError("起止时间必须位于源素材内，且结束晚于开始")
     updated = replace(
         plan,
         revision=plan.revision + 1,
@@ -205,7 +232,15 @@ def edit_output_item(
             replace(
                 item,
                 deleted=item.deleted if deleted is None else deleted,
-                display_text=item.display_text
+                source_start_ms=item.source_start_ms
+                if source_start_ms is None
+                else source_start_ms,
+                source_end_ms=item.source_end_ms
+                if source_end_ms is None
+                else source_end_ms,
+                display_text=(
+                    None if source_start_ms is not None else item.display_text
+                )
                 if display_text is None
                 else display_text.strip(),
             )
@@ -234,6 +269,7 @@ def reorder_output(
     order: list[str],
     roles: dict[str, str],
     hook_transition_ms: int | None = None,
+    hook_transition_kind: str | None = None,
 ) -> dict[str, object]:
     result = read_highlights(project, collection_id)
     segments = source_segments(project, cast(str, result["asset_id"]))
@@ -290,6 +326,9 @@ def reorder_output(
         plan,
         revision=plan.revision + 1,
         items=tuple(arranged),
+        hook_transition_kind=plan.hook_transition_kind
+        if hook_transition_kind is None
+        else hook_transition_kind,
         hook_transition_ms=plan.hook_transition_ms
         if hook_transition_ms is None
         else hook_transition_ms,
@@ -331,10 +370,12 @@ def output_versions(
     ]
     plans = [plan for plan in plans if plan.revision < current.revision] + [current]
     by_id = {segment.segment_id: segment for segment in segments}
+    transcript = _source_transcript(project, cast(str, result["asset_id"]))
     return [
         {
             "revision": plan.revision,
             "hook_transition_ms": plan.hook_transition_ms,
+            "hook_transition_kind": plan.hook_transition_kind,
             "duration_ms": compile_output_timeline(
                 plan, segments, cast(str, result["asset_id"])
             ).estimated_duration_ms,
@@ -344,12 +385,43 @@ def output_versions(
                     "segment_id": item.segment_id,
                     "role": item.role.value,
                     "deleted": item.deleted,
-                    "text": item.display_text or by_id[item.segment_id].text,
-                    "start_ms": by_id[item.segment_id].start_ms,
-                    "end_ms": by_id[item.segment_id].end_ms,
+                    "text": item.display_text
+                    or _item_text(item, by_id[item.segment_id], transcript),
+                    "start_ms": item.source_start_ms
+                    if item.source_start_ms is not None
+                    else by_id[item.segment_id].start_ms,
+                    "end_ms": item.source_end_ms
+                    if item.source_end_ms is not None
+                    else by_id[item.segment_id].end_ms,
                 }
                 for item in plan.items
             ],
         }
         for plan in sorted(plans, key=lambda plan: plan.revision)
     ]
+
+
+def _source_transcript(project: Path, asset_id: str) -> Transcript:
+    data = json.loads(
+        (project / ".minicut/transcripts" / f"{asset_id}.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return Transcript.from_dict(data["transcript"])
+
+
+def _item_text(
+    item: OutputItem, segment: SemanticSegment, transcript: Transcript
+) -> str:
+    if item.source_start_ms is None or item.source_end_ms is None:
+        return segment.text
+    return (
+        normalize_text(
+            " ".join(
+                w.text
+                for w in transcript.words
+                if w.start_ms < item.source_end_ms and w.end_ms > item.source_start_ms
+            )
+        )
+        or "（此范围无转录文字）"
+    )

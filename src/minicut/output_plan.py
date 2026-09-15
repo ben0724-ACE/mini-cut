@@ -43,8 +43,19 @@ class OutputItem:
     role: OutputRole
     deleted: bool = False
     display_text: str | None = None
+    source_start_ms: int | None = None
+    source_end_ms: int | None = None
 
     def __post_init__(self) -> None:
+        if (self.source_start_ms is None) != (self.source_end_ms is None):
+            raise ValueError("Both source boundaries are required")
+        if self.source_start_ms is not None and self.source_end_ms is not None:
+            if (
+                type(self.source_start_ms) is not int
+                or type(self.source_end_ms) is not int
+                or not 0 <= self.source_start_ms < self.source_end_ms
+            ):
+                raise ValueError("Invalid source boundaries")
         _text(self.instance_id)
         _text(self.segment_id)
         if type(self.role) is not OutputRole:
@@ -80,6 +91,7 @@ class OutputPlan:
     items: tuple[OutputItem, ...]
     revision: int = 1
     hook_transition_ms: int = 300
+    hook_transition_kind: str = "fade"
 
     def __post_init__(self) -> None:
         if (
@@ -87,6 +99,8 @@ class OutputPlan:
             or not 0 <= self.hook_transition_ms <= 1000
         ):
             raise ValueError("hook transition must be an integer between 0 and 1000 ms")
+        if self.hook_transition_kind not in {"fade", "tv_static"}:
+            raise ValueError("unsupported hook transition")
         validate_output_id(self.output_id)
         _text(self.candidate_id)
         _text(self.title)
@@ -130,11 +144,14 @@ class OutputPlan:
                     OutputRole(cast(str, item["role"])),
                     cast(bool, item.get("deleted", False)),
                     cast(str | None, item.get("display_text")),
+                    cast(int | None, item.get("source_start_ms")),
+                    cast(int | None, item.get("source_end_ms")),
                 )
                 for item in items
             ),
             cast(int, data.get("revision", 1)),
             cast(int, data.get("hook_transition_ms", 300)),
+            cast(str, data.get("hook_transition_kind", "fade")),
         )
 
 
@@ -203,3 +220,11 @@ def validate_output_collection(
         allowed = set((*candidate.segment_ids, *candidate.context_segment_ids))
         if not {item.segment_id for item in plan.items} <= allowed:
             raise ValueError("output references a source outside its candidate")
+
+
+def transition_gap_ms(plan: OutputPlan) -> int:
+    if plan.hook_transition_kind == "tv_static" and any(
+        item.role is OutputRole.HOOK and not item.deleted for item in plan.items
+    ):
+        return plan.hook_transition_ms
+    return 0

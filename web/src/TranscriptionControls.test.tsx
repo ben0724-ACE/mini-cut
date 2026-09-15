@@ -23,14 +23,12 @@ it("刷新恢复真实失败任务并显示错误", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("模型不可用");
   expect(screen.getByRole("button", {name: "开始转录"})).toBeEnabled();
 });
-it("恢复运行任务，可暂停查询再恢复并读取完成结果", async () => {
+it("恢复运行任务显示进度并自动读取完成结果", async () => {
   const read = vi.fn().mockResolvedValue({task_id: "old", status: "succeeded", result: {word_count: 47}, error: null});
   const complete = vi.fn();
-  render(<TranscriptionControls project="demo" asset="asset" recover={vi.fn().mockResolvedValue({task_id: "old", status: "running", result: null, error: null})} read={read} onComplete={complete} />);
-  await userEvent.click(await screen.findByRole("button", {name: "停止查询"}));
-  expect(screen.getByRole("status")).toHaveTextContent("已停止查询");
-  expect(read).not.toHaveBeenCalled();
-  await userEvent.click(screen.getByRole("button", {name: "恢复查询"}));
+  render(<TranscriptionControls project="demo" asset="asset" recover={vi.fn().mockResolvedValue({task_id: "old", status: "running", progress:{completed:2,total:8}, result: null, error: null})} read={read} onComplete={complete} />);
+  expect(await screen.findByRole("progressbar", {name:"转录进度"})).toHaveAttribute("value","2");
+  expect(screen.queryByRole("button",{name:"停止查询"})).not.toBeInTheDocument();
   expect(await screen.findByText(/47 个词/, {}, {timeout: 2500})).toBeInTheDocument();
   expect(complete).toHaveBeenCalledOnce();
 });

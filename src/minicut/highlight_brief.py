@@ -1,7 +1,10 @@
 """Resolved preset defaults; explicit user requirements take precedence."""
 
+import json
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
+from pathlib import Path
+from typing import cast
 
 
 class HighlightPreset(StrEnum):
@@ -20,6 +23,7 @@ class HighlightBrief:
     hook_ms: int | None = None
     instructions: str = ""
     max_source_overlap: float = 0.3
+    preset_prompt: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.preset) is not HighlightPreset:
@@ -38,6 +42,10 @@ class HighlightBrief:
             type(self.hook_ms) is not int or self.hook_ms <= 0
         ):
             raise ValueError("hook duration must be positive")
+        if self.preset_prompt is not None and (
+            type(self.preset_prompt) is not str or not self.preset_prompt.strip()
+        ):
+            raise ValueError("preset prompt must be nonempty text")
         if type(self.instructions) is not str:
             raise ValueError("instructions must be text")
         if not 0 <= self.max_source_overlap <= 1:
@@ -56,4 +64,15 @@ class HighlightBrief:
         return replace(value, **overrides)
 
     def to_dict(self) -> dict[str, object]:
-        return asdict(self)
+        data = asdict(self)
+        if self.preset_prompt is None:
+            defaults = cast(
+                dict[str, str],
+                json.loads(
+                    Path(__file__)
+                    .with_name("preset_prompts.json")
+                    .read_text(encoding="utf-8")
+                ),
+            )
+            data["preset_prompt"] = defaults[self.preset.value]
+        return data

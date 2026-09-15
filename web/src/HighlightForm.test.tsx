@@ -21,3 +21,15 @@ it("校验时长并传递自定义要求", async () => {
   expect(screen.getByRole("alert")).toHaveTextContent("时长");
   expect(submit).not.toHaveBeenCalled();
 });
+
+it("预设提示词可编辑，单条作品不受作品间重叠限制", async () => {
+  const submit=vi.fn();
+  render(<HighlightForm ready busy={false} onSubmit={submit} />);
+  await userEvent.clear(screen.getByLabelText("预设提示词"));
+  await userEvent.type(screen.getByLabelText("预设提示词"),"选择完整的幽默故事");
+  await userEvent.clear(screen.getByLabelText("数量"));
+  await userEvent.type(screen.getByLabelText("数量"),"1");
+  expect(screen.getByLabelText("源内容重复上限")).toBeDisabled();
+  await userEvent.click(screen.getByRole("button",{name:"生成候选"}));
+  expect(submit).toHaveBeenCalledWith(expect.objectContaining({preset_prompt:"选择完整的幽默故事",max_source_overlap:1,count:1}));
+});

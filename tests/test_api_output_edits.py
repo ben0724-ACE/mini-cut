@@ -6,6 +6,7 @@ import httpx
 
 from minicut.api import create_app
 from minicut.highlight_service import source_segments
+from minicut.media import MediaAsset, StreamInfo, StreamType
 from minicut.output_plan import (
     HighlightCandidate,
     OutputCollection,
@@ -22,7 +23,23 @@ def test_edit_preserves_source_and_other_output_and_rejects_empty_body(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "demo"
-    ProjectRepository(project).create(ProjectManifest("demo"))
+    ProjectRepository(project).create(
+        ProjectManifest(
+            "demo",
+            (
+                MediaAsset(
+                    "asset",
+                    str(project / "source.mp4"),
+                    5000,
+                    (
+                        StreamInfo(0, StreamType.VIDEO, "h264"),
+                        StreamInfo(1, StreamType.AUDIO, "aac"),
+                    ),
+                    "test",
+                ),
+            ),
+        )
+    )
     transcript = Transcript(
         "t",
         TranscriptSource("asset", "mlx", "large-v3-turbo"),
@@ -118,6 +135,27 @@ def test_edit_preserves_source_and_other_output_and_rejects_empty_body(
             assert versions[-2]["clips"][0]["role"] == "hook"
             assert versions[-2]["hook_transition_ms"] == 150
             assert versions[-1]["hook_transition_ms"] == 150
+            extended = await client.patch(
+                base + "i-0", json={"source_start_ms": 500, "source_end_ms": 4000}
+            )
+            assert extended.status_code == 200
+            updated_clip = extended.json()["outputs"][0]["clips"][0]
+            assert updated_clip["start_ms"] == 500 and updated_clip["end_ms"] == 4000
+            assert "第一句" in updated_clip["text"] and "第二句" in updated_clip["text"]
+            assert (
+                await client.patch(
+                    base + "i-0", json={"source_start_ms": 0, "source_end_ms": 5001}
+                )
+            ).status_code == 400
+            assert (
+                await client.patch(base + "i-0", json={"source_start_ms": 0})
+            ).status_code == 422
+            kinds = await client.put(
+                output + "/order",
+                json={"order": ["i-0", "i-1"], "hook_transition_kind": "tv_static"},
+            )
+            assert kinds.status_code == 200
+            assert kinds.json()["outputs"][0]["hook_transition_kind"] == "tv_static"
 
     asyncio.run(run())
     updated = repository.read(segments)
