@@ -129,6 +129,8 @@ class MultiClipRenderCommandTest(unittest.TestCase):
         )
 
         graph = command[command.index("-filter_complex") + 1]
+        self.assertEqual(command.count("-i"), 2)
+        self.assertEqual(command[5:8], ("-vn", "-i", "file:///media/input.mov"))
         self.assertEqual(
             command[:5],
             ("ffmpeg", "-nostdin", "-y", "-i", "file:///media/input.mov"),
@@ -139,13 +141,13 @@ class MultiClipRenderCommandTest(unittest.TestCase):
             "scale=1920:1080:force_original_aspect_ratio=decrease,"
             "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,"
             "format=yuv420p[v0];"
-            "[0:3]atrim=start=0.100:end=0.500,asetpts=PTS-STARTPTS,"
+            "[1:3]atrim=start=0.100:end=0.500,asetpts=PTS-STARTPTS,"
             "aresample=48000,aformat=channel_layouts=stereo[a0];"
             "[0:2]trim=start=0.800:end=1.300,settb=AVTB,setpts=PTS-STARTPTS+0.400/TB,"
             "scale=1920:1080:force_original_aspect_ratio=decrease,"
             "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,"
             "format=yuv420p[v1];"
-            "[0:3]atrim=start=0.800:end=1.300,asetpts=PTS-STARTPTS,"
+            "[1:3]atrim=start=0.800:end=1.300,asetpts=PTS-STARTPTS,"
             "aresample=48000,aformat=channel_layouts=stereo[a1];"
             "[v0][v1]interleave=nb_inputs=2:duration=longest,fps=30[outv];[a0][a1]concat=n=2:v=0:a=1[outa]",
         )

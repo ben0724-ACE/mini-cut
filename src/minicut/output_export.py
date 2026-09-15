@@ -17,7 +17,7 @@ from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
 
 _DEFAULT_PROFILE = RenderProfile()
-RENDER_ENGINE_VERSION = 3
+RENDER_ENGINE_VERSION = 4
 
 
 def export_output(

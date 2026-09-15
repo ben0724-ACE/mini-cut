@@ -20,6 +20,7 @@ from minicut.output_timeline import (
     inspect_output_context,
     map_output_words,
 )
+from minicut.probe import ProbeResult, probe_media
 from minicut.project import ProjectRepository
 from minicut.render_command import (
     AudioFade,
@@ -70,10 +71,12 @@ class RenderOutputUseCase:
         renderer: TimelineRenderer | None = None,
         command_builder: RenderCommandBuilder | None = None,
         subtitle_font_resolver: Callable[[], SubtitleFont] = resolve_subtitle_font,
+        media_probe: Callable[[Path], ProbeResult] = probe_media,
     ) -> None:
         self._renderer = renderer or FfmpegRenderer()
         self._builder = command_builder or RenderCommandBuilder()
         self._font_resolver = subtitle_font_resolver
+        self._media_probe = media_probe
 
     def execute(self, request: OutputRenderRequest) -> OutputRenderResult:
         if request.timeout_seconds <= 0:
@@ -228,6 +231,17 @@ class RenderOutputUseCase:
                     timeout_seconds=request.timeout_seconds,
                     cancellation=request.cancellation,
                 )
+                rendered_types = {
+                    stream.stream_type
+                    for stream in self._media_probe(staged_video).streams
+                }
+                if StreamType.VIDEO not in rendered_types or (
+                    requirements.require_audio
+                    and StreamType.AUDIO not in rendered_types
+                ):
+                    raise ProcessingError(
+                        "渲染结果缺少必需的画面或音轨，未发布成片。请保留源素材并重试。"
+                    )
                 staged_subtitle.replace(subtitle)
                 staged_video.replace(output)
             repository.write_render_record(

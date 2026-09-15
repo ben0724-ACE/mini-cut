@@ -421,6 +421,23 @@ class RenderCommandBuilder:
             )
             command.extend(("-i", source_url))
 
+        # Keep audio demuxing independent of video demand. With long late cuts,
+        # a shared input can exhaust the audio packet queue before video trim
+        # yields its first frame, and FFmpeg may succeed without any audio.
+        audio_input_indexes = dict(input_indexes)
+        if requirements.require_video and requirements.require_audio:
+            for offset, asset_id in enumerate(referenced_asset_ids):
+                audio_input_indexes[asset_id] = len(input_indexes) + offset
+                command.extend(
+                    (
+                        "-vn",
+                        "-i",
+                        _local_file_url(
+                            assets_by_id[asset_id].source_path, label="audio source"
+                        ),
+                    )
+                )
+
         filters: list[str] = []
         video_inputs: list[str] = []
         audio_inputs: list[str] = []
@@ -449,7 +466,7 @@ class RenderCommandBuilder:
             if requirements.require_audio:
                 stream_index = _first_stream_index(asset, StreamType.AUDIO)
                 audio_filters = [
-                    f"[{input_index}:{stream_index}]atrim=start={start}:end={end},"
+                    f"[{audio_input_indexes[clip.source_asset_id]}:{stream_index}]atrim=start={start}:end={end},"
                     "asetpts=PTS-STARTPTS,"
                     f"aresample={audio_metadata.sample_rate},"
                     f"aformat=channel_layouts={audio_metadata.channel_layout}"

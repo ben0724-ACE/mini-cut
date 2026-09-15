@@ -15,6 +15,7 @@ from minicut.output_plan import (
 )
 from minicut.output_render import OutputRenderRequest, RenderOutputUseCase
 from minicut.output_repository import OutputCollectionRepository
+from minicut.probe import ProbeResult
 from minicut.project import ProjectManifest, ProjectRepository
 from minicut.render_command import VideoOutputMetadata
 from minicut.semantic_segment import SemanticSegment
@@ -90,7 +91,10 @@ class OutputRenderTest(unittest.TestCase):
             repo = OutputCollectionRepository(root, "selected")
             repo.write(collection, segments)
             renderer = FakeRenderer()
-            use_case = RenderOutputUseCase(renderer=renderer)
+            use_case = RenderOutputUseCase(
+                renderer=renderer,
+                media_probe=lambda _: ProbeResult(2400, asset.streams),
+            )
             request = OutputRenderRequest(
                 root, "selected", "video", segments, transcript
             )
@@ -140,6 +144,23 @@ class OutputRenderTest(unittest.TestCase):
                 json.loads(portrait.record_path.read_text())["video_metadata"]["fit"],
                 "crop",
             )
+            missing_audio = RenderOutputUseCase(
+                renderer=renderer,
+                media_probe=lambda _: ProbeResult(
+                    2400,
+                    tuple(
+                        s for s in asset.streams if s.stream_type is StreamType.VIDEO
+                    ),
+                ),
+            )
+            with self.assertRaisesRegex(ProcessingError, "缺少必需"):
+                missing_audio.execute(replace(request, export_id="missing-audio"))
+            self.assertFalse(
+                (
+                    first.output_path.parent / "missing-audio" / first.output_path.name
+                ).exists()
+            )
+            self.assertEqual(first.output_path.read_bytes(), b"complete")
             renderer.fail_subtitle = True
             saved_subtitles = first.subtitle_path.read_text(encoding="utf-8")
             with self.assertRaises(ProcessingError):
