@@ -24,8 +24,11 @@ class HighlightBrief:
     instructions: str = ""
     max_source_overlap: float = 0.3
     preset_prompt: str | None = None
+    body_mode: str = "continuous"
 
     def __post_init__(self) -> None:
+        if self.body_mode not in {"continuous", "compact"}:
+            raise ValueError("unsupported body mode")
         if type(self.preset) is not HighlightPreset:
             raise ValueError("unsupported highlight preset")
         if type(self.count) is not int or self.count < 1:

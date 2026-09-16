@@ -49,11 +49,13 @@ from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError
 from minicut.highlight_brief import HighlightBrief, HighlightPreset
 from minicut.highlight_service import (
+    RevisionConflict,
     edit_output_item,
     generate_highlights,
     output_versions,
     read_highlights,
     reorder_output,
+    save_output_ranges,
 )
 from minicut.importer import import_media
 from minicut.llm_provider import TextModelProviderError
@@ -125,6 +127,7 @@ class PlanTaskBody(BaseModel):
 class HighlightTaskBody(BaseModel):
     asset_id: SafeFileName
     preset: HighlightPreset
+    body_mode: str = Field(default="continuous", pattern=r"^(continuous|compact)$")
     count: int = Field(ge=1, le=10)
     min_ms: int | None = Field(default=None, gt=0)
     max_ms: int | None = Field(default=None, gt=0)
@@ -163,6 +166,17 @@ class OutputItemEditBody(BaseModel):
         ):
             raise ValueError("Provide a subtitle or decision change")
         return self
+
+
+class OutputRangeBody(BaseModel):
+    instance_id: str
+    source_start_ms: int = Field(ge=0, strict=True)
+    source_end_ms: int = Field(gt=0, strict=True)
+
+
+class OutputRangesBody(BaseModel):
+    base_revision: int = Field(ge=1, strict=True)
+    ranges: list[OutputRangeBody] = Field(min_length=1)
 
 
 class OutputOrderBody(BaseModel):
@@ -505,6 +519,7 @@ def create_app(
     export_tokens: dict[tuple[str, str], CancellationToken] = {}
     resource_slot = BoundedSemaphore(1)
     resume_lock = Lock()
+    output_edit_lock = Lock()
 
     def progress(project_id: str, task_id: str, done: int, total: int) -> None:
         path = _job_path(root / project_id, task_id)
@@ -1138,6 +1153,30 @@ def create_app(
         except MiniCutError as error:
             raise HTTPException(400, str(error)) from error
 
+    @api.put(
+        "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/ranges"
+    )
+    def put_output_ranges(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        collection_id: str,
+        output_id: str,
+        body: OutputRangesBody,
+    ) -> dict[str, object]:  # pyright: ignore[reportUnusedFunction]
+        inspect(project_id)
+        try:
+            with output_edit_lock:
+                return save_output_ranges(
+                    root / project_id,
+                    collection_id,
+                    output_id,
+                    body.base_revision,
+                    [row.model_dump() for row in body.ranges],
+                )
+        except RevisionConflict as error:
+            raise HTTPException(409, str(error)) from error
+        except (MiniCutError, ValueError) as error:
+            raise HTTPException(400, str(error)) from error
+
     @api.patch(
         "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/items/{instance_id}"
     )
@@ -1150,16 +1189,17 @@ def create_app(
     ) -> dict[str, object]:
         inspect(project_id)
         try:
-            return edit_output_item(
-                root / project_id,
-                collection_id,
-                output_id,
-                instance_id,
-                deleted=body.deleted,
-                display_text=body.display_text,
-                source_start_ms=body.source_start_ms,
-                source_end_ms=body.source_end_ms,
-            )
+            with output_edit_lock:
+                return edit_output_item(
+                    root / project_id,
+                    collection_id,
+                    output_id,
+                    instance_id,
+                    deleted=body.deleted,
+                    display_text=body.display_text,
+                    source_start_ms=body.source_start_ms,
+                    source_end_ms=body.source_end_ms,
+                )
         except (MiniCutError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
 
@@ -1174,15 +1214,16 @@ def create_app(
     ) -> dict[str, object]:
         inspect(project_id)
         try:
-            return reorder_output(
-                root / project_id,
-                collection_id,
-                output_id,
-                body.order,
-                body.roles,
-                body.hook_transition_ms,
-                body.hook_transition_kind,
-            )
+            with output_edit_lock:
+                return reorder_output(
+                    root / project_id,
+                    collection_id,
+                    output_id,
+                    body.order,
+                    body.roles,
+                    body.hook_transition_ms,
+                    body.hook_transition_kind,
+                )
         except (MiniCutError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
 

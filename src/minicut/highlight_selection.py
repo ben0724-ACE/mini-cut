@@ -16,6 +16,7 @@ from minicut.semantic_segment import (
     SemanticSegment,
     validate_segment_context_dependencies,
 )
+from minicut.sentence_boundaries import complete_range
 
 
 def _union(ranges: tuple[tuple[int, int], ...]) -> tuple[tuple[int, int], ...]:
@@ -77,22 +78,48 @@ def select_highlights(
         body = sorted(
             (by_id[s] for s in selected), key=lambda s: (s.start_ms, s.end_ms)
         )
-        source_ranges = tuple((s.start_ms, s.end_ms) for s in body)
+        continuous = brief.body_mode == "continuous"
+        start, end, boundary_notes = complete_range(body, segments)
+        end = min(end, max(s.end_ms for s in segments))
+        if continuous:
+            body = [s for s in segments if s.start_ms < end and s.end_ms > start]
+            body.sort(key=lambda s: (s.start_ms, s.end_ms))
+            notes.extend(f"{candidate.title}：{note}" for note in boundary_notes)
+        source_ranges = (
+            ((start, end),)
+            if continuous
+            else tuple((s.start_ms, s.end_ms) for s in body)
+        )
         hook = suggestion.hook_segment_ids
         if hook and brief.hook_ms is None:
             raise ValueError("hook was disabled")
+        if hook and (
+            len(hook) != 1
+            or not 3000 <= by_id[hook[0]].end_ms - by_id[hook[0]].start_ms <= 8000
+            or (
+                by_id[hook[0]].segment_id.startswith("sentence-v1-")
+                and ("-s1-" not in hook[0] or not hook[0].endswith("-e1"))
+            )
+        ):
+            notes.append(f"{candidate.title}：未找到 3–8 秒完整短句，省略钩子。")
+            hook = ()
         hook_duration = sum(by_id[s].end_ms - by_id[s].start_ms for s in hook)
-        duration = sum(s.end_ms - s.start_ms for s in body) + hook_duration
+        duration = sum(e - s for s, e in source_ranges) + hook_duration
         if brief.min_ms is not None and duration < brief.min_ms:
             notes.append(
                 f"{candidate.title}：时长不足（{duration} ms），不填充无关内容。"
             )
-            continue
-        if brief.max_ms is not None and duration > brief.max_ms:
+        if brief.max_ms is not None and duration > brief.max_ms + min(
+            brief.max_ms // 5, 15000
+        ):
             notes.append(
                 f"{candidate.title}：时长超限（{duration} ms），保留完整语义，不盲目截断。"
             )
             continue
+        if brief.max_ms is not None and brief.max_ms < duration <= brief.max_ms + min(
+            brief.max_ms // 5, 15000
+        ):
+            notes.append(f"{candidate.title}：为保留完整内容略超目标时长。")
         if any(
             source_overlap(source_ranges, previous) > brief.max_source_overlap
             for previous in ranges
@@ -122,6 +149,16 @@ def select_highlights(
             OutputItem(f"{output_id}-body-{i}", s.segment_id, OutputRole.BODY)
             for i, s in enumerate(body)
         )
+        if continuous:
+            items = tuple(i for i in items if i.role is OutputRole.HOOK) + (
+                OutputItem(
+                    f"{output_id}-body-0",
+                    body[0].segment_id,
+                    OutputRole.BODY,
+                    source_start_ms=start,
+                    source_end_ms=end,
+                ),
+            )
         plans.append(
             OutputPlan(output_id, candidate.candidate_id, candidate.title, items)
         )

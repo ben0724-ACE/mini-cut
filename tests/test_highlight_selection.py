@@ -47,11 +47,8 @@ def test_context_expansion_and_overlong_explanation() -> None:
         proposal(("b", "c")), brief, segments, "asset", "selected"
     )
     assert result.collection is not None
-    assert tuple(i.segment_id for i in result.collection.plans[0].items) == (
-        "a",
-        "b",
-        "c",
-    )
+    assert len(result.collection.plans[0].items) == 1
+    assert result.collection.plans[0].items[0].source_end_ms == 90000
     rejected = select_highlights(
         proposal(("b", "c")),
         replace(brief, max_ms=60000),
@@ -71,10 +68,49 @@ def test_hook_reuse_not_counted_twice_in_diversity_and_whole_quote() -> None:
     p = replace(p, suggestions=(replace(p.suggestions[0], hook_segment_ids=("b",)),))
     result = select_highlights(p, brief, source(), "asset", "selected")
     assert result.collection is not None
-    assert tuple(i.segment_id for i in result.collection.plans[0].items) == (
-        "b",
-        "a",
-        "b",
-    )
-    assert result.durations_ms == (90000,)
+    assert len(result.collection.plans[0].items) == 1
+    assert result.durations_ms == (60000,)
     assert any("钩子" in n for n in result.notes)
+
+
+def test_continuous_body_keeps_omitted_middle_and_pauses() -> None:
+    brief = HighlightBrief.for_preset(
+        HighlightPreset.KNOWLEDGE, min_ms=None, max_ms=None, count=1
+    )
+    segments = source()
+    result = select_highlights(
+        proposal(("a", "c")), brief, segments, "asset", "continuous"
+    )
+    assert result.collection is not None
+    item = result.collection.plans[0].items[0]
+    assert (item.source_start_ms, item.source_end_ms) == (0, 90000)
+    assert "b" in result.collection.candidates[0].context_segment_ids
+    compact = select_highlights(
+        proposal(("a", "c")),
+        replace(brief, body_mode="compact"),
+        segments,
+        "asset",
+        "compact",
+    )
+    assert compact.collection is not None
+    assert [i.segment_id for i in compact.collection.plans[0].items] == ["a", "c"]
+
+
+def test_soft_duration_limit_keeps_complete_short_and_slightly_long_content() -> None:
+    brief = HighlightBrief.for_preset(
+        HighlightPreset.KNOWLEDGE, count=1, min_ms=45000, max_ms=55000
+    )
+    assert (
+        select_highlights(proposal(("a",)), brief, source(), "a", "short").collection
+        is not None
+    )
+    assert (
+        select_highlights(proposal(("a", "b")), brief, source(), "a", "long").collection
+        is not None
+    )
+    assert (
+        select_highlights(
+            proposal(("a", "c")), brief, source(), "a", "too-long"
+        ).collection
+        is None
+    )

@@ -1,3 +1,4 @@
+import { navigateWithDraft } from "./draftNavigation";
 import { useEffect, useState } from "react";
 import {
   ApiError,
@@ -30,11 +31,13 @@ export function App() {
   const collectionId = parameters.get("collection") ?? "";
   const outputId = parameters.get("output") ?? "";
   function navigate(project = "", asset = "") {
+    navigateWithDraft(()=>{
     const query = new URLSearchParams();
     if (project) query.set("project", project);
     if (asset) query.set("asset", asset);
     window.history.pushState({}, "", `${window.location.pathname}${query.size ? `?${query}` : ""}`);
     setSearch(window.location.search);
+    });
   }
   return <div className="app-frame">
     <a className="skip-link" href="#main-content">跳转到主要内容</a>

@@ -263,6 +263,64 @@ class RealOutputRenderTest(unittest.TestCase):
             self.assertEqual(record["timeline"]["clips"][0]["segment_id"], "c")
             self.assertEqual(probe_media(source).duration_ms, probed.duration_ms)
 
+            # Continuous range includes the green middle, even though the model
+            # selected only red and blue source units.
+            continuous = replace(
+                second_plan,
+                revision=2,
+                items=(
+                    OutputItem(
+                        "continuous",
+                        "a",
+                        OutputRole.BODY,
+                        source_start_ms=0,
+                        source_end_ms=2800,
+                    ),
+                ),
+            )
+            OutputCollectionRepository(root, "selected").write(
+                replace(collection, plans=(plan, continuous)), segments
+            )
+            kept = use_case.execute(
+                OutputRenderRequest(
+                    root,
+                    "selected",
+                    "video-2",
+                    segments,
+                    transcript,
+                    video_metadata=VideoOutputMetadata(160, 120, "25"),
+                )
+            )
+            frame = subprocess.check_output(
+                [
+                    "ffmpeg",
+                    "-v",
+                    "error",
+                    "-ss",
+                    "1.5",
+                    "-i",
+                    str(kept.output_path),
+                    "-frames:v",
+                    "1",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-f",
+                    "rawvideo",
+                    "-",
+                ]
+            )
+            pixel = frame[(60 * 160 + 80) * 3 : (60 * 160 + 80) * 3 + 3]
+            self.assertEqual(pixel.index(max(pixel)), 1)
+            self.assertLessEqual(
+                abs(probe_media(kept.output_path).duration_ms - 2800), 40
+            )
+            self.assertTrue(
+                any(
+                    stream.stream_type.value == "audio"
+                    for stream in probe_media(kept.output_path).streams
+                )
+            )
+
             # The effect occupies its own interval; neither source speech nor
             # body subtitles may be overwritten by the inserted static/beep.
             static_plan = replace(

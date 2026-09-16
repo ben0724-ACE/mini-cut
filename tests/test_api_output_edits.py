@@ -156,6 +156,41 @@ def test_edit_preserves_source_and_other_output_and_rejects_empty_body(
             )
             assert kinds.status_code == 200
             assert kinds.json()["outputs"][0]["hook_transition_kind"] == "tv_static"
+            revision = kinds.json()["outputs"][0]["revision"]
+            changes = {
+                "base_revision": revision,
+                "ranges": [
+                    {"instance_id": "i-0", "source_start_ms": 0, "source_end_ms": 2000},
+                    {
+                        "instance_id": "i-1",
+                        "source_start_ms": 2000,
+                        "source_end_ms": 4500,
+                    },
+                ],
+            }
+            saved = await client.put(output + "/ranges", json=changes)
+            assert saved.status_code == 200
+            assert saved.json()["outputs"][0]["revision"] == revision + 1
+            assert saved.json()["outputs"][0]["duration_ms"] == 4500
+            assert (
+                await client.put(output + "/ranges", json=changes)
+            ).status_code == 409
+            before = repository.path.read_bytes()
+            invalid = {
+                "base_revision": revision + 1,
+                "ranges": [
+                    {"instance_id": "i-0", "source_start_ms": 0, "source_end_ms": 1000},
+                    {
+                        "instance_id": "i-1",
+                        "source_start_ms": 2000,
+                        "source_end_ms": 5001,
+                    },
+                ],
+            }
+            assert (
+                await client.put(output + "/ranges", json=invalid)
+            ).status_code == 400
+            assert repository.path.read_bytes() == before
 
     asyncio.run(run())
     updated = repository.read(segments)

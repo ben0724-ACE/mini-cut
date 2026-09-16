@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
+from minicut.boundary_refinement import refine_boundaries
 from minicut.deepseek_provider import DeepSeekProvider
 from minicut.errors import UserInputError
 from minicut.highlight_brief import HighlightBrief
@@ -23,6 +24,7 @@ from minicut.semantic_segmentation import (
     build_rule_based_segments,
     mark_segment_candidates,
 )
+from minicut.sentence_boundaries import sentence_segments
 from minicut.text_normalization import normalize_text, normalize_transcript_words
 from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
@@ -52,12 +54,9 @@ def generate_highlights(
     key = os.environ.get("DEEPSEEK_API_KEY", "")
     if not key:
         raise UserInputError("DeepSeek is not configured on the server")
-    utterances = transcript.utterances or build_utterances(
-        transcript, normalize_transcript_words(transcript)
-    )
-    segments = attach_continuation_context(
-        mark_segment_candidates(build_rule_based_segments(transcript, utterances))
-    )
+    segments = sentence_segments(transcript)
+    repository = OutputCollectionRepository(project, collection_id)
+    repository.write_segments(segments)
     recorded = RecordedProvider(
         DeepSeekProvider(
             key,
@@ -74,7 +73,22 @@ def generate_highlights(
     workflow = asyncio.run(
         plan_highlights(planner, brief, segments, asset_id, collection_id)
     )
-    selection = workflow.selection
+    duration_ms = next(
+        a.duration_ms
+        for a in ProjectRepository(project).read().assets
+        if a.asset_id == asset_id
+    )
+    selection = asyncio.run(
+        refine_boundaries(
+            workflow.selection,
+            brief,
+            transcript,
+            segments,
+            recorded,
+            planner.model,
+            duration_ms,
+        )
+    )
     outputs: list[dict[str, object]] = []
     repository = OutputCollectionRepository(project, collection_id)
     if selection.collection is not None:
@@ -116,12 +130,13 @@ def generate_highlights(
         "collection_id": collection_id,
         "asset_id": asset_id,
         "brief": brief.to_dict(),
+        "source_duration_ms": duration_ms,
         "notes": list(selection.notes),
         "outputs": outputs,
         "model_requests": recorded.receipts,
     }
     repository.write_highlight_result(result)
-    return result
+    return read_highlights(project, collection_id)
 
 
 def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
@@ -135,8 +150,21 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
                 ).read_text(encoding="utf-8")
             ),
         )
+        if "source_duration_ms" not in result:
+            duration = next(
+                (
+                    a.duration_ms
+                    for a in ProjectRepository(project).read().assets
+                    if a.asset_id == result["asset_id"]
+                ),
+                None,
+            )
+            if duration is not None:
+                result["source_duration_ms"] = duration
         if repository.path.is_file():
-            segments = source_segments(project, cast(str, result["asset_id"]))
+            segments = source_segments(
+                project, cast(str, result["asset_id"]), collection_id
+            )
             collection = repository.read(segments)
             by_id = {segment.segment_id: segment for segment in segments}
             rows = {
@@ -175,8 +203,19 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
         raise UserInputError("Highlight result is missing or invalid") from error
 
 
-def source_segments(project: Path, asset: str) -> tuple[SemanticSegment, ...]:
+def source_segments(
+    project: Path, asset: str, collection_id: str | None = None
+) -> tuple[SemanticSegment, ...]:
     try:
+        if collection_id is not None:
+            snapshot = OutputCollectionRepository(
+                project, collection_id
+            ).path.with_suffix(".segments.json")
+            if snapshot.is_file():
+                return tuple(
+                    SemanticSegment.from_dict(row)
+                    for row in json.loads(snapshot.read_text(encoding="utf-8"))
+                )
         cache = json.loads(
             (project / ".minicut/transcripts" / f"{asset}.json").read_text(
                 encoding="utf-8"
@@ -205,7 +244,7 @@ def edit_output_item(
     source_end_ms: int | None = None,
 ) -> dict[str, object]:
     result = read_highlights(project, collection_id)
-    segments = source_segments(project, cast(str, result["asset_id"]))
+    segments = source_segments(project, cast(str, result["asset_id"]), collection_id)
     repository = OutputCollectionRepository(project, collection_id)
     collection = repository.read(segments)
     plan = next(
@@ -272,7 +311,7 @@ def reorder_output(
     hook_transition_kind: str | None = None,
 ) -> dict[str, object]:
     result = read_highlights(project, collection_id)
-    segments = source_segments(project, cast(str, result["asset_id"]))
+    segments = source_segments(project, cast(str, result["asset_id"]), collection_id)
     repository = OutputCollectionRepository(project, collection_id)
     collection = repository.read(segments)
     plan = next(
@@ -350,7 +389,7 @@ def output_versions(
     project: Path, collection_id: str, output_id: str
 ) -> list[dict[str, object]]:
     result = read_highlights(project, collection_id)
-    segments = source_segments(project, cast(str, result["asset_id"]))
+    segments = source_segments(project, cast(str, result["asset_id"]), collection_id)
     repository = OutputCollectionRepository(project, collection_id)
     current = next(
         (
@@ -425,3 +464,69 @@ def _item_text(
         )
         or "（此范围无转录文字）"
     )
+
+
+class RevisionConflict(UserInputError):
+    """The editor must reload before overwriting a newer revision."""
+
+
+def save_output_ranges(
+    project: Path,
+    collection_id: str,
+    output_id: str,
+    base_revision: int,
+    ranges: list[dict[str, object]],
+) -> dict[str, object]:
+    # Serialize with other edits in the API; replace the collection only once.
+    result = read_highlights(project, collection_id)
+    asset_id = cast(str, result["asset_id"])
+    segments = source_segments(project, asset_id, collection_id)
+    repository = OutputCollectionRepository(project, collection_id)
+    collection = repository.read(segments)
+    plan = next((p for p in collection.plans if p.output_id == output_id), None)
+    if plan is None:
+        raise UserInputError("作品不存在")
+    if plan.revision != base_revision:
+        raise RevisionConflict("作品已有新版本，请刷新后重新调整；草稿尚未保存")
+    duration = next(
+        a.duration_ms
+        for a in ProjectRepository(project).read().assets
+        if a.asset_id == asset_id
+    )
+    changes = {cast(str, row["instance_id"]): row for row in ranges}
+    if (
+        not changes
+        or len(changes) != len(ranges)
+        or not changes.keys() <= {i.instance_id for i in plan.items}
+    ):
+        raise UserInputError("片段列表为空、重复或不存在")
+    for row in ranges:
+        start, end = row["source_start_ms"], row["source_end_ms"]
+        if (
+            type(start) is not int
+            or type(end) is not int
+            or not 0 <= start < end <= duration
+        ):
+            raise UserInputError("起止时间必须位于源素材内，且结束晚于开始")
+    items = tuple(
+        replace(
+            item,
+            source_start_ms=cast(int, changes[item.instance_id]["source_start_ms"]),
+            source_end_ms=cast(int, changes[item.instance_id]["source_end_ms"]),
+            display_text=None,
+        )
+        if item.instance_id in changes
+        else item
+        for item in plan.items
+    )
+    updated = replace(plan, revision=plan.revision + 1, items=items)
+    repository.write(
+        replace(
+            collection,
+            plans=tuple(
+                updated if p.output_id == output_id else p for p in collection.plans
+            ),
+        ),
+        segments,
+    )
+    return read_highlights(project, collection_id)

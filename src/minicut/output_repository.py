@@ -23,6 +23,11 @@ class OutputCollectionRepository:
             project_directory / ".minicut/output-collections" / f"{collection_id}.json"
         )
 
+    def write_segments(self, segments: tuple[SemanticSegment, ...]) -> None:
+        self._write_json(
+            self.path.with_suffix(".segments.json"), [s.to_dict() for s in segments]
+        )
+
     def write(
         self, collection: OutputCollection, segments: tuple[SemanticSegment, ...]
     ) -> None:

@@ -46,7 +46,7 @@ def export_output(
         raise UserInputError(
             "Output and transcription are required for export"
         ) from error
-    segments = source_segments(project, asset_id)
+    segments = source_segments(project, asset_id, collection)
     plans = repository.read(segments).plans
     plan = next((plan for plan in plans if plan.output_id == output), None)
     if preview and plan is not None and plan.revision != revision:
@@ -120,7 +120,7 @@ def preview_output(
     repository = OutputCollectionRepository(project, collection)
     try:
         asset_id = json.loads(repository.path.read_text(encoding="utf-8"))["asset_id"]
-        segments = source_segments(project, asset_id)
+        segments = source_segments(project, asset_id, collection)
         plan = next(
             plan for plan in repository.read(segments).plans if plan.output_id == output
         )

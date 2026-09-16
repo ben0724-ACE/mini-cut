@@ -68,7 +68,12 @@ def revision_feedback(
                 "segment_ids": [
                     aliases[s.segment_id] for s in segments if s.segment_id in ids
                 ],
-                "duration_ms": sum(by_id[s].end_ms - by_id[s].start_ms for s in ids)
+                "duration_ms": (
+                    max(by_id[s].end_ms for s in ids)
+                    - min(by_id[s].start_ms for s in ids)
+                    if brief.body_mode == "continuous"
+                    else sum(by_id[s].end_ms - by_id[s].start_ms for s in ids)
+                )
                 + sum(
                     by_id[s].end_ms - by_id[s].start_ms
                     for s in suggestion.hook_segment_ids
@@ -83,7 +88,11 @@ def revision_feedback(
             window_ids: list[str] = []
             duration = 0
             for segment in segments[start:]:
-                duration += segment.end_ms - segment.start_ms
+                duration = (
+                    segment.end_ms - segments[start].start_ms
+                    if brief.body_mode == "continuous"
+                    else duration + segment.end_ms - segment.start_ms
+                )
                 if duration > brief.max_ms:
                     break
                 window_ids.append(segment.segment_id)
