@@ -23,7 +23,7 @@ it("手动向前补范围可保存，字幕区域只出现一次", async () => {
   expect(save).toHaveBeenCalledWith({source_start_ms:1500,source_end_ms:3000});
 });
 
-it("四个方向均可调整，步长和拖动手柄可用",async()=>{
+it("四个方向均可调整，步长可选",async()=>{
   const save=vi.fn().mockResolvedValue(undefined);
   render(<OutputItemEditor clip={{instance_id:"i",segment_id:"s",role:"body",text:"字幕",start_ms:2000,end_ms:6000}} busy={false} onSave={save} onJump={vi.fn()} durationMs={10000} />);
   await userEvent.click(screen.getByText("开始 ＋"));expect(screen.getByLabelText("开始 i")).toHaveValue(2.5);
