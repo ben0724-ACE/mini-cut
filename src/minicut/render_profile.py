@@ -63,16 +63,31 @@ class RenderProfile:
     aspect_ratio: str = "original"
     resolution: int = 1080
     fit: str = "pad"
+    crop_left: float = 0
+    crop_right: float = 0
+    crop_top: float = 0
+    crop_bottom: float = 0
 
     def __post_init__(self) -> None:
+        VideoOutputMetadata(crop_edges=self.crop_edges)
         if self.aspect_ratio not in {"original", "16:9", "9:16", "1:1", "4:5"}:
             raise ValueError("Unsupported aspect ratio")
         if self.resolution not in {720, 1080} or self.fit not in {"pad", "crop"}:
             raise ValueError("Unsupported resolution or fit strategy")
 
+    @property
+    def crop_edges(self) -> tuple[float, float, float, float]:
+        return self.crop_left, self.crop_right, self.crop_top, self.crop_bottom
+
     def metadata(self, width: int, height: int) -> VideoOutputMetadata:
         if width <= 0 or height <= 0:
             raise ValueError("Source dimensions must be positive")
+        width = max(
+            2, int(width * (100 - self.crop_left - self.crop_right) / 100) // 2 * 2
+        )
+        height = max(
+            2, int(height * (100 - self.crop_top - self.crop_bottom) / 100) // 2 * 2
+        )
         short = self.resolution
         if self.aspect_ratio == "original":
             scale = min(1, (short * 16 / 9) / max(width, height))
@@ -80,6 +95,7 @@ class RenderProfile:
                 max(2, int(width * scale) // 2 * 2),
                 max(2, int(height * scale) // 2 * 2),
                 fit=self.fit,
+                crop_edges=self.crop_edges,
             )
         dimensions = {
             "16:9": (short * 16 // 9, short),
@@ -88,4 +104,4 @@ class RenderProfile:
             "4:5": (short, short * 5 // 4),
         }
         w, h = dimensions[self.aspect_ratio]
-        return VideoOutputMetadata(w, h, fit=self.fit)
+        return VideoOutputMetadata(w, h, fit=self.fit, crop_edges=self.crop_edges)

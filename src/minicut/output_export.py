@@ -102,6 +102,7 @@ def export_output(
         "aspect_ratio": profile.aspect_ratio,
         "resolution": profile.resolution,
         "fit": profile.fit,
+        "crop_edges": list(profile.crop_edges),
         "duration_ms": result.timeline.estimated_duration_ms,
         "media_url": base
         + quote(str(result.output_path.relative_to(project / "exports")), safe="/"),

@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 from fractions import Fraction
+from math import isfinite
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -29,6 +30,18 @@ def _local_file_url(path: str, *, label: str) -> str:
     return unquote(Path(path).absolute().as_uri())
 
 
+def _source_crop(metadata: "VideoOutputMetadata") -> str:
+    left, right, top, bottom = metadata.crop_edges
+    if not any(metadata.crop_edges):
+        return ""
+    return (
+        "scale=trunc(iw*sar/2)*2:ih,setsar=1,"
+        f"crop=w='max(2,trunc(iw*{(100 - left - right) / 100:.8f}/2)*2)':"
+        f"h='max(2,trunc(ih*{(100 - top - bottom) / 100:.8f}/2)*2)':"
+        f"x='trunc(iw*{left / 100:.8f}/2)*2':y='trunc(ih*{top / 100:.8f}/2)*2',"
+    )
+
+
 def _first_stream_index(asset: MediaAsset, stream_type: StreamType) -> int:
     return min(
         stream.index for stream in asset.streams if stream.stream_type is stream_type
@@ -43,8 +56,16 @@ class VideoOutputMetadata:
     height: int = 1080
     frame_rate: str = "30"
     fit: str = "pad"
+    crop_edges: tuple[float, float, float, float] = (0, 0, 0, 0)
 
     def __post_init__(self) -> None:
+        left, right, top, bottom = self.crop_edges
+        if (
+            any(not isfinite(v) or v < 0 for v in self.crop_edges)
+            or left + right > 95
+            or top + bottom > 95
+        ):
+            raise ValueError("裁剪范围每个方向至少保留 5% 的画面")
         if self.fit not in {"pad", "crop"}:
             raise ValueError("video fit must be pad or crop")
         if self.width <= 0 or self.height <= 0:
@@ -296,7 +317,8 @@ class RenderCommandBuilder:
             *(
                 (
                     "-vf",
-                    f"scale={video_metadata.width}:{video_metadata.height}:force_original_aspect_ratio={'decrease' if video_metadata.fit == 'pad' else 'increase'},"
+                    _source_crop(video_metadata)
+                    + f"scale={video_metadata.width}:{video_metadata.height}:force_original_aspect_ratio={'decrease' if video_metadata.fit == 'pad' else 'increase'},"
                     + (
                         f"pad={video_metadata.width}:{video_metadata.height}:(ow-iw)/2:(oh-ih)/2,"
                         if video_metadata.fit == "pad"
@@ -453,7 +475,8 @@ class RenderCommandBuilder:
                 filters.append(
                     f"[{input_index}:{stream_index}]trim=start={start}:end={end},"
                     f"settb=AVTB,setpts=PTS-STARTPTS+{_seconds(clip.output_range.start_ms)}/TB,"
-                    f"scale={video_metadata.width}:{video_metadata.height}:"
+                    + _source_crop(video_metadata)
+                    + f"scale={video_metadata.width}:{video_metadata.height}:"
                     + (
                         "force_original_aspect_ratio=decrease,"
                         f"pad={video_metadata.width}:{video_metadata.height}:"

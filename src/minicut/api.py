@@ -212,10 +212,22 @@ class OutputExportBody(BaseModel):
     )
     resolution: int = 1080
     fit: str = Field(default="pad", pattern=r"^(pad|crop)$")
+    crop_left: float = Field(default=0, ge=0, le=95)
+    crop_right: float = Field(default=0, ge=0, le=95)
+    crop_top: float = Field(default=0, ge=0, le=95)
+    crop_bottom: float = Field(default=0, ge=0, le=95)
 
     @model_validator(mode="after")
     def validate_profile(self) -> Self:
-        RenderProfile(self.aspect_ratio, self.resolution, self.fit)
+        RenderProfile(
+            self.aspect_ratio,
+            self.resolution,
+            self.fit,
+            self.crop_left,
+            self.crop_right,
+            self.crop_top,
+            self.crop_bottom,
+        )
         return self
 
 
@@ -793,7 +805,15 @@ def create_app(
                     body.audio_fade_ms,
                     body.denoiser_id,
                     token,
-                    RenderProfile(body.aspect_ratio, body.resolution, body.fit),
+                    RenderProfile(
+                        body.aspect_ratio,
+                        body.resolution,
+                        body.fit,
+                        body.crop_left,
+                        body.crop_right,
+                        body.crop_top,
+                        body.crop_bottom,
+                    ),
                 )
             finally:
                 export_tokens.pop((project_id, idempotency_key), None)

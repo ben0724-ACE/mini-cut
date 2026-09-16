@@ -72,3 +72,36 @@ def test_source_display_dimensions_include_sar_and_rotation(
 
     monkeypatch.setattr(profile_module.subprocess, "run", fake_run)
     assert source_dimensions(Path("source.mov")) == (480, 960)
+
+
+def test_free_crop_changes_original_dimensions_before_fixed_ratio_fit() -> None:
+    profile = RenderProfile(crop_left=10, crop_right=20, crop_top=5, crop_bottom=15)
+    metadata = profile.metadata(1000, 500)
+    assert (metadata.width, metadata.height) == (700, 400)
+    assert metadata.crop_edges == (10, 20, 5, 15)
+    assert RenderProfile("1:1", 720, crop_left=50).metadata(1000, 500).width == 720
+
+
+@pytest.mark.parametrize(
+    "edges", [(60, 40, 0, 0), (0, 0, -1, 0), (0, 0, float("nan"), 0)]
+)
+def test_invalid_crop_rejected(edges: tuple[float, float, float, float]) -> None:
+    from minicut.api import OutputExportBody
+
+    with pytest.raises(ValueError):
+        RenderProfile(
+            crop_left=edges[0],
+            crop_right=edges[1],
+            crop_top=edges[2],
+            crop_bottom=edges[3],
+        )
+    with pytest.raises(ValueError):
+        OutputExportBody(
+            collection_id="c",
+            output_id="o",
+            revision=1,
+            crop_left=edges[0],
+            crop_right=edges[1],
+            crop_top=edges[2],
+            crop_bottom=edges[3],
+        )
