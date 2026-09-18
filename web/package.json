@@ -23,5 +23,6 @@
     "@types/react-dom": "latest",
     "jsdom": "latest",
     "vitest": "latest"
-  }
+  },
+  "license": "MIT"
 }

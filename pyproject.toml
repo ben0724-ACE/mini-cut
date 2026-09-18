@@ -7,6 +7,8 @@ name = "mini-cut"
 version = "0.1.0"
 description = "Local-first AI-assisted rough cutting for spoken videos"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "ben0724-ACE", email = "244254849@qq.com" },
 ]
