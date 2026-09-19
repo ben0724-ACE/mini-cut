@@ -66,3 +66,43 @@ def test_resume_absolute_offsets_and_last_chunk(tmp_path: Path) -> None:
         decoder=lambda source, destination, start, end: None,
     )
     assert len(calls) == 6
+
+
+def test_chunk_merge_preserves_utterance_boundaries_with_new_word_ids(
+    tmp_path: Path,
+) -> None:
+    from minicut.transcript import Utterance
+
+    asset = MediaAsset("a", "/source.wav", 20000, (), "fingerprint")
+    key = TranscriptionCacheKey("fingerprint", "mlx", "test", "zh", None)
+
+    def produce(chunk: MediaAsset) -> Transcript:
+        return Transcript(
+            "t",
+            TranscriptSource("a", "mlx", "test"),
+            "zh",
+            (Word("one", "提问", 2500, 3000), Word("two", "回答", 3200, 3700)),
+            (
+                Utterance("u1", "提问", 2500, 3000, ("one",)),
+                Utterance("u2", "回答", 3200, 3700, ("two",)),
+            ),
+        )
+
+    result = transcribe_chunks(
+        asset,
+        tmp_path,
+        key,
+        produce,
+        chunk_ms=10000,
+        decoder=lambda source, destination, start, end: None,
+    )
+    assert [(u.start_ms, u.end_ms) for u in result.utterances] == [
+        (2500, 3000),
+        (3200, 3700),
+        (10500, 11000),
+        (11200, 11700),
+    ]
+    assert tuple(
+        identity for u in result.utterances for identity in u.word_ids
+    ) == tuple(w.word_id for w in result.words)
+    assert len({u.utterance_id for u in result.utterances}) == 4

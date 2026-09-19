@@ -10,8 +10,10 @@ from minicut.errors import ProcessingError
 from minicut.media import MediaAsset
 from minicut.transcript import (
     Transcript,
+    Utterance,
     Word,
     generate_transcript_id,
+    generate_utterance_id,
     generate_word_id,
 )
 from minicut.transcription_cache import TranscriptCacheRepository, TranscriptionCacheKey
@@ -76,6 +78,7 @@ def transcribe_chunks(
     directory.mkdir(parents=True, exist_ok=True)
     total = (asset.duration_ms + chunk_ms - 1) // chunk_ms
     words: list[Word] = []
+    utterances: list[Utterance] = []
     source = None
     language = key.language
     transcript_id = ""
@@ -105,6 +108,7 @@ def transcribe_chunks(
                 cache.write(key, chunk)
         source = chunk.source
         transcript_id = generate_transcript_id(source, language)
+        retained: dict[str, Word] = {}
         for word in chunk.words:
             first, last = word.start_ms + decode_start, word.end_ms + decode_start
             center = (first + last) / 2
@@ -134,8 +138,39 @@ def transcribe_chunks(
                     ),
                 )
             )
+            retained[word.word_id] = words[-1]
+        for utterance in chunk.utterances:
+            selected = [
+                retained[identity]
+                for identity in utterance.word_ids
+                if identity in retained
+            ]
+            if not selected:
+                continue
+            first = min(w.start_ms for w in selected)
+            last = max(w.end_ms for w in selected)
+            identities = tuple(w.word_id for w in selected)
+            text = " ".join(w.text for w in selected)
+            utterances.append(
+                Utterance(
+                    generate_utterance_id(
+                        transcript_id,
+                        len(utterances),
+                        text=text,
+                        start_ms=first,
+                        end_ms=last,
+                        word_ids=identities,
+                        speaker=utterance.speaker,
+                    ),
+                    text,
+                    first,
+                    last,
+                    identities,
+                    utterance.speaker,
+                )
+            )
         on_progress(index + 1, total)
         token.raise_if_cancelled()
     if source is None or not words:
         raise ProcessingError("No timestamped speech found in audio chunks")
-    return Transcript(transcript_id, source, language, tuple(words))
+    return Transcript(transcript_id, source, language, tuple(words), tuple(utterances))
