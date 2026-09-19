@@ -214,3 +214,5 @@ export const resumeTask=<T,>(project:string,task:string)=>projectRequest<T>(`/ap
 
 export interface RangeChange {instance_id:string;source_start_ms:number;source_end_ms:number}
 export const saveOutputRanges=(project:string,collection:string,output:string,base_revision:number,ranges:RangeChange[])=>projectRequest<HighlightResult>(`/api/projects/${encodeURIComponent(project)}/highlights/${encodeURIComponent(collection)}/outputs/${encodeURIComponent(output)}/ranges`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({base_revision,ranges})});
+
+export const deleteProject = (id: string) => projectRequest<{deleted: boolean}>(`/api/projects/${encodeURIComponent(id)}`, {method: "DELETE"});

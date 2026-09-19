@@ -53,3 +53,19 @@ describe("ProjectHome", () => {
     expect(select).toHaveBeenCalledWith("one");
   });
 });
+
+it("confirms deletion, preserves a failed project and removes it after success", async () => {
+  const user = userEvent.setup();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({detail:"任务运行中"}), {status:409})).mockResolvedValueOnce(new Response(JSON.stringify({deleted:true})));
+  render(<ProjectHome loadProjects={vi.fn().mockResolvedValue([{project_id:"one",name:"测试",asset_count:1}])} createProject={vi.fn()} onSelect={vi.fn()} />);
+  await user.click(await screen.findByRole("button",{name:"删除测试"}));
+  expect(fetcher).not.toHaveBeenCalled();
+  confirm.mockReturnValue(true);
+  await user.click(screen.getByRole("button",{name:"删除测试"}));
+  expect(await screen.findByRole("alert")).toHaveTextContent("任务运行中");
+  expect(screen.getByRole("button",{name:"进入测试"})).toBeInTheDocument();
+  await user.click(screen.getByRole("button",{name:"删除测试"}));
+  expect(await screen.findByText("还没有项目")).toBeInTheDocument();
+  confirm.mockRestore(); fetcher.mockRestore();
+});

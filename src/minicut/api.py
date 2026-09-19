@@ -3,6 +3,7 @@
 import json
 import mimetypes
 import os
+import shutil
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -63,6 +64,7 @@ from minicut.media import classify_media
 from minicut.output_export import RENDER_ENGINE_VERSION, export_output, preview_output
 from minicut.output_repository import OutputCollectionRepository
 from minicut.project import ProjectRepository
+from minicut.project_deletion import ProjectDeletionGuard
 from minicut.render_profile import RenderProfile
 from minicut.transcription_task import CancellationToken, TranscriptionCancelled
 
@@ -512,6 +514,8 @@ def create_app(
     preview_compiler = preview_timeline or PreviewTimelineUseCase()
     api = FastAPI(title="MiniCut local API", version="0.1.0")
 
+    api.add_middleware(ProjectDeletionGuard)
+
     def inspect(project_id: str) -> InspectResult:
         try:
             return inspector.execute(InspectRequest(root / project_id))
@@ -711,6 +715,26 @@ def create_app(
             asset_ids=list(result.asset_ids),
             name=ProjectRepository(root / project_id).read().name,
         )
+
+    @api.delete("/api/projects/{project_id}")
+    def delete_project(project_id: ProjectId) -> dict[str, bool]:  # pyright: ignore[reportUnusedFunction]
+        directory = root / project_id
+        if directory.is_symlink() or directory.resolve().parent != root.resolve():
+            raise HTTPException(status_code=400, detail="不能删除项目根目录外的路径")
+        if not (directory / "manifest.json").is_file():
+            raise HTTPException(status_code=404, detail="项目不存在")
+        for path in (directory / ".minicut/jobs").glob("*.json"):
+            if _read_job(path).get("status") in {"pending", "running"}:
+                raise HTTPException(
+                    status_code=409, detail="项目仍有任务运行，请取消或等待完成后删除"
+                )
+        try:
+            shutil.rmtree(directory)
+        except OSError as error:
+            raise HTTPException(
+                status_code=500, detail="删除未完成，请检查目录权限后重试"
+            ) from error
+        return {"deleted": True}
 
     @api.get("/api/projects/{project_id}/assets")
     def list_assets(project_id: ProjectId) -> list[dict[str, object]]:  # pyright: ignore[reportUnusedFunction]
