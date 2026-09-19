@@ -9,7 +9,7 @@ from urllib.parse import unquote
 
 from minicut.media import MediaAsset, StreamType
 from minicut.output_plan import OutputPlan, OutputRole, transition_gap_ms
-from minicut.output_timeline import validate_output_timeline
+from minicut.output_timeline import coalesce_output_media, validate_output_timeline
 from minicut.semantic_segment import SemanticSegment
 from minicut.subtitle_font import SubtitleFont
 from minicut.timeline import Timeline
@@ -384,6 +384,7 @@ class RenderCommandBuilder:
         validate_output_timeline(
             timeline, plan, segments, source_asset_id, assets, requirements
         )
+        timeline = coalesce_output_media(timeline, plan)
         return self._build_concat_arguments(
             timeline,
             assets,

@@ -108,16 +108,26 @@ class OutputPlan:
             raise ValueError("output plan must contain items")
         _unique(tuple(item.instance_id for item in self.items))
         body_started = False
-        seen_sources: set[tuple[OutputRole, str]] = set()
+        seen_sources: dict[tuple[OutputRole, str], list[OutputItem]] = {}
         for item in self.items:
             if item.role is OutputRole.BODY:
                 body_started = True
             elif body_started:
                 raise ValueError("hook items must precede the body")
             key = (item.role, item.segment_id)
-            if key in seen_sources:
-                raise ValueError("source reuse must be explicit across hook and body")
-            seen_sources.add(key)
+            for previous in seen_sources.get(key, []):
+                if (
+                    item.source_start_ms is None
+                    or item.source_end_ms is None
+                    or previous.source_start_ms is None
+                    or previous.source_end_ms is None
+                    or max(item.source_start_ms, previous.source_start_ms)
+                    < min(item.source_end_ms, previous.source_end_ms)
+                ):
+                    raise ValueError(
+                        "source reuse requires disjoint explicit sentence ranges"
+                    )
+            seen_sources.setdefault(key, []).append(item)
         if not body_started:
             raise ValueError("output plan requires a body")
         if not any(

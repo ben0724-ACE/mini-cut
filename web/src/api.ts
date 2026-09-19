@@ -216,3 +216,5 @@ export interface RangeChange {instance_id:string;source_start_ms:number;source_e
 export const saveOutputRanges=(project:string,collection:string,output:string,base_revision:number,ranges:RangeChange[])=>projectRequest<HighlightResult>(`/api/projects/${encodeURIComponent(project)}/highlights/${encodeURIComponent(collection)}/outputs/${encodeURIComponent(output)}/ranges`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({base_revision,ranges})});
 
 export const deleteProject = (id: string) => projectRequest<{deleted: boolean}>(`/api/projects/${encodeURIComponent(id)}`, {method: "DELETE"});
+
+export const splitOutputSentences = (project:string, collection:string, output:string, revision:number) => projectRequest<HighlightResult>(`/api/projects/${encodeURIComponent(project)}/highlights/${encodeURIComponent(collection)}/outputs/${encodeURIComponent(output)}/split-sentences?base_revision=${revision}`, {method:"POST"});

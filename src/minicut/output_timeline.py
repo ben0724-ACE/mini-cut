@@ -1,6 +1,6 @@
 """Explicit-order compilation with validation bound to the source-ID plan."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from textwrap import wrap
 
 from minicut.media import MediaAsset, TimeRange
@@ -203,15 +203,25 @@ def build_output_cues(
     for clip in timeline.clips:
         item = by_instance[clip.clip_id]
         if item.display_text is not None:
-            cues.append(
-                SubtitleCue(
-                    clip.output_range.start_ms,
-                    clip.output_range.end_ms,
-                    "\n".join(
-                        wrap(item.display_text, width=policy.max_characters_per_line)
-                    ),
+            lines = wrap(item.display_text, width=policy.max_characters_per_line)
+            pages = [
+                "\n".join(lines[n : n + policy.max_lines])
+                for n in range(0, len(lines), policy.max_lines)
+            ]
+            total = sum(len(page) for page in pages)
+            consumed = 0
+            for page in pages:
+                start = (
+                    clip.output_range.start_ms
+                    + clip.output_range.duration_ms * consumed // total
                 )
-            )
+                consumed += len(page)
+                end = (
+                    clip.output_range.start_ms
+                    + clip.output_range.duration_ms * consumed // total
+                )
+                if end > start:
+                    cues.append(SubtitleCue(start, end, page))
         else:
             cues.extend(
                 build_readable_cues(
@@ -221,3 +231,29 @@ def build_output_cues(
                 )
             )
     return tuple(cues)
+
+
+def coalesce_output_media(timeline: Timeline, plan: OutputPlan) -> Timeline:
+    """Sentence editing boundaries must not introduce media cuts or audio fades."""
+    roles = {item.instance_id: item.role for item in plan.items}
+    clips: list[Clip] = []
+    for clip in timeline.clips:
+        if clips and (
+            clips[-1].source_asset_id == clip.source_asset_id
+            and roles[clips[-1].clip_id] is roles[clip.clip_id]
+            and clips[-1].source_range.end_ms == clip.source_range.start_ms
+            and clips[-1].output_range.end_ms == clip.output_range.start_ms
+        ):
+            previous = clips[-1]
+            clips[-1] = replace(
+                previous,
+                source_range=TimeRange(
+                    previous.source_range.start_ms, clip.source_range.end_ms
+                ),
+                output_range=TimeRange(
+                    previous.output_range.start_ms, clip.output_range.end_ms
+                ),
+            )
+        else:
+            clips.append(clip)
+    return Timeline(tuple(clips), timeline.estimated_duration_ms)

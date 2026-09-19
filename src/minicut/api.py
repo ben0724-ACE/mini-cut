@@ -47,7 +47,7 @@ from minicut.application import (
     TranscribeRequest,
 )
 from minicut.edit_plan import EditIntensity
-from minicut.errors import MiniCutError
+from minicut.errors import MiniCutError, UserInputError
 from minicut.highlight_brief import HighlightBrief, HighlightPreset
 from minicut.highlight_service import (
     RevisionConflict,
@@ -1196,6 +1196,28 @@ def create_app(
             return result
         except MiniCutError as error:
             raise HTTPException(400, str(error)) from error
+
+    @api.post(
+        "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/split-sentences"
+    )
+    def split_sentences(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        collection_id: ProjectId,
+        output_id: ProjectId,
+        base_revision: int,
+    ) -> dict[str, object]:
+        from minicut.highlight_service import split_saved_output
+
+        with output_edit_lock:
+            try:
+                return split_saved_output(
+                    root / project_id, collection_id, output_id, base_revision
+                )
+            except UserInputError as error:
+                raise HTTPException(
+                    status_code=409 if "版本冲突" in str(error) else 400,
+                    detail=str(error),
+                ) from error
 
     @api.put(
         "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/ranges"

@@ -16,6 +16,7 @@ from minicut.highlight_workflow import attach_continuation_context, plan_highlig
 from minicut.model_journal import ModelJournal, RecordedProvider
 from minicut.output_plan import OutputItem, OutputRole
 from minicut.output_repository import OutputCollectionRepository
+from minicut.output_sentences import split_output_sentences
 from minicut.output_timeline import compile_output_timeline
 from minicut.project import ProjectRepository
 from minicut.segmentation import build_utterances
@@ -89,6 +90,17 @@ def generate_highlights(
             duration_ms,
         )
     )
+    if selection.collection is not None:
+        selection = replace(
+            selection,
+            collection=replace(
+                selection.collection,
+                plans=tuple(
+                    split_output_sentences(p, segments, transcript)
+                    for p in selection.collection.plans
+                ),
+            ),
+        )
     outputs: list[dict[str, object]] = []
     repository = OutputCollectionRepository(project, collection_id)
     if selection.collection is not None:
@@ -529,4 +541,32 @@ def save_output_ranges(
         ),
         segments,
     )
+    return read_highlights(project, collection_id)
+
+
+def split_saved_output(
+    project: Path, collection_id: str, output_id: str, base_revision: int
+) -> dict[str, object]:
+    result = read_highlights(project, collection_id)
+    asset = cast(str, result["asset_id"])
+    segments = source_segments(project, asset, collection_id)
+    repository = OutputCollectionRepository(project, collection_id)
+    collection = repository.read(segments)
+    plan = next((p for p in collection.plans if p.output_id == output_id), None)
+    if plan is None:
+        raise UserInputError("作品不存在")
+    if plan.revision != base_revision:
+        raise UserInputError("版本冲突，请刷新后重试")
+    updated = split_output_sentences(plan, segments, _source_transcript(project, asset))
+    if updated.items != plan.items:
+        updated = replace(updated, revision=plan.revision + 1)
+        repository.write(
+            replace(
+                collection,
+                plans=tuple(
+                    updated if p.output_id == output_id else p for p in collection.plans
+                ),
+            ),
+            segments,
+        )
     return read_highlights(project, collection_id)
