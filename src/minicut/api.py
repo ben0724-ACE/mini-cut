@@ -147,6 +147,18 @@ class HighlightTaskBody(BaseModel):
         return self
 
 
+class ManualSplitBody(BaseModel):
+    base_revision: int = Field(ge=1)
+    lines: list[str] = Field(min_length=2, max_length=100)
+    apply: bool = False
+
+    @model_validator(mode="after")
+    def validate_size(self) -> Self:
+        if sum(len(line) for line in self.lines) > 12000:
+            raise ValueError("分句文本过长")
+        return self
+
+
 class HighlightSelectionBody(BaseModel):
     output_ids: list[str]
 
@@ -1214,6 +1226,35 @@ def create_app(
                     root / project_id, collection_id, output_id, base_revision
                 )
             except UserInputError as error:
+                raise HTTPException(
+                    status_code=409 if "版本冲突" in str(error) else 400,
+                    detail=str(error),
+                ) from error
+
+    @api.post(
+        "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/items/{instance_id}/split"
+    )
+    def manual_split(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        collection_id: ProjectId,
+        output_id: ProjectId,
+        instance_id: str,
+        body: ManualSplitBody,
+    ) -> dict[str, object]:
+        from minicut.highlight_service import manual_split_output
+
+        with output_edit_lock:
+            try:
+                return manual_split_output(
+                    root / project_id,
+                    collection_id,
+                    output_id,
+                    instance_id,
+                    body.base_revision,
+                    body.lines,
+                    body.apply,
+                )
+            except (UserInputError, ValueError) as error:
                 raise HTTPException(
                     status_code=409 if "版本冲突" in str(error) else 400,
                     detail=str(error),

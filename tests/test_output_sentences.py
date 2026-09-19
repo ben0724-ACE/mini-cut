@@ -1,6 +1,8 @@
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from minicut.output_plan import OutputItem, OutputPlan, OutputRole
 from minicut.output_sentences import split_output_sentences
 from minicut.output_timeline import (
@@ -86,8 +88,10 @@ def test_corrected_long_caption_is_paginated_instead_of_filling_screen() -> None
     assert cues[0].start_ms == 0 and cues[-1].end_ms == 10000
 
 
+@pytest.mark.parametrize("manual", [False, True])
 def test_split_existing_output_creates_one_revision_and_rejects_stale_save(
     tmp_path: Path,
+    manual: bool,
 ) -> None:
     import asyncio
     import json
@@ -154,14 +158,27 @@ def test_split_existing_output_creates_one_revision_and_rejects_stale_save(
             base_url="http://test",
         ) as client:
             url = "/api/projects/demo/highlights/collection/outputs/video/split-sentences?base_revision=1"
-            response = await client.post(url)
+            body: dict[str, object] = {}
+            if manual:
+                url = "/api/projects/demo/highlights/collection/outputs/video/items/i/split"
+                body = {
+                    "base_revision": 1,
+                    "lines": ["一句。", "二句。"],
+                    "apply": False,
+                }
+                preview = await client.post(url, json=body)
+                assert preview.status_code == 200
+                assert preview.json()["ranges"][0]["end_ms"] == 2000
+                assert repo.read(segments).plans[0].revision == 1
+                body["apply"] = True
+            response = await client.post(url, json=body)
             assert response.status_code == 200
             output = response.json()["outputs"][0]
             assert output["revision"] == 2
             assert len(output["clips"]) == 2
             assert output["duration_ms"] == 4000
             assert output["clips"][0]["text"] == "一句。"
-            assert (await client.post(url)).status_code == 409
+            assert (await client.post(url, json=body)).status_code == 409
             assert not (project / "exports").exists()
 
     asyncio.run(run())

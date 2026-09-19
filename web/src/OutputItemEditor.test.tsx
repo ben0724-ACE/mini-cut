@@ -32,3 +32,21 @@ it("四个方向均可调整，步长可选",async()=>{
   await userEvent.click(screen.getByText("开始 −"));await userEvent.click(screen.getByText("结束 ＋"));
   expect(screen.getByLabelText("开始 i")).toHaveValue(1.5);expect(screen.getByLabelText("结束 i")).toHaveValue(6.5);
 });
+
+it("手动换行预览时间，失败保留文本，确认后才保存分句",async()=>{
+  const preview=vi.fn().mockRejectedValueOnce(new Error("文字与原转录不一致")).mockResolvedValue([{text:"多少？",start_ms:0,end_ms:1000},{text:"我觉得努力比较多。",start_ms:1000,end_ms:3000}]);
+  const apply=vi.fn().mockRejectedValue(new Error("版本冲突"));
+  render(<OutputItemEditor clip={{instance_id:"i",segment_id:"s",role:"body",text:"多少我觉得努力比较多",transcript_text:"多少我觉得努力比较多",start_ms:0,end_ms:3000}} busy={false} onSave={vi.fn()} onJump={vi.fn()} onSplitPreview={preview} onSplitApply={apply} />);
+  await userEvent.clear(screen.getByLabelText("字幕 i"));
+  await userEvent.type(screen.getByLabelText("字幕 i"),"多少？{Enter}我觉得努力比较多。");
+  await userEvent.click(screen.getByRole("button",{name:"预览分句时间"}));
+  expect(await screen.findByRole("alert")).toHaveTextContent("文字与原转录不一致");
+  expect(screen.getByLabelText("字幕 i")).toHaveValue("多少？\n我觉得努力比较多。");
+  await userEvent.click(screen.getByRole("button",{name:"预览分句时间"}));
+  expect(await screen.findByText("0.00–1.00 秒")).toBeInTheDocument();
+  expect(apply).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button",{name:"确认分句"}));
+  expect(apply).toHaveBeenCalledWith(["多少？","我觉得努力比较多。"]);
+  expect(await screen.findByRole("alert")).toHaveTextContent("版本冲突");
+  expect(screen.getByRole("button",{name:"确认分句"})).toBeInTheDocument();
+});

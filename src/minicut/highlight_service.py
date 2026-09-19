@@ -200,6 +200,9 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
                         "text": item.display_text
                         or _item_text(item, by_id[item.segment_id], transcript),
                         "source_text": by_id[item.segment_id].text,
+                        "transcript_text": _item_text(
+                            item, by_id[item.segment_id], transcript
+                        ),
                         "deleted": item.deleted,
                         "start_ms": item.source_start_ms
                         if item.source_start_ms is not None
@@ -569,4 +572,64 @@ def split_saved_output(
             ),
             segments,
         )
+    return read_highlights(project, collection_id)
+
+
+def manual_split_output(
+    project: Path,
+    collection_id: str,
+    output_id: str,
+    instance_id: str,
+    base_revision: int,
+    lines: list[str],
+    apply: bool,
+) -> dict[str, object]:
+    from minicut.manual_split import split_item_by_lines
+
+    result = read_highlights(project, collection_id)
+    asset = cast(str, result["asset_id"])
+    segments = source_segments(project, asset, collection_id)
+    repository = OutputCollectionRepository(project, collection_id)
+    collection = repository.read(segments)
+    plan = next((p for p in collection.plans if p.output_id == output_id), None)
+    if plan is None:
+        raise UserInputError("作品不存在")
+    if plan.revision != base_revision:
+        raise UserInputError("版本冲突，请刷新后重试")
+    item = next((i for i in plan.items if i.instance_id == instance_id), None)
+    if item is None:
+        raise UserInputError("片段不存在")
+    segment = next(s for s in segments if s.segment_id == item.segment_id)
+    parts = split_item_by_lines(
+        item, segment, _source_transcript(project, asset), lines, plan.revision + 1
+    )
+    if not apply:
+        return {
+            "ranges": [
+                {
+                    "text": part.display_text,
+                    "start_ms": part.source_start_ms,
+                    "end_ms": part.source_end_ms,
+                }
+                for part in parts
+            ]
+        }
+    updated = replace(
+        plan,
+        revision=plan.revision + 1,
+        items=tuple(
+            part
+            for old in plan.items
+            for part in (parts if old.instance_id == instance_id else (old,))
+        ),
+    )
+    repository.write(
+        replace(
+            collection,
+            plans=tuple(
+                updated if p.output_id == output_id else p for p in collection.plans
+            ),
+        ),
+        segments,
+    )
     return read_highlights(project, collection_id)
