@@ -62,7 +62,7 @@ def test_context_expansion_and_overlong_explanation() -> None:
 
 def test_hook_reuse_not_counted_twice_in_diversity_and_whole_quote() -> None:
     brief = HighlightBrief.for_preset(
-        HighlightPreset.OPINION, min_ms=30000, max_ms=90000
+        HighlightPreset.OPINION, min_ms=30000, max_ms=90000, hook_ms=5000
     )
     p = proposal(("a", "b"))
     p = replace(p, suggestions=(replace(p.suggestions[0], hook_segment_ids=("b",)),))

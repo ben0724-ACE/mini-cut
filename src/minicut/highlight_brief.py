@@ -61,7 +61,7 @@ class HighlightBrief:
         if preset is HighlightPreset.CLEAN_SPEECH:
             value = cls(preset, 1, None, None)
         elif preset is HighlightPreset.OPINION:
-            value = cls(preset, 3, 30000, 60000, 5000)
+            value = cls(preset, 3, 30000, 60000)
         else:
             value = cls(preset, 3, 60000, 90000)
         return replace(value, **overrides)

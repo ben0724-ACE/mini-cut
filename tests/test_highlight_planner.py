@@ -177,3 +177,26 @@ def test_invalid_notes_are_still_rejected(notes: object) -> None:
                 HighlightBrief.for_preset(HighlightPreset.PODCAST), source()
             )
         )
+
+
+@pytest.mark.parametrize(
+    "preset", [HighlightPreset.CLEAN_SPEECH, HighlightPreset.OPINION]
+)
+@pytest.mark.parametrize("mode", ["continuous", "compact"])
+@pytest.mark.parametrize("hook", [None, 5000])
+def test_structural_controls_override_conflicting_preset_text(
+    preset: HighlightPreset, mode: str, hook: int | None
+) -> None:
+    import asyncio
+
+    provider = FakeProvider({"candidates": [], "notes": []})
+    brief = HighlightBrief.for_preset(
+        preset, body_mode=mode, hook_ms=hook, preset_prompt="删除重复并把结论放开头"
+    )
+    asyncio.run(HighlightPlanner(provider).plan(brief, source()))
+    payload = json.loads(provider.requests[0].user_prompt)
+    requirements = payload["final_requirements"]
+    assert ("不得跳切" in requirements["body_mode"]) == (mode == "continuous")
+    assert ("必须为 []" in requirements["hook"]) == (hook is None)
+    assert payload["brief"]["body_mode"] == mode
+    assert payload["brief"]["hook_ms"] == hook

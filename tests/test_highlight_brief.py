@@ -20,7 +20,7 @@ def test_defaults_and_explicit_overrides() -> None:
             None,
         )
     opinion = HighlightBrief.for_preset(HighlightPreset.OPINION)
-    assert (opinion.min_ms, opinion.max_ms, opinion.hook_ms) == (30000, 60000, 5000)
+    assert (opinion.min_ms, opinion.max_ms, opinion.hook_ms) == (30000, 60000, None)
     custom = HighlightBrief.for_preset(
         HighlightPreset.PODCAST, count=2, instructions="只选技术解释"
     )

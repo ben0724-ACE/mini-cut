@@ -33,3 +33,15 @@ it("预设提示词可编辑，单条作品不受作品间重叠限制", async (
   await userEvent.click(screen.getByRole("button",{name:"生成候选"}));
   expect(submit).toHaveBeenCalledWith(expect.objectContaining({preset_prompt:"选择完整的幽默故事",max_source_overlap:1,count:1}));
 });
+
+it("清理预设说明连续模式限制，观点预设不自动开启钩子", async () => {
+  const submit=vi.fn();
+  render(<HighlightForm ready busy={false} onSubmit={submit} />);
+  await userEvent.selectOptions(screen.getByLabelText("预设"), "clean_speech");
+  expect(screen.getByText(/当前为连续正文/)).toBeInTheDocument();
+  await userEvent.selectOptions(screen.getByLabelText("正文模式"), "compact");
+  expect(screen.getByText(/当前为精简拼接/)).toBeInTheDocument();
+  await userEvent.selectOptions(screen.getByLabelText("预设"), "opinion_first");
+  await userEvent.click(screen.getByRole("button", {name:"生成候选"}));
+  expect(submit).toHaveBeenCalledWith(expect.objectContaining({body_mode:"compact",hook_ms:null}));
+});
