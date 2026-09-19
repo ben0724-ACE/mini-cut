@@ -42,9 +42,9 @@ class HighlightBrief:
             ):
                 raise ValueError("invalid duration range")
         if self.hook_ms is not None and (
-            type(self.hook_ms) is not int or self.hook_ms <= 0
+            type(self.hook_ms) is not int or not 1000 <= self.hook_ms <= 60000
         ):
-            raise ValueError("hook duration must be positive")
+            raise ValueError("hook duration must be between 1000 and 60000 ms")
         if self.preset_prompt is not None and (
             type(self.preset_prompt) is not str or not self.preset_prompt.strip()
         ):
@@ -53,6 +53,13 @@ class HighlightBrief:
             raise ValueError("instructions must be text")
         if not 0 <= self.max_source_overlap <= 1:
             raise ValueError("source overlap must be between zero and one")
+
+    @property
+    def hook_bounds_ms(self) -> tuple[int, int]:
+        target = self.hook_ms or 5000
+        return max(500, target - min(3000, target * 2 // 5)), target + min(
+            3000, target * 3 // 5
+        )
 
     @classmethod
     def for_preset(

@@ -93,17 +93,36 @@ def select_highlights(
         hook = suggestion.hook_segment_ids
         if hook and brief.hook_ms is None:
             raise ValueError("hook was disabled")
-        if hook and (
-            len(hook) != 1
-            or not 3000 <= by_id[hook[0]].end_ms - by_id[hook[0]].start_ms <= 8000
-            or (
-                by_id[hook[0]].segment_id.startswith("sentence-v1-")
-                and ("-s1-" not in hook[0] or not hook[0].endswith("-e1"))
-            )
-        ):
-            notes.append(f"{candidate.title}：未找到 3–8 秒完整短句，省略钩子。")
-            hook = ()
-        hook_duration = sum(by_id[s].end_ms - by_id[s].start_ms for s in hook)
+        hook_duration = 0
+        if hook:
+            ordered = sorted((by_id[s] for s in hook), key=lambda s: s.start_ms)
+            first, last = ordered[0], ordered[-1]
+            hook_duration = last.end_ms - first.start_ms
+            between = {
+                s.segment_id
+                for s in segments
+                if first.start_ms <= s.start_ms <= last.start_ms
+            }
+            low, high = brief.hook_bounds_ms
+            if (
+                not low <= hook_duration <= high
+                or set(hook) != between
+                or (
+                    first.segment_id.startswith("sentence-v1-")
+                    and "-s1-" not in first.segment_id
+                )
+                or (
+                    last.segment_id.startswith("sentence-v1-")
+                    and not last.segment_id.endswith("-e1")
+                )
+            ):
+                notes.append(
+                    f"{candidate.title}：未找到目标 {brief.hook_ms} ms 附近的完整原话（允许 {low}–{high} ms），省略钩子。"
+                )
+                hook = ()
+                hook_duration = 0
+            else:
+                hook = tuple(s.segment_id for s in ordered)
         duration = sum(e - s for s, e in source_ranges) + hook_duration
         if brief.min_ms is not None and duration < brief.min_ms:
             notes.append(
@@ -133,7 +152,7 @@ def select_highlights(
                 notes.append(f"{candidate.title}：未找到独立原话钩子，保留正文。")
             elif abs(hook_duration - brief.hook_ms) > 2000:
                 notes.append(
-                    f"{candidate.title}：钩子 {hook_duration} ms，完整原话优先，不强切至五秒。"
+                    f"{candidate.title}：钩子 {hook_duration} ms，完整原话优先，不强切至目标 {brief.hook_ms} ms。"
                 )
             if any(by_id[s].context_dependencies for s in hook):
                 notes.append(f"{candidate.title}：钩子含上下文依赖，请审阅限定条件。")
@@ -142,10 +161,20 @@ def select_highlights(
         )
         candidates.append(replace(candidate, context_segment_ids=extra))
         output_id = f"video-{len(plans) + 1}"
-        items = tuple(
-            OutputItem(f"{output_id}-hook-{i}", s, OutputRole.HOOK)
-            for i, s in enumerate(hook)
-        ) + tuple(
+        hook_items = (
+            (
+                OutputItem(
+                    f"{output_id}-hook-0",
+                    hook[0],
+                    OutputRole.HOOK,
+                    source_start_ms=by_id[hook[0]].start_ms,
+                    source_end_ms=by_id[hook[-1]].end_ms,
+                ),
+            )
+            if hook
+            else ()
+        )
+        items = hook_items + tuple(
             OutputItem(f"{output_id}-body-{i}", s.segment_id, OutputRole.BODY)
             for i, s in enumerate(body)
         )

@@ -4,7 +4,11 @@ from minicut.highlight_brief import HighlightBrief, HighlightPreset
 from minicut.highlight_planner import HighlightProposal, HighlightSuggestion
 from minicut.highlight_selection import select_highlights, source_overlap
 from minicut.output_plan import HighlightCandidate
-from minicut.semantic_segment import ContextDirection, SegmentContextDependency
+from minicut.semantic_segment import (
+    ContextDirection,
+    SegmentContextDependency,
+    SemanticSegment,
+)
 from tests.test_highlight_planner import source
 
 
@@ -114,3 +118,38 @@ def test_soft_duration_limit_keeps_complete_short_and_slightly_long_content() ->
         ).collection
         is None
     )
+
+
+def test_custom_hook_spans_adjacent_sentences_in_both_modes() -> None:
+    for mode in ("continuous", "compact"):
+        segments = tuple(
+            SemanticSegment(
+                str(i), "完整句。", i * 5000, (i + 1) * 5000, (str(i),), (str(i),)
+            )
+            for i in range(4)
+        )
+        brief = HighlightBrief.for_preset(
+            HighlightPreset.PODCAST,
+            count=1,
+            min_ms=10000,
+            max_ms=60000,
+            hook_ms=10000,
+            body_mode=mode,
+        )
+        p = proposal(("0", "1", "2", "3"))
+        p = replace(
+            p, suggestions=(replace(p.suggestions[0], hook_segment_ids=("1", "2")),)
+        )
+        result = select_highlights(p, brief, segments, "asset", "selected")
+        assert result.collection is not None
+        hook = result.collection.plans[0].items[0]
+        assert hook.role.value == "hook"
+        assert (hook.source_start_ms, hook.source_end_ms) == (5000, 15000)
+        assert result.durations_ms == (30000,)
+        # A discontinuous teaser may not silently omit the middle sentence.
+        p = replace(
+            p, suggestions=(replace(p.suggestions[0], hook_segment_ids=("0", "2")),)
+        )
+        rejected = select_highlights(p, brief, segments, "asset", "selected")
+        assert rejected.collection is not None
+        assert all(i.role.value == "body" for i in rejected.collection.plans[0].items)

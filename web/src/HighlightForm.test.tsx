@@ -45,3 +45,17 @@ it("清理预设说明连续模式限制，观点预设不自动开启钩子", a
   await userEvent.click(screen.getByRole("button", {name:"生成候选"}));
   expect(submit).toHaveBeenCalledWith(expect.objectContaining({body_mode:"compact",hook_ms:null}));
 });
+
+it("自定义钩子时长发送毫秒，关闭后不发送时长", async () => {
+  const submit=vi.fn();
+  render(<HighlightForm ready busy={false} onSubmit={submit} />);
+  await userEvent.click(screen.getByLabelText("原话开场钩子"));
+  expect(screen.getByLabelText("钩子目标秒数")).toHaveValue(5);
+  await userEvent.clear(screen.getByLabelText("钩子目标秒数"));
+  await userEvent.type(screen.getByLabelText("钩子目标秒数"), "12.5");
+  await userEvent.click(screen.getByRole("button", {name:"生成候选"}));
+  expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({hook_ms:12500}));
+  await userEvent.click(screen.getByLabelText("原话开场钩子"));
+  await userEvent.click(screen.getByRole("button", {name:"生成候选"}));
+  expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({hook_ms:null}));
+});

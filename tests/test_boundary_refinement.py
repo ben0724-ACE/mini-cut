@@ -79,3 +79,47 @@ def test_semantic_word_ids_refine_unpunctuated_body_without_holes() -> None:
         )
     )
     assert tight.collection is None
+
+
+def test_custom_ten_second_hook_survives_word_boundary_review() -> None:
+    import json
+
+    transcript = Transcript(
+        "t",
+        TranscriptSource("a", "test", "test"),
+        "zh",
+        tuple(Word(f"w{i}", "内容", i * 1000, i * 1000 + 900) for i in range(60)),
+    )
+    segments = sentence_segments(transcript)
+    brief = HighlightBrief.for_preset(
+        HighlightPreset.PODCAST, count=1, min_ms=10000, max_ms=60000, hook_ms=10000
+    )
+    initial = select_highlights(
+        proposal((segments[1].segment_id, segments[2].segment_id)),
+        brief,
+        segments,
+        "a",
+        "c",
+    )
+    provider = FakeProvider(
+        {
+            "ranges": [
+                {
+                    "output_id": "video-1",
+                    "start_id": "12",
+                    "end_id": "43",
+                    "hook_start_id": "20",
+                    "hook_end_id": "29",
+                }
+            ]
+        }
+    )
+    result = asyncio.run(
+        refine_boundaries(initial, brief, transcript, segments, provider, "fake", 60000)
+    )
+    assert result.collection is not None
+    hook = result.collection.plans[0].items[0]
+    assert (hook.source_start_ms, hook.source_end_ms) == (20000, 29900)
+    payload = json.loads(provider.requests[0].user_prompt)
+    assert payload["hook_target_ms"] == 10000
+    assert payload["hook_bounds_ms"] == [7000, 13000]

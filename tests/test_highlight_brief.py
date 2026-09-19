@@ -51,3 +51,15 @@ def test_editable_preset_prompt_is_sent_to_model_payload() -> None:
         HighlightPreset.PODCAST, preset_prompt="只选完整的幽默故事"
     )
     assert custom.to_dict()["preset_prompt"] == "只选完整的幽默故事"
+
+
+@pytest.mark.parametrize("duration", [999, 60001, True])
+def test_custom_hook_limits_match_api(duration: int) -> None:
+    from minicut.api import HighlightTaskBody
+
+    with pytest.raises(ValueError):
+        HighlightBrief.for_preset(HighlightPreset.PODCAST, hook_ms=duration)
+    with pytest.raises(ValueError):
+        HighlightTaskBody(
+            asset_id="a", preset=HighlightPreset.PODCAST, count=1, hook_ms=duration
+        )

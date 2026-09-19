@@ -133,7 +133,7 @@ class HighlightTaskBody(BaseModel):
     count: int = Field(ge=1, le=10)
     min_ms: int | None = Field(default=None, gt=0)
     max_ms: int | None = Field(default=None, gt=0)
-    hook_ms: int | None = Field(default=None, gt=0)
+    hook_ms: int | None = Field(default=None, ge=1000, le=60000)
     instructions: str = Field(default="", max_length=12000)
     preset_prompt: str | None = Field(default=None, min_length=1, max_length=12000)
     max_source_overlap: float = Field(default=0.3, ge=0, le=1)
