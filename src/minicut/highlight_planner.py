@@ -172,10 +172,14 @@ class HighlightPlanner:
                     "模型在一次格式修复后仍未返回合法 JSON，请调整要求后重新生成。"
                 ) from error
         if not isinstance(data, dict):
-            raise ValueError("invalid highlight response")
+            raise ValueError(
+                "模型返回格式不正确：需要包含 candidates 和 notes 的 JSON 对象"
+            )
         root = cast(dict[str, object], data)
-        if set(root) != {"candidates", "notes"}:
-            raise ValueError("invalid highlight response")
+        if not {"candidates", "notes"} <= root.keys():
+            raise ValueError(
+                "模型返回格式不正确：需要包含 candidates 和 notes 的 JSON 对象"
+            )
         rows, notes = root["candidates"], root["notes"]
         # Notes are descriptive metadata; preserve a single text response verbatim.
         # Candidate structure and source references remain strictly validated.

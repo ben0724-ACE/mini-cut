@@ -200,3 +200,27 @@ def test_structural_controls_override_conflicting_preset_text(
     assert ("必须为 []" in requirements["hook"]) == (hook is None)
     assert payload["brief"]["body_mode"] == mode
     assert payload["brief"]["hook_ms"] == hook
+
+
+def test_extra_root_metadata_does_not_discard_valid_candidates() -> None:
+    import asyncio
+
+    brief = HighlightBrief.for_preset(HighlightPreset.PODCAST)
+    provider = FakeProvider(
+        {"candidates": [candidate(["a"])], "notes": [], "type": "highlights"}
+    )
+    result = asyncio.run(HighlightPlanner(provider).plan(brief, source()))
+    assert len(result.suggestions) == 1
+    assert len(provider.requests) == 1
+    with pytest.raises(ValueError, match="unknown"):
+        asyncio.run(
+            HighlightPlanner(
+                FakeProvider(
+                    {
+                        "candidates": [candidate(["invented"])],
+                        "notes": [],
+                        "type": "highlights",
+                    }
+                )
+            ).plan(brief, source())
+        )
