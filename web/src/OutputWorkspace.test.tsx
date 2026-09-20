@@ -21,6 +21,7 @@ it("范围草稿撤销与批量保存不调用渲染，显式生成才启动",as
   render(<OutputWorkspace project="p" collection="c" output="o" />);
   await screen.findByLabelText("快速预览 · 草稿");
   const {fireEvent}=await import("@testing-library/react");
+  fireEvent.click(screen.getByLabelText("编辑字幕 i"));
   fireEvent.click(screen.getByText("开始 ＋"));expect(screen.getByLabelText("开始 i")).toHaveValue(2.5);
   fireEvent.click(screen.getByText("撤销"));expect(screen.getByLabelText("开始 i")).toHaveValue(2);
   fireEvent.click(screen.getByText("重做"));expect(screen.getByLabelText("开始 i")).toHaveValue(2.5);

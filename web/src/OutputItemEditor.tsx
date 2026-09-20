@@ -6,6 +6,7 @@ export function OutputItemEditor({clip, busy, onSave, onJump, actions, range, on
   const [splitPreview,setSplitPreview]=useState<{lines:string[];ranges:SplitRange[]}|null>(null);
   const [splitting,setSplitting]=useState(false);
   const [draft, setDraft] = useState(clip.text);
+  const [savedText, setSavedText] = useState(clip.text);
   const [localStart, setStart] = useState(clip.start_ms / 1000);
   const [localEnd, setEnd] = useState(clip.end_ms / 1000);
   const start=range?range.start/1000:localStart;const end=range?range.end/1000:localEnd;
@@ -16,12 +17,18 @@ export function OutputItemEditor({clip, busy, onSave, onJump, actions, range, on
   const [message, setMessage] = useState("");
   async function save(changes: Changes) {
     setError(""); setMessage("");
-    try {await onSave(changes); setMessage(changes.display_text !== undefined ? "字幕已保存" : changes.source_start_ms !== undefined ? "范围已保存，字幕已按新范围更新" : "片段状态已保存（未保存字幕草稿）");}
+    try {await onSave(changes); if(changes.display_text !== undefined)setSavedText(changes.display_text); setMessage(changes.display_text !== undefined ? "字幕已保存" : changes.source_start_ms !== undefined ? "范围已保存，字幕已按新范围更新" : "片段状态已保存（未保存字幕草稿）");}
     catch (reason: unknown) {setError(reason instanceof Error ? reason.message : "保存失败");}
   }
   const valid = Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end > start && end <= limit;
-  return <li className={clip.deleted ? "segment segment--delete" : "segment"}>
-    <p>{clip.role === "hook" ? "开场预告" : "正文"} · {clip.deleted ? "已删除" : `${(end-start).toFixed(2)} 秒`}</p>
+  const unsaved=draft!==savedText||Math.round(start*1000)!==clip.start_ms||Math.round(end*1000)!==clip.end_ms;
+  return <li className={clip.deleted ? "segment segment--delete subtitle-card" : "segment subtitle-card"}>
+    <details className="subtitle-disclosure">
+      <summary aria-label={`编辑字幕 ${clip.instance_id}`}>
+        <span className="subtitle-card-meta"><span>{clip.role === "hook" ? "开场预告" : "正文"} · {clip.deleted ? "已删除" : `${(end-start).toFixed(2)} 秒`}</span>{unsaved&&<span className="subtitle-unsaved">未保存</span>}{error&&<span className="subtitle-unsaved">操作失败</span>}<span className="subtitle-toggle" aria-hidden="true" /></span>
+        <span className="subtitle-card-preview">{draft.trim()||"（暂无字幕）"}</span>
+      </summary>
+      <div className="subtitle-card-editor">
     <div className="clip-boundaries">
       <label>开始（源视频秒）<input aria-label={`开始 ${clip.instance_id}`} type="number" min="0" step="0.1" value={start} disabled={busy} onChange={event=>change(Number(event.target.value),end)} /></label>
       <label>结束（源视频秒）<input aria-label={`结束 ${clip.instance_id}`} type="number" min="0" step="0.1" value={end} disabled={busy} onChange={event=>change(start,Number(event.target.value))} /></label>
@@ -41,5 +48,7 @@ export function OutputItemEditor({clip, busy, onSave, onJump, actions, range, on
     <button disabled={busy||splitting||!draft.trim()} onClick={()=>void save({display_text:draft.trim()})}>保存字幕</button>
     <button disabled={busy} onClick={()=>void save({deleted:!clip.deleted})}>{clip.deleted ? "恢复片段" : "删除片段"}</button>
     {actions}{error&&<p role="alert">{error}</p>}{message&&<p role="status">{message}</p>}
+      </div>
+    </details>
   </li>;
 }
