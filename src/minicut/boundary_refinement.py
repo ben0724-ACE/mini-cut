@@ -178,6 +178,25 @@ async def refine_boundaries(
             except (IndexError, ValueError, StopIteration):
                 pass
         if brief.hook_ms is not None and not hooks:
+            previous_hooks = tuple(
+                i for i in plan.items if i.role is OutputRole.HOOK and not i.deleted
+            )
+            if previous_hooks and all(
+                h.source_start_ms is not None
+                and h.source_end_ms is not None
+                and start <= h.source_start_ms < h.source_end_ms <= end
+                for h in previous_hooks
+            ):
+                length_ms = sum(
+                    cast(int, h.source_end_ms) - cast(int, h.source_start_ms)
+                    for h in previous_hooks
+                )
+                if brief.hook_bounds_ms[0] <= length_ms <= brief.hook_bounds_ms[1]:
+                    hooks = previous_hooks
+                    notes.append(
+                        f"{plan.title}：词级复核未提供有效替代钩子，保留初选已校验的完整原话；请试听确认。"
+                    )
+        if brief.hook_ms is not None and not hooks:
             notes.append(f"{plan.title}：未确认独立短句，不添加钩子。")
         length = (
             end

@@ -116,8 +116,23 @@ def select_highlights(
                     and not last.segment_id.endswith("-e1")
                 )
             ):
+                reasons: list[str] = []
+                if not low <= hook_duration <= high:
+                    reasons.append(
+                        f"实测 {hook_duration / 1000:g} 秒，不在允许的 {low / 1000:g}–{high / 1000:g} 秒范围内"
+                    )
+                if set(hook) != between:
+                    reasons.append("引用并非相邻片段，中间遗漏原话")
+                if (
+                    first.segment_id.startswith("sentence-v1-")
+                    and "-s1-" not in first.segment_id
+                ) or (
+                    last.segment_id.startswith("sentence-v1-")
+                    and not last.segment_id.endswith("-e1")
+                ):
+                    reasons.append("首尾未落在可靠完整句边界")
                 notes.append(
-                    f"{candidate.title}：未找到目标 {brief.hook_ms} ms 附近的完整原话（允许 {low}–{high} ms），省略钩子。"
+                    f"{candidate.title}：初选钩子未通过：{'；'.join(reasons)}。省略初选钩子，连续模式继续词级复核。"
                 )
                 hook = ()
                 hook_duration = 0

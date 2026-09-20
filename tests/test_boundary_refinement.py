@@ -123,3 +123,60 @@ def test_custom_ten_second_hook_survives_word_boundary_review() -> None:
     payload = json.loads(provider.requests[0].user_prompt)
     assert payload["hook_target_ms"] == 10000
     assert payload["hook_bounds_ms"] == [7000, 13000]
+
+
+def test_null_review_preserves_valid_initial_hook_but_not_outside_new_body() -> None:
+    from minicut.output_plan import OutputItem, OutputRole
+
+    transcript = Transcript(
+        "t",
+        TranscriptSource("a", "test", "test"),
+        "zh",
+        tuple(Word(f"w{i}", "内容。", i * 1000, i * 1000 + 900) for i in range(30)),
+    )
+    segments = sentence_segments(transcript)
+    brief = HighlightBrief.for_preset(
+        HighlightPreset.PODCAST, count=1, min_ms=1000, max_ms=60000, hook_ms=5000
+    )
+    initial = select_highlights(
+        proposal(tuple(s.segment_id for s in segments[:20])), brief, segments, "a", "c"
+    )
+    assert initial.collection is not None
+    plan = initial.collection.plans[0]
+    hook = OutputItem(
+        "hook",
+        segments[1].segment_id,
+        OutputRole.HOOK,
+        source_start_ms=1000,
+        source_end_ms=5900,
+    )
+    initial = replace(
+        initial,
+        collection=replace(
+            initial.collection, plans=(replace(plan, items=(hook, *plan.items)),)
+        ),
+    )
+    for start_id, expected in [("0", True), ("8", False)]:
+        provider = FakeProvider(
+            {
+                "ranges": [
+                    {
+                        "output_id": "video-1",
+                        "start_id": start_id,
+                        "end_id": "19",
+                        "hook_start_id": None,
+                        "hook_end_id": None,
+                    }
+                ]
+            }
+        )
+        result = asyncio.run(
+            refine_boundaries(
+                initial, brief, transcript, segments, provider, "fake", 30000
+            )
+        )
+        assert result.collection is not None
+        assert (
+            any(i.role is OutputRole.HOOK for i in result.collection.plans[0].items)
+            == expected
+        )
