@@ -224,3 +224,21 @@ def test_extra_root_metadata_does_not_discard_valid_candidates() -> None:
                 )
             ).plan(brief, source())
         )
+
+
+def test_bad_candidate_does_not_discard_other_valid_candidates() -> None:
+    import asyncio
+
+    invalid = candidate(["c"])
+    invalid["context_segment_ids"] = ["invented-background"]
+    provider = FakeProvider(
+        {"candidates": [candidate(["a"]), invalid, candidate(["b"])], "notes": []}
+    )
+    result = asyncio.run(
+        HighlightPlanner(provider).plan(
+            HighlightBrief.for_preset(HighlightPreset.PODCAST), source()
+        )
+    )
+    assert [s.candidate.segment_ids for s in result.suggestions] == [("a",), ("b",)]
+    assert any("已跳过" in n for n in result.notes)
+    assert len(provider.requests) == 1

@@ -210,9 +210,15 @@ class HighlightPlanner:
             title, reason = row["title"], row["reason"]
             if not isinstance(title, str) or not isinstance(reason, str):
                 raise ValueError("title and reason must be text")
-            body = _ids(row["segment_ids"], allowed)
-            context = _ids(row["context_segment_ids"], allowed)
-            hook = _ids(row["hook_segment_ids"], set((*body, *context)))
+            try:
+                body = _ids(row["segment_ids"], allowed)
+                context = _ids(row["context_segment_ids"], allowed)
+                hook = _ids(row["hook_segment_ids"], set((*body, *context)))
+            except ValueError:
+                cast(list[str], notes).append(
+                    f"{title}：模型引用了重复、不存在或不属于正文的素材 ID，已跳过此候选；未猜测替换或删除必要背景。"
+                )
+                continue
             if brief.hook_ms is None and hook:
                 raise ValueError("hook was disabled")
             suggestions.append(
@@ -226,6 +232,10 @@ class HighlightPlanner:
                     ),
                     tuple(sources[s] for s in hook),
                 )
+            )
+        if rows and not suggestions:
+            raise ValueError(
+                "所有候选均引用了重复或未知素材 ID（duplicate or unknown source IDs），无法安全生成，请调整要求后重新生成。"
             )
         return HighlightProposal(
             tuple(suggestions), tuple(cast(list[str], notes)), response.model
