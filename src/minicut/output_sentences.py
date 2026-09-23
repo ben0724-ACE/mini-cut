@@ -48,6 +48,7 @@ def split_output_sentences(
                     source_start_ms=first,
                     source_end_ms=last,
                     display_text=None,
+                    translation_text=None,
                 )
             )
     return replace(plan, items=tuple(items))

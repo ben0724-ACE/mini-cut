@@ -59,3 +59,16 @@ it("自定义钩子时长发送毫秒，关闭后不发送时长", async () => {
   await userEvent.click(screen.getByRole("button", {name:"生成候选"}));
   expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({hook_ms:null}));
 });
+
+it("字幕翻译可选目标语言和仅译文，关闭后不请求翻译",async()=>{
+  const submit=vi.fn();
+  render(<HighlightForm ready busy={false} onSubmit={submit} />);
+  await userEvent.click(screen.getByLabelText("翻译字幕"));
+  await userEvent.selectOptions(screen.getByLabelText("翻译为"),"en");
+  await userEvent.selectOptions(screen.getByLabelText("字幕显示"),"translated");
+  await userEvent.click(screen.getByRole("button",{name:"生成候选"}));
+  expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({translation_language:"en",subtitle_mode:"translated"}));
+  await userEvent.click(screen.getByLabelText("翻译字幕"));
+  await userEvent.click(screen.getByRole("button",{name:"生成候选"}));
+  expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({translation_language:null}));
+});

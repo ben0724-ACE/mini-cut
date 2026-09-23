@@ -17,6 +17,7 @@ from minicut.subtitle import (
     build_readable_cues,
     map_retained_words,
 )
+from minicut.text_normalization import normalize_text
 from minicut.timeline import Clip, Timeline
 from minicut.timeline_validation import (
     TimelineDiagnosticSummary,
@@ -202,7 +203,43 @@ def build_output_cues(
     cues: list[SubtitleCue] = []
     for clip in timeline.clips:
         item = by_instance[clip.clip_id]
-        if item.display_text is not None:
+        if item.translation_text is not None:
+            original = item.display_text or normalize_text(
+                " ".join(w.text for w in mapped if w.clip_id == clip.clip_id)
+            )
+            translated = wrap(
+                item.translation_text, width=policy.max_characters_per_line
+            )
+            if item.subtitle_mode == "bilingual":
+                source_lines = wrap(original, width=policy.max_characters_per_line)
+                count = max(len(source_lines), len(translated))
+                pages = [
+                    "\n".join(
+                        part
+                        for part in (
+                            source_lines[n] if n < len(source_lines) else "",
+                            translated[n] if n < len(translated) else "",
+                        )
+                        if part
+                    )
+                    for n in range(count)
+                ]
+            else:
+                pages = [
+                    "\n".join(translated[n : n + policy.max_lines])
+                    for n in range(0, len(translated), policy.max_lines)
+                ]
+            for n, text in enumerate(pages):
+                start = (
+                    clip.output_range.start_ms
+                    + clip.output_range.duration_ms * n // len(pages)
+                )
+                end = clip.output_range.start_ms + clip.output_range.duration_ms * (
+                    n + 1
+                ) // len(pages)
+                if end > start:
+                    cues.append(SubtitleCue(start, end, text))
+        elif item.display_text is not None:
             lines = wrap(item.display_text, width=policy.max_characters_per_line)
             pages = [
                 "\n".join(lines[n : n + policy.max_lines])

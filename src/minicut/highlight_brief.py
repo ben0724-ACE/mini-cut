@@ -25,8 +25,14 @@ class HighlightBrief:
     max_source_overlap: float = 0.3
     preset_prompt: str | None = None
     body_mode: str = "continuous"
+    translation_language: str | None = None
+    subtitle_mode: str = "bilingual"
 
     def __post_init__(self) -> None:
+        if self.translation_language not in {None, "zh", "en"}:
+            raise ValueError("translation language must be zh or en")
+        if self.subtitle_mode not in {"bilingual", "translated"}:
+            raise ValueError("unsupported subtitle display mode")
         if self.body_mode not in {"continuous", "compact"}:
             raise ValueError("unsupported body mode")
         if type(self.preset) is not HighlightPreset:

@@ -67,6 +67,7 @@ def split_item_by_lines(
             source_start_ms=cuts[i],
             source_end_ms=cuts[i + 1],
             display_text=line,
+            translation_text=None,
         )
         for i, line in enumerate(lines)
     )

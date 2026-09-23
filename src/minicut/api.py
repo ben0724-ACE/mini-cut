@@ -130,6 +130,8 @@ class HighlightTaskBody(BaseModel):
     asset_id: SafeFileName
     preset: HighlightPreset
     body_mode: str = Field(default="continuous", pattern=r"^(continuous|compact)$")
+    translation_language: str | None = Field(default=None, pattern=r"^(zh|en)$")
+    subtitle_mode: str = Field(default="bilingual", pattern=r"^(bilingual|translated)$")
     count: int = Field(ge=1, le=10)
     min_ms: int | None = Field(default=None, gt=0)
     max_ms: int | None = Field(default=None, gt=0)
@@ -167,7 +169,9 @@ class OutputItemEditBody(BaseModel):
     source_start_ms: int | None = Field(default=None, ge=0, strict=True)
     source_end_ms: int | None = Field(default=None, gt=0, strict=True)
     deleted: bool | None = None
-    display_text: str | None = Field(default=None, min_length=1, max_length=2000)
+    display_text: str | None = Field(default=None, min_length=1, max_length=12000)
+    translation_text: str | None = Field(default=None, min_length=1, max_length=12000)
+    subtitle_mode: str | None = Field(default=None, pattern=r"^(bilingual|translated)$")
 
     @model_validator(mode="after")
     def require_change(self) -> Self:
@@ -176,6 +180,8 @@ class OutputItemEditBody(BaseModel):
         if (
             self.deleted is None
             and self.display_text is None
+            and self.translation_text is None
+            and self.subtitle_mode is None
             and self.source_start_ms is None
         ):
             raise ValueError("Provide a subtitle or decision change")
@@ -1304,6 +1310,8 @@ def create_app(
                     instance_id,
                     deleted=body.deleted,
                     display_text=body.display_text,
+                    translation_text=body.translation_text,
+                    subtitle_mode=body.subtitle_mode,
                     source_start_ms=body.source_start_ms,
                     source_end_ms=body.source_end_ms,
                 )

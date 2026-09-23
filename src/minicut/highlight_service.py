@@ -101,6 +101,23 @@ def generate_highlights(
                 ),
             ),
         )
+    if selection.collection is not None and brief.translation_language is not None:
+        from minicut.subtitle_translation import translate_collection
+
+        selection = replace(
+            selection,
+            collection=asyncio.run(
+                translate_collection(
+                    selection.collection,
+                    segments,
+                    transcript,
+                    recorded,
+                    planner.model,
+                    brief.translation_language,
+                    brief.subtitle_mode,
+                )
+            ),
+        )
     outputs: list[dict[str, object]] = []
     repository = OutputCollectionRepository(project, collection_id)
     if selection.collection is not None:
@@ -198,9 +215,12 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
                         "segment_id": item.segment_id,
                         "role": item.role.value,
                         "text": item.display_text
-                        or _item_text(item, by_id[item.segment_id], transcript),
+                        or item_source_text(item, by_id[item.segment_id], transcript),
+                        "translation_text": item.translation_text,
+                        "translation_language": item.translation_language,
+                        "subtitle_mode": item.subtitle_mode,
                         "source_text": by_id[item.segment_id].text,
-                        "transcript_text": _item_text(
+                        "transcript_text": item_source_text(
                             item, by_id[item.segment_id], transcript
                         ),
                         "deleted": item.deleted,
@@ -255,6 +275,8 @@ def edit_output_item(
     *,
     deleted: bool | None = None,
     display_text: str | None = None,
+    translation_text: str | None = None,
+    subtitle_mode: str | None = None,
     source_start_ms: int | None = None,
     source_end_ms: int | None = None,
 ) -> dict[str, object]:
@@ -286,6 +308,14 @@ def edit_output_item(
             replace(
                 item,
                 deleted=item.deleted if deleted is None else deleted,
+                translation_text=(
+                    None if source_start_ms is not None else item.translation_text
+                )
+                if translation_text is None
+                else translation_text.strip(),
+                subtitle_mode=item.subtitle_mode
+                if subtitle_mode is None
+                else subtitle_mode,
                 source_start_ms=item.source_start_ms
                 if source_start_ms is None
                 else source_start_ms,
@@ -438,9 +468,12 @@ def output_versions(
                     "instance_id": item.instance_id,
                     "segment_id": item.segment_id,
                     "role": item.role.value,
+                    "translation_text": item.translation_text,
+                    "translation_language": item.translation_language,
+                    "subtitle_mode": item.subtitle_mode,
                     "deleted": item.deleted,
                     "text": item.display_text
-                    or _item_text(item, by_id[item.segment_id], transcript),
+                    or item_source_text(item, by_id[item.segment_id], transcript),
                     "start_ms": item.source_start_ms
                     if item.source_start_ms is not None
                     else by_id[item.segment_id].start_ms,
@@ -464,7 +497,7 @@ def _source_transcript(project: Path, asset_id: str) -> Transcript:
     return Transcript.from_dict(data["transcript"])
 
 
-def _item_text(
+def item_source_text(
     item: OutputItem, segment: SemanticSegment, transcript: Transcript
 ) -> str:
     if item.source_start_ms is None or item.source_end_ms is None:
@@ -529,6 +562,7 @@ def save_output_ranges(
             source_start_ms=cast(int, changes[item.instance_id]["source_start_ms"]),
             source_end_ms=cast(int, changes[item.instance_id]["source_end_ms"]),
             display_text=None,
+            translation_text=None,
         )
         if item.instance_id in changes
         else item

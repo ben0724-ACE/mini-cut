@@ -45,8 +45,21 @@ class OutputItem:
     display_text: str | None = None
     source_start_ms: int | None = None
     source_end_ms: int | None = None
+    translation_text: str | None = None
+    translation_language: str | None = None
+    subtitle_mode: str = "bilingual"
 
     def __post_init__(self) -> None:
+        if self.translation_language not in {
+            None,
+            "zh",
+            "en",
+        } or self.subtitle_mode not in {"bilingual", "translated"}:
+            raise ValueError("invalid translation settings")
+        if self.translation_text is not None:
+            _text(self.translation_text)
+            if self.translation_language is None:
+                raise ValueError("translation requires a target language")
         if (self.source_start_ms is None) != (self.source_end_ms is None):
             raise ValueError("Both source boundaries are required")
         if self.source_start_ms is not None and self.source_end_ms is not None:
@@ -156,6 +169,9 @@ class OutputPlan:
                     cast(str | None, item.get("display_text")),
                     cast(int | None, item.get("source_start_ms")),
                     cast(int | None, item.get("source_end_ms")),
+                    cast(str | None, item.get("translation_text")),
+                    cast(str | None, item.get("translation_language")),
+                    cast(str, item.get("subtitle_mode", "bilingual")),
                 )
                 for item in items
             ),
