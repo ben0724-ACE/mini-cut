@@ -112,3 +112,69 @@ def test_hierarchical_selection_refines_original_sources() -> None:
     assert json.loads(calls[-1].user_prompt)["segments"][0]["text"] in [
         s.text for s in sources
     ]
+
+
+def test_chapter_selection_uses_ranked_candidates_within_budget() -> None:
+    import asyncio
+    import json
+
+    from minicut.chapter_planner import plan_chapters
+    from minicut.highlight_brief import HighlightBrief, HighlightPreset
+    from minicut.highlight_planner import HighlightPlanner
+    from minicut.llm_provider import TextModelRequest, TextModelResponse
+
+    sources = tuple(
+        SemanticSegment(
+            f"s{i}",
+            "explanation " * 70,
+            i * 30000,
+            (i + 1) * 30000,
+            (f"u{i}",),
+            (f"w{i}",),
+        )
+        for i in range(48)
+    )
+    ranked: list[str] = []
+    selected_source_ids: list[str] = []
+
+    class Provider:
+        async def generate(self, request: TextModelRequest) -> TextModelResponse:
+            payload = json.loads(request.user_prompt)
+            if payload.get("version") == "chapter-selection-v1":
+                ranked.extend(
+                    candidate["id"] for candidate in payload["candidates"][:3]
+                )
+                return TextModelResponse(
+                    json.dumps({"ids": [*ranked, ranked[0]]}), request.model
+                )
+            ids = [segment["segment_id"] for segment in payload["segments"][:2]]
+            if payload["brief"]["count"] == 1:
+                selected_source_ids.extend(
+                    segment["segment_id"] for segment in payload["segments"]
+                )
+            return TextModelResponse(
+                json.dumps(
+                    {
+                        "candidates": [
+                            {
+                                "title": "topic",
+                                "reason": "complete",
+                                "segment_ids": ids,
+                                "context_segment_ids": [],
+                                "hook_segment_ids": [],
+                            }
+                        ],
+                        "notes": [],
+                    }
+                ),
+                request.model,
+            )
+
+    brief = replace(HighlightBrief.for_preset(HighlightPreset.PODCAST), count=1)
+    result, original = asyncio.run(
+        plan_chapters(HighlightPlanner(Provider()), brief, sources)
+    )
+    assert result.suggestions
+    assert len(ranked) == 3
+    assert len(original) == 4
+    assert selected_source_ids == [segment.segment_id for segment in original]

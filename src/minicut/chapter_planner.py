@@ -125,14 +125,20 @@ async def plan_chapters(
     ):
         raise ValueError("Chapter selection returned unknown candidate IDs")
     chosen = cast(list[str], ids)
-    if len(set(chosen)) != len(chosen) or len(chosen) > brief.count * 2:
-        raise ValueError("Chapter selection exceeded the candidate budget")
     selected_ids: set[str] = set()
     omitted = 0
+    accepted = 0
+    seen: set[str] = set()
     for identity in chosen:
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if accepted >= brief.count * 2:
+            break
         proposed = context_closure(selected_ids | references[identity], segments)
         if source_size(proposed) <= FINAL_CHAR_BUDGET:
             selected_ids.update(s.segment_id for s in proposed)
+            accepted += 1
         else:
             omitted += 1
     original = context_closure(selected_ids, segments)
