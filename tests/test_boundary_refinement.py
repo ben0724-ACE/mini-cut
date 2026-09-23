@@ -180,3 +180,71 @@ def test_null_review_preserves_valid_initial_hook_but_not_outside_new_body() -> 
             any(i.role is OutputRole.HOOK for i in result.collection.plans[0].items)
             == expected
         )
+
+
+def test_refined_body_reanchors_when_old_first_segment_is_excluded() -> None:
+    from minicut.highlight_selection import HighlightSelection
+    from minicut.output_plan import (
+        HighlightCandidate,
+        OutputCollection,
+        OutputItem,
+        OutputPlan,
+        OutputRole,
+        validate_output_collection,
+    )
+
+    transcript = Transcript(
+        "t",
+        TranscriptSource("a", "test", "test"),
+        "zh",
+        tuple(Word(f"w{i}", "内容。", i * 1000, i * 1000 + 900) for i in range(20)),
+    )
+    segments = sentence_segments(transcript)
+    candidate = HighlightCandidate(
+        "candidate-1",
+        "topic",
+        "reason",
+        (segments[5].segment_id,),
+        (segments[4].segment_id,),
+    )
+    body = OutputItem(
+        "video-1-body-0",
+        segments[4].segment_id,
+        OutputRole.BODY,
+        source_start_ms=4000,
+        source_end_ms=9000,
+    )
+    initial = HighlightSelection(
+        OutputCollection(
+            "c",
+            "a",
+            (candidate,),
+            (OutputPlan("video-1", "candidate-1", "topic", (body,)),),
+        ),
+        (),
+        (5000,),
+    )
+    provider = FakeProvider(
+        {
+            "ranges": [
+                {
+                    "output_id": "video-1",
+                    "start_id": "6",
+                    "end_id": "8",
+                    "hook_start_id": None,
+                    "hook_end_id": None,
+                }
+            ]
+        }
+    )
+    brief = HighlightBrief.for_preset(
+        HighlightPreset.PODCAST, count=1, min_ms=1000, max_ms=60000
+    )
+    result = asyncio.run(
+        refine_boundaries(initial, brief, transcript, segments, provider, "fake", 20000)
+    )
+    assert result.collection is not None
+    refined_body = result.collection.plans[0].items[0]
+    assert refined_body.segment_id == segments[6].segment_id
+    assert refined_body.source_start_ms == 5900
+    validate_output_collection(result.collection, segments)

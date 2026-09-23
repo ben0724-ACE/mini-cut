@@ -235,7 +235,15 @@ async def refine_boundaries(
         plans.append(
             replace(
                 plan,
-                items=(*hooks, replace(body, source_start_ms=start, source_end_ms=end)),
+                items=(
+                    *hooks,
+                    replace(
+                        body,
+                        segment_id=covered[0],
+                        source_start_ms=start,
+                        source_end_ms=end,
+                    ),
+                ),
             )
         )
         durations.append(length)
