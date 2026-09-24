@@ -1,6 +1,7 @@
 """Explicit-order compilation with validation bound to the source-ID plan."""
 
 from dataclasses import dataclass, replace
+from math import ceil
 from textwrap import wrap
 
 from minicut.media import MediaAsset, TimeRange
@@ -193,6 +194,27 @@ def map_output_words(
 _DEFAULT_SUBTITLE_POLICY = SubtitleLayoutPolicy()
 
 
+def _balanced_subtitle_pages(
+    text: str, count: int, max_characters_per_line: int
+) -> tuple[str, ...]:
+    """Distribute one language over the same number of timed bilingual pages."""
+    lines = wrap(text, width=max_characters_per_line)
+    if len(lines) < count:
+        lines = wrap(
+            text,
+            width=max(4, min(max_characters_per_line, ceil(len(text) / count))),
+        )
+    if len(lines) < count:
+        # A very short translation must remain present on every page.
+        return (text,) * count
+    return tuple(
+        "\n".join(
+            lines[index * len(lines) // count : (index + 1) * len(lines) // count]
+        )
+        for index in range(count)
+    )
+
+
 def build_output_cues(
     timeline: Timeline,
     plan: OutputPlan,
@@ -212,18 +234,38 @@ def build_output_cues(
             )
             if item.subtitle_mode == "bilingual":
                 source_lines = wrap(original, width=policy.max_characters_per_line)
-                count = max(len(source_lines), len(translated))
-                pages = [
-                    "\n".join(
-                        part
-                        for part in (
-                            source_lines[n] if n < len(source_lines) else "",
-                            translated[n] if n < len(translated) else "",
-                        )
-                        if part
+                # The two languages belong to one edited sentence, but their
+                # line counts differ. Page them together so neither language
+                # disappears before the sentence ends. Prefer at least two
+                # seconds per page over cramming a long sentence into a flash.
+                count = min(
+                    max(
+                        ceil(len(source_lines) / policy.max_lines),
+                        ceil(len(translated) / policy.max_lines),
+                    ),
+                    max(1, clip.output_range.duration_ms // 2000),
+                )
+                source_pages = _balanced_subtitle_pages(
+                    original, count, policy.max_characters_per_line
+                )
+                translated_pages = _balanced_subtitle_pages(
+                    item.translation_text, count, policy.max_characters_per_line
+                )
+                for index, (source_page, translated_page) in enumerate(
+                    zip(source_pages, translated_pages, strict=True)
+                ):
+                    start = (
+                        clip.output_range.start_ms
+                        + clip.output_range.duration_ms * index // count
                     )
-                    for n in range(count)
-                ]
+                    end = (
+                        clip.output_range.start_ms
+                        + clip.output_range.duration_ms * (index + 1) // count
+                    )
+                    cues.append(
+                        SubtitleCue(start, end, f"{source_page}\n{translated_page}")
+                    )
+                continue
             else:
                 pages = [
                     "\n".join(translated[n : n + policy.max_lines])

@@ -94,3 +94,40 @@ def test_incomplete_translation_fails_without_mutating_candidate() -> None:
             translate_collection(c, s, t, Translator(True), "test", "en", "translated")
         )
     assert c.plans[0].items[0].translation_text is None
+
+
+def test_bilingual_sentence_stays_together_when_languages_wrap_differently() -> None:
+    segment = SemanticSegment(
+        "s",
+        "Well, it's pretty obvious at this point that AI can be very dangerous.",
+        0,
+        8040,
+        ("u",),
+        ("w",),
+    )
+    plan = OutputPlan(
+        "v",
+        "c",
+        "T",
+        (
+            OutputItem(
+                "body",
+                "s",
+                OutputRole.BODY,
+                display_text=segment.text,
+                translation_text="嗯，现在已经很明显了，AI 可能会非常危险。",
+                translation_language="zh",
+            ),
+        ),
+    )
+    timeline = compile_output_timeline(plan, (segment,), "a")
+    cues = build_output_cues(timeline, plan, ())
+    assert len(cues) == 2
+    assert [(cue.start_ms, cue.end_ms) for cue in cues] == [
+        (0, 4020),
+        (4020, 8040),
+    ]
+    assert [cue.text for cue in cues] == [
+        "Well, it's pretty\nobvious at this\n嗯，现在已经很明显了，AI",
+        "point that AI can\nbe very dangerous.\n可能会非常危险。",
+    ]
