@@ -53,6 +53,9 @@ body { margin: 0; }
 .import-bar details { margin:0; }
 .import-bar summary { padding:6px 0; }
 .import-bar details[open] { position:relative;background:#202630;padding:10px;border-radius:8px; }
+.import-actions { display:flex;align-items:center;gap:8px;flex-wrap:wrap; }
+.import-actions button { margin-top:0; }
+.import-file-input { position:absolute;width:1px;height:1px;opacity:0;pointer-events:none; }
 .app-body { display:block; }
 
 
