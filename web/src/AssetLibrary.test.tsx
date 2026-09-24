@@ -11,7 +11,8 @@ it("上传所选文件后刷新真实素材列表", async () => {
   const file = new File(["media"], "中文.mov", {type: "video/quicktime"});
   await userEvent.upload(screen.getByLabelText("选择媒体文件"), file);
   await userEvent.click(screen.getByRole("button", {name: "导入素材"}));
-  expect(await screen.findByRole("heading", {name: "中文.mov"})).toBeInTheDocument();
+  expect(await screen.findByRole("combobox", {name: "当前素材"})).toHaveValue("one");
+  expect(screen.getByRole("option", {name: "中文.mov"})).toBeInTheDocument();
   expect(upload).toHaveBeenCalledWith("demo", file);
   expect(screen.getByText(/未转录/)).toBeInTheDocument();
 });
@@ -21,4 +22,12 @@ it("上传失败保留文件供重试，不伪造素材", async () => {
   await userEvent.click(screen.getByRole("button", {name: "导入素材"}));
   expect(await screen.findByRole("alert")).toHaveTextContent("损坏媒体");
   expect(screen.getByRole("button", {name: "导入素材"})).toBeEnabled();
+});
+it("已转录素材默认收起转录设置，仍可手动展开", async () => {
+  render(<AssetLibrary projectId="demo" load={vi.fn().mockResolvedValue([{asset_id:"one",name:"访谈.mov",duration_ms:60000,has_transcript:true,has_plan:false}])} onOpen={vi.fn()} />);
+  const summary=await screen.findByText("转录设置 · 已完成");
+  const details=summary.closest("details");
+  expect(details).not.toHaveAttribute("open");
+  await userEvent.click(summary);
+  expect(details).toHaveAttribute("open");
 });
