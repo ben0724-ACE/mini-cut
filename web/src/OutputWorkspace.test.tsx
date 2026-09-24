@@ -51,3 +51,18 @@ it("逐句编辑提示只在作品级说明中出现一次", async () => {
   expect(screen.getAllByText(/手动分句时，在字幕中/)).toHaveLength(1);
   expect(container.querySelectorAll(".subtitle-card .helper-text")).toHaveLength(0);
 });
+
+it("编辑页只提示待检查的边界，不重复初选与复核的钩子说明", async () => {
+  const api = await import("./api");
+  vi.mocked(api.getHighlights).mockResolvedValue({
+    asset_id:"a",collection_id:"c",source_duration_ms:4000,
+    notes:["作品A：未找到独立原话钩子，保留正文。","作品A：建议检查开头／结尾，语义边界未确定。","作品A：未确认独立短句，不添加钩子。"],
+    brief:{preset:"podcast_highlights",count:1,min_ms:null,max_ms:null,hook_ms:5000,instructions:"",max_source_overlap:1},
+    outputs:[{output_id:"video-1",title:"作品A",reason:"理由",revision:2,duration_ms:2000,clips:[]}],
+  });
+  render(<OutputWorkspace project="demo" collection="one" output="video-1" />);
+  expect(await screen.findByText("初始生成时的边界提示")).toBeInTheDocument();
+  expect(screen.getByText("建议检查开头／结尾，语义边界未确定。")).toBeInTheDocument();
+  expect(screen.queryByText(/未找到独立原话钩子/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/未确认独立短句/)).not.toBeInTheDocument();
+});
