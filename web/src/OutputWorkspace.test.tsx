@@ -33,3 +33,21 @@ it("范围草稿撤销与批量保存不调用渲染，显式生成才启动",as
   expect(preview).not.toHaveBeenCalled();
   fireEvent.click(screen.getByText("生成成片预览"));await waitFor(()=>expect(preview).toHaveBeenCalledOnce());
 });
+
+it("逐句编辑提示只在作品级说明中出现一次", async () => {
+  const api = await import("./api");
+  const clips = [
+    {instance_id:"first",segment_id:"a",role:"body" as const,text:"第一句",start_ms:0,end_ms:2000},
+    {instance_id:"second",segment_id:"b",role:"body" as const,text:"第二句",start_ms:2000,end_ms:4000},
+  ];
+  vi.mocked(api.getHighlights).mockResolvedValue({
+    asset_id:"a",collection_id:"c",source_duration_ms:4000,notes:[],
+    brief:{preset:"podcast_highlights",count:1,min_ms:null,max_ms:null,hook_ms:null,instructions:"",max_source_overlap:1},
+    outputs:[{output_id:"o",title:"两句测试",reason:"完整",revision:1,duration_ms:4000,clips}],
+  });
+  const {container}=render(<OutputWorkspace project="p" collection="c" output="o" />);
+  await screen.findByLabelText("编辑字幕 second");
+  expect(screen.getAllByText("编辑说明（范围、字幕与分句）")).toHaveLength(1);
+  expect(screen.getAllByText(/手动分句时，在字幕中/)).toHaveLength(1);
+  expect(container.querySelectorAll(".subtitle-card .helper-text")).toHaveLength(0);
+});
