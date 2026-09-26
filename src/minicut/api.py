@@ -5,6 +5,7 @@ import mimetypes
 import os
 import shutil
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from threading import BoundedSemaphore, Lock
@@ -70,6 +71,28 @@ from minicut.transcription_task import CancellationToken, TranscriptionCancelled
 
 ProjectId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
 SafeFileName = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
+
+_DEFAULT_EXPORT_CONCURRENCY = 2
+_MAX_EXPORT_CONCURRENCY = 4
+
+
+def _resolve_export_concurrency(configured: int | None) -> int:
+    value: object = (
+        os.environ.get("MINICUT_EXPORT_CONCURRENCY", _DEFAULT_EXPORT_CONCURRENCY)
+        if configured is None
+        else configured
+    )
+    if isinstance(value, bool):
+        raise ValueError("MINICUT_EXPORT_CONCURRENCY must be an integer from 1 to 4")
+    try:
+        concurrency = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "MINICUT_EXPORT_CONCURRENCY must be an integer from 1 to 4"
+        ) from error
+    if not 1 <= concurrency <= _MAX_EXPORT_CONCURRENCY:
+        raise ValueError("MINICUT_EXPORT_CONCURRENCY must be an integer from 1 to 4")
+    return concurrency
 
 
 class ProjectCreateBody(BaseModel):
@@ -508,6 +531,7 @@ def _stream_file(path: Path, range_header: str | None) -> StreamingResponse:
 def create_app(
     projects_root: Path,
     *,
+    export_concurrency: int | None = None,
     init_project: InitProjectOperation | None = None,
     inspect_project: InspectOperation | None = None,
     transcribe: TranscribeOperation | None = None,
@@ -530,6 +554,7 @@ def create_app(
     plan_reader = read_plan or ReadPlanUseCase()
     plan_modifier = modify_plan or ModifyPlanUseCase()
     preview_compiler = preview_timeline or PreviewTimelineUseCase()
+    export_concurrency = _resolve_export_concurrency(export_concurrency)
     api = FastAPI(title="MiniCut local API", version="0.1.0")
 
     api.add_middleware(ProjectDeletionGuard)
@@ -551,7 +576,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     export_tokens: dict[tuple[str, str], CancellationToken] = {}
-    resource_slot = BoundedSemaphore(1)
+    compute_slot = BoundedSemaphore(1)
+    export_slot = BoundedSemaphore(export_concurrency)
     resume_lock = Lock()
     output_edit_lock = Lock()
 
@@ -568,6 +594,8 @@ def create_app(
         request_data: dict[str, object],
         background_tasks: BackgroundTasks,
         operation: Callable[[], dict[str, object]],
+        *,
+        runners: list[Callable[[], None]] | None = None,
     ) -> TaskResponse:
         project_directory = root / project_id
         inspect(project_id)
@@ -595,9 +623,14 @@ def create_app(
             return _task_response(existing)
 
         def run() -> None:
-            # One heavy operation at a time bounds MLX and FFmpeg resource usage.
+            # ML/model work stays serial while FFmpeg work uses a small bounded pool.
             token = export_tokens.setdefault((project_id, task_id), CancellationToken())
-            while not resource_slot.acquire(timeout=0.2):
+            slot = (
+                export_slot
+                if kind in {"output-export", "output-preview", "render"}
+                else compute_slot
+            )
+            while not slot.acquire(timeout=0.2):
                 if token.is_cancelled:
                     _write_job(path, {**pending, "status": "cancelled"})
                     export_tokens.pop((project_id, task_id), None)
@@ -642,11 +675,25 @@ def create_app(
                     },
                 )
             finally:
-                resource_slot.release()
+                slot.release()
                 export_tokens.pop((project_id, task_id), None)
 
-        background_tasks.add_task(run)
+        if runners is None:
+            background_tasks.add_task(run)
+        else:
+            runners.append(run)
         return _task_response(pending)
+
+    def run_export_batch(runners: list[Callable[[], None]]) -> None:
+        if not runners:
+            return
+        with ThreadPoolExecutor(
+            max_workers=min(export_concurrency, len(runners)),
+            thread_name_prefix="minicut-export",
+        ) as executor:
+            futures = [executor.submit(runner) for runner in runners]
+            for future in futures:
+                future.result()
 
     @api.get("/api/projects/{project_id}/activity")
     def project_activity(project_id: ProjectId) -> dict[str, object]:  # pyright: ignore[reportUnusedFunction]
@@ -669,7 +716,12 @@ def create_app(
                     receipts.append(
                         {**json.loads(receipt), "request_id": identity, "status": state}
                     )
-        return {"tasks": jobs, "model_requests": receipts, "heavy_task_concurrency": 1}
+        return {
+            "tasks": jobs,
+            "model_requests": receipts,
+            "heavy_task_concurrency": 1,
+            "export_task_concurrency": export_concurrency,
+        }
 
     @api.post(
         "/api/projects",
@@ -820,16 +872,12 @@ def create_app(
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
     )
 
-    @api.post(
-        "/api/projects/{project_id}/tasks/output-export",
-        response_model=TaskResponse,
-        status_code=202,
-    )
-    def submit_output_export(  # pyright: ignore[reportUnusedFunction]
+    def enqueue_output_export(
         project_id: ProjectId,
         body: OutputExportBody,
         background_tasks: BackgroundTasks,
-        idempotency_key: Annotated[str, task_key_header],
+        idempotency_key: str,
+        runners: list[Callable[[], None]] | None = None,
     ) -> TaskResponse:
         token = export_tokens.setdefault(
             (project_id, idempotency_key), CancellationToken()
@@ -867,10 +915,26 @@ def create_app(
             body.model_dump(mode="json"),
             background_tasks,
             operation,
+            runners=runners,
         )
         if response.status not in ("pending", "running"):
             export_tokens.pop((project_id, idempotency_key), None)
         return response
+
+    @api.post(
+        "/api/projects/{project_id}/tasks/output-export",
+        response_model=TaskResponse,
+        status_code=202,
+    )
+    def submit_output_export(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        body: OutputExportBody,
+        background_tasks: BackgroundTasks,
+        idempotency_key: Annotated[str, task_key_header],
+    ) -> TaskResponse:
+        return enqueue_output_export(
+            project_id, body, background_tasks, idempotency_key
+        )
 
     @api.post(
         "/api/projects/{project_id}/tasks/output-export-batch",
@@ -883,15 +947,19 @@ def create_app(
         background_tasks: BackgroundTasks,
         idempotency_key: Annotated[str, task_key_header],
     ) -> list[TaskResponse]:
-        return [
-            submit_output_export(
+        runners: list[Callable[[], None]] = []
+        responses = [
+            enqueue_output_export(
                 project_id,
                 output,
                 background_tasks,
                 f"{idempotency_key}-{output.output_id}",
+                runners,
             )
             for output in body.outputs
         ]
+        background_tasks.add_task(run_export_batch, runners)
+        return responses
 
     @api.post(
         "/api/projects/{project_id}/tasks/output-preview",
