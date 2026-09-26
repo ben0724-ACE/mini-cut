@@ -13,11 +13,40 @@ from minicut.output_timeline import compile_output_timeline
 from minicut.project import ProjectRepository
 from minicut.render_command import SubtitleMode, VideoOutputMetadata
 from minicut.render_profile import RenderProfile, source_dimensions
+from minicut.renderer import FfmpegRenderer
 from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
 
 _DEFAULT_PROFILE = RenderProfile()
 RENDER_ENGINE_VERSION = 6
+
+
+def _extract_cover(
+    video_path: Path,
+    cover_path: Path,
+    cancellation: CancellationToken,
+) -> None:
+    """Publish the exact first decoded frame of the final exported video."""
+    command = (
+        "ffmpeg",
+        "-nostdin",
+        "-y",
+        "-i",
+        video_path.as_uri(),
+        "-map",
+        "0:v:0",
+        "-frames:v",
+        "1",
+        "-q:v",
+        "2",
+        cover_path.as_uri(),
+    )
+    FfmpegRenderer().render_to_path(
+        command,
+        cover_path,
+        timeout_seconds=120,
+        cancellation=cancellation,
+    )
 
 
 def export_output(
@@ -92,9 +121,18 @@ def export_output(
             plan_revision=revision,
         )
     )
+    cover_path: Path | None = None
+    if not preview:
+        cancellation.raise_if_cancelled()
+        cover_path = result.output_path.with_name(
+            f"{result.output_path.stem}-cover.jpg"
+        )
+        _extract_cover(result.output_path, cover_path, cancellation)
     base = f"/api/projects/{quote(project.name, safe='')}/media/exports/"
-    return {
+    response: dict[str, object] = {
         "output_id": output,
+        "title": plan.title,
+        "social_copy": plan.social_copy,
         "render_engine_version": RENDER_ENGINE_VERSION,
         "revision": revision,
         "width": metadata.width,
@@ -109,6 +147,11 @@ def export_output(
         "subtitle_url": base
         + quote(str(result.subtitle_path.relative_to(project / "exports")), safe="/"),
     }
+    if cover_path is not None:
+        response["cover_url"] = base + quote(
+            str(cover_path.relative_to(project / "exports")), safe="/"
+        )
+    return response
 
 
 def preview_output(

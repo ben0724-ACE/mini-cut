@@ -113,3 +113,11 @@ def test_transition_round_trip_legacy_default_and_invalid_values() -> None:
     for invalid in (-1, 1001, True):
         with unittest.TestCase().assertRaises(ValueError):
             replace(plan, hook_transition_ms=invalid)
+
+
+def test_social_copy_round_trip_and_legacy_default() -> None:
+    plan = replace(collection().plans[0], social_copy="一段可直接发布的简介文案。")
+    assert OutputPlan.from_dict(plan.to_dict()) == plan
+    legacy = plan.to_dict()
+    legacy.pop("social_copy")
+    assert OutputPlan.from_dict(legacy).social_copy is None

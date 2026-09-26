@@ -21,3 +21,12 @@ it("恢复失败后可重新查询，不在恢复期间提交重复导出", asyn
   expect(await screen.findByRole("link",{name:"下载视频"})).toHaveAttribute("href","/result.mp4");
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
+it("提交成功后把作品和任务交给结果页导航",async()=>{
+  const api=await import("./api");
+  vi.mocked(api.recoverOutputExport).mockResolvedValueOnce(null);
+  vi.mocked(api.startOutputExport).mockResolvedValueOnce({task_id:"export-1",status:"pending",result:null,error:null});
+  const onSubmitted=vi.fn();
+  render(<OutputExport project="p" collection="c" output="o" revision={1} onSubmitted={onSubmitted} />);
+  await userEvent.click(await screen.findByRole("button",{name:"导出当前作品"}));
+  expect(onSubmitted).toHaveBeenCalledWith([{outputId:"o",taskId:"export-1"}]);
+});

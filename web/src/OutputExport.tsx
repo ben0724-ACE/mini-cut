@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { startOutputExport, readOutputExport, recoverOutputExport, cancelOutputExport, type OutputExportTask, type OutputExportOptions } from "./api";
 import { GeometrySettings } from "./GeometrySettings";
 
-export function OutputExport({project,collection,output,revision,sourceUrl,sourceTime}:{project:string;collection:string;output:string;revision:number;sourceUrl?:string;sourceTime?:number}) {
+export function OutputExport({project,collection,output,revision,sourceUrl,sourceTime,onSubmitted}:{project:string;collection:string;output:string;revision:number;sourceUrl?:string;sourceTime?:number;onSubmitted?:(entries:{outputId:string;taskId:string}[])=>void}) {
   const [options,setOptions]=useState<OutputExportOptions>({subtitle_mode:"soft",audio_fade_ms:0,denoiser_id:"none"});
   const [task,setTask]=useState<OutputExportTask|null>(null); const [error,setError]=useState("");
   const [recovering,setRecovering]=useState(true);const [query,setQuery]=useState(0);
@@ -11,7 +11,7 @@ export function OutputExport({project,collection,output,revision,sourceUrl,sourc
   useEffect(()=>{const controller=new AbortController();setRecovering(true);recoverOutputExport(project,collection,output,controller.signal).then(value=>{if(!controller.signal.aborted)setTask(value);}).catch(reason=>{if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"恢复导出失败");}).finally(()=>{if(!controller.signal.aborted)setRecovering(false);});return()=>controller.abort();},[project,collection,output,query]);
   useEffect(()=>{if(!active||!task||error)return;const controller=new AbortController();const timer=setTimeout(()=>{readOutputExport(project,task.task_id,controller.signal).then(value=>{if(!controller.signal.aborted)setTask(value);}).catch(reason=>{if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"读取导出状态失败");});},1000);return()=>{controller.abort();clearTimeout(timer);};},[active,task,project,error]);
   function change(changes:Partial<OutputExportOptions>){key.current=undefined;setOptions({...options,...changes});}
-  async function submit(){if(lock.current||active||recovering||error)return;lock.current=true;setSending(true);setError("");key.current??=crypto.randomUUID();try{setTask(await startOutputExport(project,collection,output,revision,options,key.current));key.current=undefined;}catch(reason){setError(reason instanceof Error?reason.message:"导出失败");}finally{lock.current=false;setSending(false);}}
+  async function submit(){if(lock.current||active||recovering||error)return;lock.current=true;setSending(true);setError("");key.current??=crypto.randomUUID();try{const submitted=await startOutputExport(project,collection,output,revision,options,key.current);setTask(submitted);key.current=undefined;onSubmitted?.([{outputId:output,taskId:submitted.task_id}]);}catch(reason){setError(reason instanceof Error?reason.message:"导出失败");}finally{lock.current=false;setSending(false);}}
   return <section aria-label="单作品导出"><details><summary>导出设置</summary>
     <GeometrySettings sourceUrl={sourceUrl} sourceTime={sourceTime} value={options} disabled={active||sending} onChange={change} />
     <label>字幕方式<select disabled={active||sending} value={options.subtitle_mode} onChange={event=>change({subtitle_mode:event.target.value as OutputExportOptions["subtitle_mode"]})}><option value="soft">软字幕（播放器可开关）</option><option value="burned">烧录字幕（画面内）</option></select></label>

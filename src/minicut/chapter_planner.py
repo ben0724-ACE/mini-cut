@@ -80,7 +80,9 @@ async def plan_chapters(
     candidates: list[dict[str, object]] = []
     references: dict[str, set[str]] = {}
     for index, window in enumerate(windows):
-        proposal = await planner.plan(discovery, window)
+        proposal = await planner.plan(
+            discovery, window, publication_metadata=False
+        )
         for ordinal, suggestion in enumerate(proposal.suggestions):
             candidate = suggestion.candidate
             identity = f"chapter-{index + 1}-candidate-{ordinal + 1}"

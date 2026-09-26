@@ -204,6 +204,25 @@ hr { border:0;border-top:1px solid #343d4c;margin:24px 0; }
 .usage-grid dt { font-size:11px;color:#aebbd0; }
 .usage-grid dd { margin:4px 0 0;font-size:14px;overflow-wrap:anywhere; }
 
+.export-results { max-width:1440px;margin:12px auto 48px; }
+.export-results-header { display:flex;justify-content:space-between;align-items:flex-start;gap:24px;margin-bottom:24px;padding:24px;border:1px solid #34425c;border-radius:16px;background:radial-gradient(ellipse at top right,#2b3e60 0,transparent 70%),#1c2535; }
+.export-results-header h1 { font-size:clamp(26px,4vw,42px); }
+.export-results-actions { display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:flex-end; }
+.export-results-actions button { margin:0; }
+.export-result-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(360px,100%),1fr));gap:18px;align-items:start; }
+.export-result-card { min-width:0;overflow:hidden;border:1px solid #344052;border-radius:14px;background:#1c222d;box-shadow:0 14px 32px #0003; }
+.export-result-media { aspect-ratio:16/9;background:#0d0f13;display:grid;place-items:center;overflow:hidden; }
+.export-result-media video,.export-result-media img { display:block;width:100%;height:100%;object-fit:contain;background:#000; }
+.export-result-placeholder { color:#aeb9ca;font-size:13px; }
+.export-result-body { padding:18px; }
+.export-result-body h2 { margin:12px 0;font-size:20px;line-height:1.4;overflow-wrap:anywhere; }
+.export-result-body h3 { margin:18px 0 6px;font-size:12px;color:#aebbd0; }
+.export-result-status { display:flex;justify-content:space-between;gap:12px;color:#b8c8e3;font-size:12px; }
+.social-copy { min-height:4.5em;white-space:pre-wrap;line-height:1.75;user-select:text;overflow-wrap:anywhere; }
+.export-downloads { display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:18px;padding-top:14px;border-top:1px solid #343d4c; }
+.export-downloads button { margin:0; }
+@media(max-width:700px) { .export-results-header { flex-direction:column; } .export-results-actions { justify-content:flex-start; } }
+
 .workbench .transcription-controls label.checkbox-field { display: flex; align-items: center; gap: 10px; margin: 16px 0; cursor: pointer; }
 .checkbox-field input[type="checkbox"] { flex: 0 0 auto; width: 18px; height: 18px; margin: 0; }
 

@@ -56,7 +56,7 @@ export interface TranscriptionTask {configuration?:TranscriptionOptions;progress
 export interface TranscriptionOptions {provider: "mlx" | "whisper"; model: string; language: string}
 export interface HighlightClip {instance_id: string; segment_id: string; role: string; text: string; source_text?: string; transcript_text?: string; translation_text?:string|null;translation_language?:"zh"|"en"|null;subtitle_mode?:"bilingual"|"translated"; deleted?: boolean; start_ms: number; end_ms: number}
 export const editOutputItem = (project: string, collection: string, output: string, instance: string, changes: {deleted?: boolean; display_text?: string; translation_text?:string;subtitle_mode?:"bilingual"|"translated"; source_start_ms?:number; source_end_ms?:number}) => projectRequest<HighlightResult>(`/api/projects/${encodeURIComponent(project)}/highlights/${encodeURIComponent(collection)}/outputs/${encodeURIComponent(output)}/items/${encodeURIComponent(instance)}`, {method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(changes)});
-export interface HighlightOutput {hook_transition_ms?:number;hook_transition_kind?:string;output_id: string; title: string; reason: string; revision: number; duration_ms: number; clips: HighlightClip[]}
+export interface HighlightOutput {hook_transition_ms?:number;hook_transition_kind?:string;output_id: string; title: string; social_copy?:string|null; reason: string; revision: number; duration_ms: number; clips: HighlightClip[]}
 export const reorderOutput = (project:string,collection:string,output:string,order:string[],roles:Record<string,string>,hook_transition_ms?:number,hook_transition_kind?:string) => projectRequest<HighlightResult>(`/api/projects/${encodeURIComponent(project)}/highlights/${encodeURIComponent(collection)}/outputs/${encodeURIComponent(output)}/order`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({order,roles,hook_transition_ms,hook_transition_kind})});
 export const getOutputVersions = (project:string,collection:string,output:string) => projectRequest<{revision:number;hook_transition_ms?:number;hook_transition_kind?:string;duration_ms:number;clips:HighlightClip[]}[]>(`/api/projects/${encodeURIComponent(project)}/highlights/${encodeURIComponent(collection)}/outputs/${encodeURIComponent(output)}/versions`);
 export interface HighlightResult {source_duration_ms?:number;model_requests?:ModelReceipt[];collection_id: string; asset_id: string; brief: import("./HighlightForm").HighlightBrief; notes: string[]; outputs: HighlightOutput[]; selected_output_ids?: string[]}
@@ -88,12 +88,15 @@ export const getProject = (projectId: string, signal?: AbortSignal) => projectRe
 export interface RenderDownload {
   media_url: string;
   subtitle_url: string;
+  cover_url?: string;
+  title?: string;
+  social_copy?: string | null;
   duration_ms: number;
 }
 
 export interface OutputExportOptions extends Partial<import("./GeometrySettings").GeometryOptions> {subtitle_mode:"soft"|"burned"; audio_fade_ms:number; denoiser_id:"none"|"afftdn"}
 export const startOutputExportBatch=(project:string,collection:string,outputs:{output_id:string;revision:number}[],options:OutputExportOptions,key:string,overrides:Record<string,Partial<import("./GeometrySettings").GeometryOptions>>={})=>projectRequest<OutputExportTask[]>(`/api/projects/${encodeURIComponent(project)}/tasks/output-export-batch`,{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":key},body:JSON.stringify({outputs:outputs.map(output=>({collection_id:collection,...output,...options,...overrides[output.output_id]}))})});
-export interface OutputExportTask {task_id:string; status:"pending"|"running"|"succeeded"|"failed"|"cancelled"; result:RenderDownload & {revision:number;output_id:string}|null; error:string|null}
+export interface OutputExportTask {resumable?:boolean;task_id:string; status:"pending"|"running"|"succeeded"|"failed"|"cancelled"; result:RenderDownload & {revision:number;output_id:string}|null; error:string|null}
 export const startOutputPreview=(project:string,collection:string,output:string,revision:number,key:string)=>projectRequest<OutputExportTask>(`/api/projects/${encodeURIComponent(project)}/tasks/output-preview`,{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":key},body:JSON.stringify({collection_id:collection,output_id:output,revision})});
 export const recoverOutputPreview=(project:string,collection:string,output:string,revision:number,signal?:AbortSignal)=>projectRequest<OutputExportTask|null>(`/api/projects/${encodeURIComponent(project)}/highlights/${encodeURIComponent(collection)}/outputs/${encodeURIComponent(output)}/preview-task?revision=${revision}`,{signal});
 export const startOutputExport=(project:string,collection:string,output:string,revision:number,options:OutputExportOptions,key:string)=>projectRequest<OutputExportTask>(`/api/projects/${encodeURIComponent(project)}/tasks/output-export`,{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":key},body:JSON.stringify({collection_id:collection,output_id:output,revision,...options})});

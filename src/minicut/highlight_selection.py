@@ -204,7 +204,13 @@ def select_highlights(
                 ),
             )
         plans.append(
-            OutputPlan(output_id, candidate.candidate_id, candidate.title, items)
+            OutputPlan(
+                output_id,
+                candidate.candidate_id,
+                candidate.title,
+                items,
+                social_copy=suggestion.social_copy,
+            )
         )
         durations.append(duration)
         ranges.append(source_ranges)

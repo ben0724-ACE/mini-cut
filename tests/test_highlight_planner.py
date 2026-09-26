@@ -28,6 +28,7 @@ def source() -> tuple[SemanticSegment, ...]:
 def candidate(ids: list[str]) -> dict[str, object]:
     return {
         "title": "解释",
+        "social_copy": "用一段完整原话解释这个话题，帮助你快速理解关键观点。",
         "reason": "完整论述",
         "segment_ids": ids,
         "context_segment_ids": [],
@@ -51,10 +52,30 @@ def test_single_request_multiple_candidates_and_insufficiency() -> None:
     )
     assert len(provider.requests) == 1
     assert len(result.suggestions) == 2
+    assert result.suggestions[0].social_copy.startswith("用一段完整原话")
     assert result.notes == ("只有两个独立话题",)
     payload = json.loads(provider.requests[0].user_prompt)
     assert payload["segments"][0]["duration_ms"] == 30000
     assert "API" not in provider.requests[0].user_prompt
+
+
+def test_discovery_mode_omits_publication_copy_without_an_extra_request() -> None:
+    import asyncio
+
+    row = candidate(["a"])
+    row.pop("social_copy")
+    provider = FakeProvider({"candidates": [row], "notes": []})
+    result = asyncio.run(
+        HighlightPlanner(provider).plan(
+            HighlightBrief.for_preset(HighlightPreset.KNOWLEDGE),
+            source(),
+            publication_metadata=False,
+        )
+    )
+    assert len(provider.requests) == 1
+    assert result.suggestions[0].social_copy is None
+    payload = json.loads(provider.requests[0].user_prompt)
+    assert "social_copy" not in payload["output_example"]["candidates"][0]
 
 
 @pytest.mark.parametrize(

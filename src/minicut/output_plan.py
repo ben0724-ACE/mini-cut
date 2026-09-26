@@ -105,6 +105,7 @@ class OutputPlan:
     revision: int = 1
     hook_transition_ms: int = 300
     hook_transition_kind: str = "fade"
+    social_copy: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -117,6 +118,10 @@ class OutputPlan:
         validate_output_id(self.output_id)
         _text(self.candidate_id)
         _text(self.title)
+        if self.social_copy is not None:
+            _text(self.social_copy)
+            if len(self.social_copy) > 2000:
+                raise ValueError("social copy must not exceed 2000 characters")
         if not self.items:
             raise ValueError("output plan must contain items")
         _unique(tuple(item.instance_id for item in self.items))
@@ -178,6 +183,7 @@ class OutputPlan:
             cast(int, data.get("revision", 1)),
             cast(int, data.get("hook_transition_ms", 300)),
             cast(str, data.get("hook_transition_kind", "fade")),
+            cast(str | None, data.get("social_copy")),
         )
 
 

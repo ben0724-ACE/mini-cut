@@ -17,6 +17,8 @@ import { PlanReview } from "./PlanReview";
 import { ProjectHome } from "./ProjectHome";
 import { AssetLibrary } from "./AssetLibrary";
 import { OutputWorkspace } from "./OutputWorkspace";
+import { ExportResults } from "./ExportResults";
+import { navigateToExportResults } from "./exportNavigation";
 
 export function App() {
   const [search, setSearch] = useState(window.location.search);
@@ -30,6 +32,7 @@ export function App() {
   const assetId = parameters.get("asset") ?? "";
   const collectionId = parameters.get("collection") ?? "";
   const outputId = parameters.get("output") ?? "";
+  const exportEntries=parameters.getAll("output").map((outputId,index)=>({outputId,taskId:parameters.getAll("task")[index]??""})).filter(entry=>entry.outputId&&entry.taskId);
   function navigate(project = "", asset = "") {
     navigateWithDraft(()=>{
     const query = new URLSearchParams();
@@ -48,7 +51,8 @@ export function App() {
       </nav>
       <main id="main-content" tabIndex={-1} className="app-content">
         {!projectId ? <ProjectHome loadProjects={listProjects} createProject={createProject} onSelect={(id) => navigate(id)} />
-          : collectionId && outputId ? <OutputWorkspace key={`${projectId}:${collectionId}:${outputId}`} project={projectId} collection={collectionId} output={outputId} />
+          : parameters.get("view")==="exports"&&collectionId&&exportEntries.length ? <ExportResults project={projectId} collection={collectionId} entries={exportEntries} />
+          : collectionId && outputId ? <OutputWorkspace key={`${projectId}:${collectionId}:${outputId}`} project={projectId} collection={collectionId} output={outputId} onExportSubmitted={entries=>navigateToExportResults(projectId,collectionId,entries)} />
           : !assetId ? <ProjectWorkspace key={projectId} projectId={projectId} onOpen={(asset) => navigate(projectId, asset)} />
           : <Review key={`${projectId}:${assetId}`} projectId={projectId} assetId={assetId} />}
       </main>

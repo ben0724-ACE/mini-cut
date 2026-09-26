@@ -79,12 +79,18 @@ def test_hierarchical_selection_refines_original_sources() -> None:
                     request.model,
                 )
             ids = [s["segment_id"] for s in payload["segments"][:2]]
+            publication = "social_copy" in payload["output_example"]["candidates"][0]
             return TextModelResponse(
                 json.dumps(
                     {
                         "candidates": [
                             {
                                 "title": "topic",
+                                **(
+                                    {"social_copy": "最终候选的发布简介。"}
+                                    if publication
+                                    else {}
+                                ),
                                 "reason": "complete",
                                 "segment_ids": ids,
                                 "context_segment_ids": [],
@@ -112,6 +118,16 @@ def test_hierarchical_selection_refines_original_sources() -> None:
     assert json.loads(calls[-1].user_prompt)["segments"][0]["text"] in [
         s.text for s in sources
     ]
+    discovery = [
+        json.loads(call.user_prompt)
+        for call in calls
+        if json.loads(call.user_prompt).get("prompt_version")
+    ]
+    assert all(
+        "social_copy" not in payload["output_example"]["candidates"][0]
+        for payload in discovery[:-1]
+    )
+    assert "social_copy" in discovery[-1]["output_example"]["candidates"][0]
 
 
 def test_chapter_selection_uses_ranked_candidates_within_budget() -> None:
@@ -148,6 +164,7 @@ def test_chapter_selection_uses_ranked_candidates_within_budget() -> None:
                     json.dumps({"ids": [*ranked, ranked[0]]}), request.model
                 )
             ids = [segment["segment_id"] for segment in payload["segments"][:2]]
+            publication = "social_copy" in payload["output_example"]["candidates"][0]
             if payload["brief"]["count"] == 1:
                 selected_source_ids.extend(
                     segment["segment_id"] for segment in payload["segments"]
@@ -158,6 +175,11 @@ def test_chapter_selection_uses_ranked_candidates_within_budget() -> None:
                         "candidates": [
                             {
                                 "title": "topic",
+                                **(
+                                    {"social_copy": "最终候选的发布简介。"}
+                                    if publication
+                                    else {}
+                                ),
                                 "reason": "complete",
                                 "segment_ids": ids,
                                 "context_segment_ids": [],

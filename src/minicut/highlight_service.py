@@ -133,6 +133,7 @@ def generate_highlights(
                 {
                     "output_id": plan.output_id,
                     "title": plan.title,
+                    "social_copy": plan.social_copy,
                     "reason": candidates[plan.candidate_id].reason,
                     "revision": plan.revision,
                     "hook_transition_ms": plan.hook_transition_ms,
@@ -202,6 +203,8 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
             }
             for plan in collection.plans:
                 row = rows[plan.output_id]
+                row["title"] = plan.title
+                row["social_copy"] = plan.social_copy
                 row["revision"] = plan.revision
                 row["hook_transition_ms"] = plan.hook_transition_ms
                 row["hook_transition_kind"] = plan.hook_transition_kind

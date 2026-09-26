@@ -22,3 +22,9 @@ it("批量统一画幅允许单条覆盖",async()=>{
   await userEvent.click(screen.getByRole("button",{name:"导出已选作品"}));
   expect(startOutputExportBatch).toHaveBeenLastCalledWith("p","c",expect.anything(),expect.objectContaining({aspect_ratio:"16:9"}),expect.any(String),{a:{aspect_ratio:"9:16",resolution:1080,fit:"pad"}});
 });
+it("批量提交后将所有任务交给结果页导航",async()=>{
+  const onSubmitted=vi.fn();
+  render(<BatchExport project="p" collection="c" outputs={[{output_id:"a",title:"A",revision:1},{output_id:"b",title:"B",revision:1}]} selected={["a","b"]} disabled={false} onSubmitted={onSubmitted} />);
+  await userEvent.click(screen.getByRole("button",{name:"导出已选作品"}));
+  expect(onSubmitted).toHaveBeenCalledWith([{outputId:"a",taskId:"a"},{outputId:"b",taskId:"b"}]);
+});

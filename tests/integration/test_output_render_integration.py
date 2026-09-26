@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from minicut.media import MediaAsset
+from minicut.output_export import _extract_cover
 from minicut.output_plan import (
     HighlightCandidate,
     OutputCollection,
@@ -21,6 +22,7 @@ from minicut.render_command import VideoOutputMetadata
 from minicut.semantic_segment import SemanticSegment
 from minicut.subtitle import parse_srt
 from minicut.transcript import Transcript, TranscriptSource, Word
+from minicut.transcription_task import CancellationToken
 
 
 @unittest.skipUnless(
@@ -228,6 +230,29 @@ class RealOutputRenderTest(unittest.TestCase):
             self.assertLessEqual(
                 abs(probe_media(result.output_path).duration_ms - 2400), 40
             )
+            cover = result.output_path.with_name("v0001-cover.jpg")
+            _extract_cover(result.output_path, cover, CancellationToken())
+            self.assertTrue(cover.is_file())
+            cover_frame = subprocess.run(
+                (
+                    "ffmpeg",
+                    "-v",
+                    "error",
+                    "-i",
+                    str(cover),
+                    "-pix_fmt",
+                    "rgb24",
+                    "-f",
+                    "rawvideo",
+                    "-",
+                ),
+                capture_output=True,
+                check=True,
+                timeout=10,
+            ).stdout
+            self.assertEqual(len(cover_frame), 160 * 120 * 3)
+            cover_pixel = cover_frame[(60 * 160 + 80) * 3 : (60 * 160 + 80) * 3 + 3]
+            self.assertEqual(cover_pixel.index(max(cover_pixel)), 2)
             subprocess.run(
                 (
                     "ffmpeg",
