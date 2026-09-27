@@ -13,7 +13,7 @@ it("转场保存失败时显示错误", async () => {
 it("转场时长提交当前片段顺序并支持关闭", async () => {
   const save = vi.fn().mockResolvedValue(undefined);
   render(<OutputOrderControls clips={[{instance_id:"a",segment_id:"s1",role:"body",text:"A",start_ms:0,end_ms:1000}]} busy={false} save={save} transitionMs={500} />);
-  const select = screen.getByRole("combobox", {name: /钩子转场时长/});
+  const select = screen.getByRole("combobox", {name: /开场预告转场时长/});
   expect(select).toHaveValue("500");
   await userEvent.selectOptions(select, "0");
   expect(save).toHaveBeenCalledWith(["a"], {}, 0);

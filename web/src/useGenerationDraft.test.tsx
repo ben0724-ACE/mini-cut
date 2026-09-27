@@ -87,7 +87,7 @@ it("载入旧历史只修改草稿，原始记录保持不变并提示默认补�
   await waitFor(()=>expect(saveGenerationDraft).toHaveBeenCalled());
   expect(screen.getByLabelText("预设提示词")).toHaveValue("旧自定义提示词");
   expect(screen.getByLabelText("剪辑要求")).toHaveValue("旧要求");
-  expect(screen.getByLabelText("钩子目标秒数")).toHaveValue(12.5);
+  expect(screen.getByLabelText("开场预告目标秒数")).toHaveValue(12.5);
   expect(screen.getByLabelText("翻译为")).toHaveValue("en");
   expect(screen.getByText(/默认值不代表当时的配置/)).toBeInTheDocument();
   expect(JSON.stringify(history)).toBe(original);

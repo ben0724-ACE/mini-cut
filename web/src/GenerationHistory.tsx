@@ -3,7 +3,7 @@ import { getGenerationHistory, type GenerationHistoryEntry } from "./api";
 
 const labels:Record<string,string> = {
   preset:"预设", preset_prompt:"预设提示词", instructions:"剪辑要求", count:"数量",
-  min_ms:"最短时长", max_ms:"最长时长", hook_ms:"开场钩子", max_source_overlap:"作品间素材重叠上限",
+  min_ms:"最短时长", max_ms:"最长时长", hook_ms:"开场预告", max_source_overlap:"作品间素材重叠上限",
   body_mode:"正文模式", translation_language:"翻译语言", subtitle_mode:"字幕显示",
 };
 const presets:Record<string,string> = {podcast_highlights:"播客精选",knowledge_digest:"知识精华",opinion_first:"观点先行",clean_speech:"口播清理"};

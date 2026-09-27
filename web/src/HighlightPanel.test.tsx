@@ -79,8 +79,8 @@ it("生成完成、切换作品造成表单重挂载后仍保留项目草稿", a
   expect(screen.getByLabelText("剪辑要求")).toHaveValue("保存的要求");
   await userEvent.selectOptions(screen.getByLabelText("预设"),"opinion_first");
   expect(screen.getByLabelText("预设提示词")).toHaveValue("未使用的预设草稿");
-  await userEvent.click(screen.getByLabelText("原话开场钩子"));
-  expect(screen.getByLabelText("钩子目标秒数")).toHaveValue(12.5);
+  await userEvent.click(screen.getByLabelText("原话开场预告"));
+  expect(screen.getByLabelText("开场预告目标秒数")).toHaveValue(12.5);
   await userEvent.click(screen.getByLabelText("翻译字幕"));
   expect(screen.getByLabelText("翻译为")).toHaveValue("en");
 });

@@ -14,6 +14,12 @@ body { margin: 0; }
 .generation-details ul { margin:6px 0 10px;padding-left:18px;font-size:12px;line-height:1.6;color:#c2cad6; }
 .generation-details li { margin:3px 0;overflow-wrap:anywhere; }
 .generation-details h3 { margin:12px 0 4px;font-size:12px;font-weight:600;color:#e0e6ef; }
+.generation-details h4 { margin:10px 0 4px;font-size:12px;font-weight:600;color:#cbd3df; }
+.opening-preview-section > p { margin:5px 0;color:#aeb7c4; }
+.opening-preview-traces { display:grid;gap:6px;margin:8px 0; }
+.opening-preview-trace { padding:7px 9px;border:1px solid #343c49;border-radius:7px;background:#1b2028; }
+.opening-preview-trace > summary { color:#d7deea;font-size:12px;line-height:1.5; }
+.opening-preview-trace ol { margin:7px 0 2px;padding-left:20px;font-size:12px;line-height:1.6;color:#b8c1ce; }
 .workbench details > p:not([role]),.workbench fieldset > p:not([role]) { color:#a0a9b7;font-size:12px;line-height:1.6;font-weight:400; }
 .workbench { display:grid;grid-template-columns:230px minmax(280px,1fr) 320px;gap:12px;height:calc(100dvh - 220px);min-height:320px; }
 .workbench-sidebar,.workbench-preview,.workbench-tools { min-width:0;background:#1c2026;border:1px solid #303743;border-radius:12px; }

@@ -34,7 +34,7 @@ it("预设提示词可编辑，单条作品不受作品间重叠限制", async (
   expect(submit).toHaveBeenCalledWith(expect.objectContaining({preset_prompt:"选择完整的幽默故事",max_source_overlap:1,count:1}));
 });
 
-it("清理预设说明连续模式限制，观点预设不自动开启钩子", async () => {
+it("清理预设说明连续模式限制，观点预设不自动开启开场预告", async () => {
   const submit=vi.fn();
   render(<HighlightForm ready busy={false} onSubmit={submit} />);
   await userEvent.selectOptions(screen.getByLabelText("预设"), "clean_speech");
@@ -46,16 +46,16 @@ it("清理预设说明连续模式限制，观点预设不自动开启钩子", a
   expect(submit).toHaveBeenCalledWith(expect.objectContaining({body_mode:"compact",hook_ms:null}));
 });
 
-it("自定义钩子时长发送毫秒，关闭后不发送时长", async () => {
+it("自定义开场预告时长发送毫秒，关闭后不发送时长", async () => {
   const submit=vi.fn();
   render(<HighlightForm ready busy={false} onSubmit={submit} />);
-  await userEvent.click(screen.getByLabelText("原话开场钩子"));
-  expect(screen.getByLabelText("钩子目标秒数")).toHaveValue(5);
-  await userEvent.clear(screen.getByLabelText("钩子目标秒数"));
-  await userEvent.type(screen.getByLabelText("钩子目标秒数"), "12.5");
+  await userEvent.click(screen.getByLabelText("原话开场预告"));
+  expect(screen.getByLabelText("开场预告目标秒数")).toHaveValue(5);
+  await userEvent.clear(screen.getByLabelText("开场预告目标秒数"));
+  await userEvent.type(screen.getByLabelText("开场预告目标秒数"), "12.5");
   await userEvent.click(screen.getByRole("button", {name:"生成候选"}));
   expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({hook_ms:12500}));
-  await userEvent.click(screen.getByLabelText("原话开场钩子"));
+  await userEvent.click(screen.getByLabelText("原话开场预告"));
   await userEvent.click(screen.getByRole("button", {name:"生成候选"}));
   expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({hook_ms:null}));
 });
