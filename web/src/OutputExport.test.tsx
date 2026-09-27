@@ -30,3 +30,11 @@ it("提交成功后把作品和任务交给结果页导航",async()=>{
   await userEvent.click(await screen.findByRole("button",{name:"导出当前作品"}));
   expect(onSubmitted).toHaveBeenCalledWith([{outputId:"o",taskId:"export-1"}]);
 });
+it("恢复已有导出后可重新进入结果页",async()=>{
+  const api=await import("./api");
+  vi.mocked(api.recoverOutputExport).mockResolvedValueOnce({task_id:"saved-export",status:"succeeded",result:{revision:1,output_id:"o",media_url:"/saved.mp4",subtitle_url:"/saved.srt",duration_ms:1000},error:null});
+  const onSubmitted=vi.fn();
+  render(<OutputExport project="p" collection="c" output="o" revision={1} onSubmitted={onSubmitted} />);
+  await userEvent.click(await screen.findByRole("button",{name:"查看导出结果页"}));
+  expect(onSubmitted).toHaveBeenCalledWith([{outputId:"o",taskId:"saved-export"}]);
+});

@@ -23,6 +23,8 @@ it("并列展示导出包，并允许失败任务按原设置恢复",async()=>{
   expect(screen.getByRole("link",{name:"下载封面"})).toHaveAttribute("href","/a.jpg");
   expect(screen.getByText("导出时保存的简介")).toBeInTheDocument();
   expect(screen.getByText("旧项目未生成发布文案；不会自动调用 AI 补写。")).toBeInTheDocument();
+  expect(screen.getByRole("button",{name:"返回继续编辑与导出"})).toBeInTheDocument();
+  expect(screen.queryByRole("link",{name:/返回项目/})).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button",{name:"按原设置重新导出"}));
   expect(resumeTask).toHaveBeenCalledWith("p","task-b");
   expect(window.location.search).toContain("task-b-resumed");

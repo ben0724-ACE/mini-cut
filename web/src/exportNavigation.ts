@@ -9,6 +9,11 @@ function locationUrl(project:string,collection:string,entries:ExportLocationEntr
 function notifyNavigation(){window.dispatchEvent(new PopStateEvent("popstate"));}
 
 export function navigateToExportResults(project:string,collection:string,entries:ExportLocationEntry[]) {
+  const current=new URLSearchParams(window.location.search);
+  if(current.get("view")!=="exports"){
+    current.set("panel","export");
+    window.history.replaceState({},"",`${window.location.pathname}?${current}`);
+  }
   window.history.pushState({},"",locationUrl(project,collection,entries));
   notifyNavigation();
 }

@@ -28,3 +28,11 @@ it("批量提交后将所有任务交给结果页导航",async()=>{
   await userEvent.click(screen.getByRole("button",{name:"导出已选作品"}));
   expect(onSubmitted).toHaveBeenCalledWith([{outputId:"a",taskId:"a"},{outputId:"b",taskId:"b"}]);
 });
+it("恢复已有批量导出后可重新进入结果页",async()=>{
+  const api=await import("./api");
+  vi.mocked(api.recoverOutputExport).mockResolvedValueOnce({task_id:"saved-a",status:"succeeded",result:{output_id:"a",revision:1,duration_ms:1000,media_url:"/saved.mp4",subtitle_url:"/saved.srt"},error:null});
+  const onSubmitted=vi.fn();
+  render(<BatchExport project="p" collection="c" outputs={[{output_id:"a",title:"A",revision:1}]} selected={["a"]} disabled={false} onSubmitted={onSubmitted} />);
+  await userEvent.click(await screen.findByRole("button",{name:"查看全部导出结果"}));
+  expect(onSubmitted).toHaveBeenCalledWith([{outputId:"a",taskId:"saved-a"}]);
+});

@@ -23,6 +23,7 @@ export function OutputExport({project,collection,output,revision,sourceUrl,sourc
     {task&&<p role="status">导出状态：{task.status}{task.result&&` · 版本 ${task.result.revision}`}</p>}
     {(error||task?.error)&&<p role="alert">{error||task?.error}</p>}
     {error&&<button onClick={()=>{setError("");setQuery(value=>value+1);}}>恢复导出状态</button>}
+    {task&&onSubmitted&&<button onClick={()=>onSubmitted([{outputId:output,taskId:task.task_id}])}>查看导出结果页</button>}
     {task?.status==="succeeded"&&task.result&&<p><a href={task.result.media_url} download>下载视频</a> · <a href={task.result.subtitle_url} download>下载字幕</a></p>}
   </section>;
 }

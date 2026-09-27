@@ -48,3 +48,15 @@ it("点击候选直接进入编辑，切换作品不回到生成", async () => {
   await waitFor(()=>expect(screen.getByRole("tab",{name:"编辑"})).toHaveAttribute("aria-selected","true"));
   expect(screen.getByRole("region",{name:"候选作品列表"}).scrollTop).toBe(120);
 });
+
+it("从结果页返回时恢复导出面板",async()=>{
+  const result={collection_id:"saved",asset_id:"asset",brief:{preset:"podcast_highlights",count:1,min_ms:60000,max_ms:90000,hook_ms:null,instructions:"",max_source_overlap:0.3},notes:[],selected_output_ids:[],outputs:[{output_id:"video-1",title:"已导出作品",reason:"完整讨论",duration_ms:61000,clips:[],revision:1}]};
+  vi.mocked(getHighlights).mockResolvedValue(result);
+  window.history.replaceState({},"","/?project=demo&panel=export");
+  try {
+    render(<HighlightPanel project="demo" asset={{asset_id:"asset",name:"test.mov",duration_ms:100000,has_transcript:true,has_plan:false}} recover={vi.fn().mockResolvedValue({task_id:"job",status:"succeeded",error:null,result})} />);
+    await waitFor(()=>expect(screen.getByRole("tab",{name:"导出"})).toHaveAttribute("aria-selected","true"));
+  } finally {
+    window.history.replaceState({},"","/");
+  }
+});

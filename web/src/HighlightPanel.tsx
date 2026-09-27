@@ -20,8 +20,9 @@ export function HighlightPanel({project, asset, recover = recoverHighlights, tra
   const collection = task?.result?.collection_id ?? "";
   const [focused,setFocused]=useState("");
   const candidateScrollTop=useRef(0);
-  const [panel,setPanel]=useState<WorkbenchTab>("generate");
-  useEffect(()=>{if(collection&&task?.status==="succeeded")setPanel(task.result?.outputs.length ? "edit" : "generate");},[collection,task?.status]);
+  const requestedPanel=useRef<WorkbenchTab|undefined>(new URLSearchParams(window.location.search).get("panel")==="export"?"export":undefined);
+  const [panel,setPanel]=useState<WorkbenchTab>(requestedPanel.current??"generate");
+  useEffect(()=>{if(collection&&task?.status==="succeeded")setPanel(requestedPanel.current??(task.result?.outputs.length ? "edit" : "generate"));},[collection,task?.status]);
   function focusOutput(output:string){navigateWithDraft(()=>{setFocused(output);setPanel("edit");});}
   useEffect(() => {
     if (task?.status !== "succeeded" || !collection) return;
