@@ -47,7 +47,8 @@ def test_oversized_context_is_explicit_not_truncated() -> None:
         chapter_windows((segment,), 1000)
 
 
-def test_hierarchical_selection_refines_original_sources() -> None:
+@pytest.mark.parametrize("unified", [False, True])
+def test_hierarchical_selection_refines_original_sources(unified: bool) -> None:
     import asyncio
     import json
 
@@ -73,7 +74,10 @@ def test_hierarchical_selection_refines_original_sources() -> None:
         async def generate(self, request: TextModelRequest) -> TextModelResponse:
             calls.append(request)
             payload = json.loads(request.user_prompt)
-            if payload.get("version") == "chapter-selection-v1":
+            if payload.get("version") in {
+                "chapter-selection-v1",
+                "chapter-selection-v2",
+            }:
                 return TextModelResponse(
                     json.dumps({"ids": [payload["candidates"][-1]["id"]]}),
                     request.model,
@@ -106,11 +110,24 @@ def test_hierarchical_selection_refines_original_sources() -> None:
     result, original = asyncio.run(
         plan_chapters(
             HighlightPlanner(Provider()),
-            HighlightBrief.for_preset(HighlightPreset.KNOWLEDGE),
+            HighlightBrief.for_preset(
+                HighlightPreset.KNOWLEDGE,
+                editing_prompt="只选技术解释" if unified else None,
+            ),
             sources,
         )
     )
     assert len(calls) >= 4
+    if unified:
+        assert (
+            json.loads(calls[-2].user_prompt)["brief"]["editing_prompt"]
+            == "只选技术解释"
+        )
+        assert (
+            json.loads(calls[-1].user_prompt)["brief"]["editing_prompt"]
+            == "只选技术解释"
+        )
+        assert "instructions" not in json.loads(calls[-1].user_prompt)["brief"]
     assert set(result.suggestions[0].candidate.segment_ids) <= {
         s.segment_id for s in original
     }

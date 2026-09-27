@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { activeGenerationPrompt, applyGenerationPreset, type GenerationDraft } from "./generationDraft";
+import { activeGenerationPrompt, applyGenerationPreset, normalizeGenerationDraft, type GenerationDraft } from "./generationDraft";
 import type { PresetLibraryState } from "./usePresetLibrary";
 
 const builtins:Record<string,string> = {podcast_highlights:"播客精选",knowledge_digest:"知识精华",opinion_first:"观点先行",clean_speech:"口播清理"};
-export function PresetControls({draft,onChange,disabled,library}:{draft:GenerationDraft;onChange:(draft:GenerationDraft)=>void;disabled:boolean;library:PresetLibraryState}) {
+export function PresetControls({draft:rawDraft,onChange,disabled,library}:{draft:GenerationDraft;onChange:(draft:GenerationDraft)=>void;disabled:boolean;library:PresetLibraryState}) {
+  const draft = normalizeGenerationDraft(rawDraft);
   const [selection, setSelection] = useState(draft.custom_preset_id?`custom:${draft.custom_preset_id}`:draft.preset);
   const [name, setName] = useState("");
   const [notice, setNotice] = useState("");
@@ -25,7 +26,7 @@ export function PresetControls({draft,onChange,disabled,library}:{draft:Generati
   function apply(mode:"workflow"|"prompt") {
     if (!current) return;
     onChange(applyGenerationPreset(draft,current,mode));
-    setNotice(mode === "workflow" ? `已应用“${current.name}”的提示词和全部生成参数` : `已应用“${current.name}”的预设提示词与剪辑要求，保留当前高级参数`);
+    setNotice(mode === "workflow" ? `已应用“${current.name}”的提示词和全部生成参数` : `已应用“${current.name}”的剪辑提示词，保留当前高级参数`);
   }
   async function saveAs() {
     const saved = await library.create(name.trim(),draft);
@@ -58,7 +59,7 @@ export function PresetControls({draft,onChange,disabled,library}:{draft:Generati
         <button type="button" disabled={busy||library.loading} onClick={()=>apply("prompt")}>仅提示词</button>
         <button type="button" disabled={busy||library.loading} onClick={()=>apply("workflow")}>全部参数</button>
       </div>
-      <p className="helper-text">点击按钮直接应用所选预设。“仅提示词”填写预设提示词和剪辑要求，保留当前参数；“全部参数”同时填写全部生成参数。</p>
+      <p className="helper-text">点击按钮直接应用所选预设。“仅提示词”填写剪辑提示词，保留当前参数；“全部参数”同时填写全部生成参数。</p>
     </div>}
     {library.loading&&<p role="status">正在读取自定义预设…</p>}
     {library.loadError&&<p role="alert">{library.loadError}<button type="button" disabled={busy} onClick={library.refresh}>重试读取预设库</button></p>}

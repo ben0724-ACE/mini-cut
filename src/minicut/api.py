@@ -174,6 +174,7 @@ class HighlightTaskBody(BaseModel):
     hook_ms: int | None = Field(default=None, ge=1000, le=60000)
     instructions: str = Field(default="", max_length=12000)
     preset_prompt: str | None = Field(default=None, min_length=1, max_length=12000)
+    editing_prompt: str | None = Field(default=None, min_length=1, max_length=25000)
     max_source_overlap: float = Field(default=0.3, ge=0, le=1)
 
     def brief(self) -> HighlightBrief:
@@ -1289,7 +1290,21 @@ def create_app(
             "asset_id",
             "custom_preset_id",
             "custom_preset_name",
+            "editing_prompt",
         }
+
+        def missing_fields(brief: dict[str, object]) -> list[str]:
+            expected = fields
+            if brief.get("editing_prompt") is not None:
+                expected = (fields - {"preset_prompt", "instructions"}) | {
+                    "editing_prompt"
+                }
+            return sorted(
+                key
+                for key in expected
+                if key not in brief or (key == "preset_prompt" and brief[key] is None)
+            )
+
         entries: list[tuple[int, dict[str, object]]] = []
         collections: set[str] = set()
 
@@ -1311,7 +1326,11 @@ def create_app(
                 dict[str, object],
                 job.get("generation_config")
                 or result.get("brief")
-                or {key: value for key, value in request.items() if key in fields},
+                or {
+                    key: value
+                    for key, value in request.items()
+                    if key in fields or key == "editing_prompt" and value is not None
+                },
             )
             collection = result.get("collection_id") or f"highlights-{job['task_id']}"
             collections.add(str(collection))
@@ -1329,12 +1348,7 @@ def create_app(
                         "brief": brief,
                         "custom_preset_id": request.get("custom_preset_id"),
                         "custom_preset_name": request.get("custom_preset_name"),
-                        "missing_fields": sorted(
-                            key
-                            for key in fields
-                            if key not in brief
-                            or (key == "preset_prompt" and brief[key] is None)
-                        ),
+                        "missing_fields": missing_fields(brief),
                     },
                 )
             )
@@ -1362,12 +1376,7 @@ def create_app(
                         "brief": brief,
                         "custom_preset_id": result.get("custom_preset_id"),
                         "custom_preset_name": result.get("custom_preset_name"),
-                        "missing_fields": sorted(
-                            key
-                            for key in fields
-                            if key not in brief
-                            or (key == "preset_prompt" and brief[key] is None)
-                        ),
+                        "missing_fields": missing_fields(brief),
                     },
                 )
             )
@@ -1460,7 +1469,7 @@ def create_app(
 
         request_data = body.model_dump(mode="json")
         # Retain old idempotency requests when no custom template was used.
-        for field in ("custom_preset_id", "custom_preset_name"):
+        for field in ("custom_preset_id", "custom_preset_name", "editing_prompt"):
             if request_data[field] is None:
                 request_data.pop(field)
         return submit_task(

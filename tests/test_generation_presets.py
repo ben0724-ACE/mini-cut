@@ -66,7 +66,9 @@ def test_library_is_shared_persistent_and_independent_of_project_deletion(
             assert response.status_code == 201
             saved = response.json()
             assert saved["name"] == "访谈短片"
-            assert saved["draft"]["prompts"] == {"knowledge_digest": "完整的知识解释"}
+            assert saved["draft"]["prompts"] == {
+                "knowledge_digest": "完整的知识解释\n\n保留例子和限定条件"
+            }
             assert saved["draft"]["hook_seconds"] == 12.5
             # Applying the template makes an independent project draft.
             for project in ("one", "two"):
@@ -136,7 +138,11 @@ def test_create_rename_update_validate_without_partial_changes(tmp_path: Path) -
             assert (
                 await client.put(item, json={"name": "No", "draft": invalid})
             ).status_code == 422
-            empty_prompt = {**configuration(), "prompts": {"knowledge_digest": " "}}
+            empty_prompt = {
+                **configuration(),
+                "prompts": {"knowledge_digest": " "},
+                "instructions": "",
+            }
             assert (
                 await client.post(path, json={"name": "Empty", "draft": empty_prompt})
             ).status_code == 422
@@ -151,7 +157,7 @@ def test_create_rename_update_validate_without_partial_changes(tmp_path: Path) -
                 await client.put(item, json={"name": "Renamed", "draft": updated})
             ).json()
             assert latest["draft"]["prompts"] == {
-                "knowledge_digest": "修改后的活动提示词"
+                "knowledge_digest": "修改后的活动提示词\n\n保留例子和限定条件"
             }
             assert latest["draft"]["custom_preset_id"] is None
             assert latest["draft"]["custom_prompt"] is None

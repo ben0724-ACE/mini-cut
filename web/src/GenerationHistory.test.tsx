@@ -13,6 +13,7 @@ it("历史显示原文、未知字段和失败原因，载入不触发生成",as
   expect(getGenerationHistory).not.toHaveBeenCalled();
   await userEvent.click(screen.getByText("生成历史"));
   expect(await screen.findByLabelText("历史剪辑要求")).toHaveValue("原始要求");
+  expect(screen.getByLabelText("历史剪辑提示词")).toHaveValue("原始要求");
   expect(screen.getByLabelText("历史预设提示词")).toHaveValue("未记录，无法确认当时使用的预设提示词");
   expect(screen.getByText("当次错误：额度不足")).toBeInTheDocument();
   expect(screen.getByRole("option",{name:/时间未记录/})).toBeInTheDocument();
@@ -20,6 +21,19 @@ it("历史显示原文、未知字段和失败原因，载入不触发生成",as
   expect(load).toHaveBeenCalledWith(old);
   await userEvent.selectOptions(screen.getByLabelText("历史范围"),"project");
   await waitFor(()=>expect(getGenerationHistory).toHaveBeenLastCalledWith("demo",undefined,expect.any(AbortSignal)));
+});
+
+it("新历史只展示当次统一提示词，不出现重复字段或缺失提醒",async()=>{
+  const entry:GenerationHistoryEntry={...old,brief:{preset:"podcast_highlights",editing_prompt:"完整故事\n\n保留反方观点"},missing_fields:[]};
+  vi.mocked(getGenerationHistory).mockResolvedValue([entry]);
+  const load=vi.fn();
+  render(<GenerationHistory project="new" asset="one" refreshKey="new" disabled={false} onLoad={load} />);
+  await userEvent.click(screen.getByText("生成历史"));
+  expect(await screen.findByLabelText("历史剪辑提示词")).toHaveValue("完整故事\n\n保留反方观点");
+  expect(screen.queryByLabelText("历史预设提示词")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("历史剪辑要求")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button",{name:"载入为草稿"}));
+  expect(load).toHaveBeenCalledWith(entry);
 });
 
 it("生成状态变化后刷新历史，失败可重试而非展示旧范围记录",async()=>{

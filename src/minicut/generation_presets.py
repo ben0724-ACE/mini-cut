@@ -32,7 +32,7 @@ class GenerationPresetBody(PresetRenameBody):
             raise ValueError("数量需为 1–10 的整数")
         prompt = self.active_prompt()
         if not prompt.strip():
-            raise ValueError("保存预设前请填写预设提示词")
+            raise ValueError("保存预设前请填写剪辑提示词")
         # Validate active settings; disabled controls retain their draft values.
         limited = (
             draft.limit_duration and draft.preset is not HighlightPreset.CLEAN_SPEECH
@@ -43,8 +43,7 @@ class GenerationPresetBody(PresetRenameBody):
             min_ms=round(draft.min_seconds * 1000) if limited else None,
             max_ms=round(draft.max_seconds * 1000) if limited else None,
             hook_ms=round(draft.hook_seconds * 1000) if draft.hook_enabled else None,
-            instructions=draft.instructions,
-            preset_prompt=prompt,
+            editing_prompt=prompt,
             max_source_overlap=1 if draft.count == 1 else draft.overlap_percent / 100,
             body_mode=draft.body_mode,
             translation_language=(
@@ -56,8 +55,10 @@ class GenerationPresetBody(PresetRenameBody):
 
     def active_prompt(self) -> str:
         if self.draft.custom_preset_id and self.draft.custom_prompt is not None:
-            return self.draft.custom_prompt
-        return self.draft.prompts.get(self.draft.preset, "")
+            prompt = self.draft.custom_prompt
+        else:
+            prompt = self.draft.prompts.get(self.draft.preset, "")
+        return "\n\n".join(part for part in (prompt, self.draft.instructions) if part)
 
     def template_json(self) -> str:
         # Save the active prompt, not unrelated per-preset drafts or template links.
@@ -67,6 +68,7 @@ class GenerationPresetBody(PresetRenameBody):
                 "custom_preset_id": None,
                 "custom_preset_name": None,
                 "custom_prompt": None,
+                "instructions": "",
             }
         )
         return template.model_dump_json()

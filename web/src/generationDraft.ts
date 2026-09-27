@@ -36,8 +36,7 @@ export function defaultGenerationDraft(): GenerationDraft {
 export function draftFromBrief(brief: Partial<HighlightBrief>): GenerationDraft {
   const draft = defaultGenerationDraft();
   if (brief.preset && brief.preset in presetDefaults) draft.preset = brief.preset;
-  if (brief.preset_prompt != null) draft.prompts[draft.preset] = brief.preset_prompt;
-  if (brief.instructions != null) draft.instructions = brief.instructions;
+  draft.prompts[draft.preset] = brief.editing_prompt ?? combineEditingPrompt(brief.preset_prompt ?? draft.prompts[draft.preset], brief.instructions ?? "");
   if (brief.count != null) draft.count = brief.count;
   if (brief.min_ms != null) draft.min_seconds = brief.min_ms / 1000;
   if (brief.max_ms != null) draft.max_seconds = brief.max_ms / 1000;
@@ -51,26 +50,43 @@ export function draftFromBrief(brief: Partial<HighlightBrief>): GenerationDraft 
 }
 
 export function applyGenerationPreset(current:GenerationDraft, preset:GenerationPreset, mode:"workflow"|"prompt"):GenerationDraft {
-  const template = preset.draft;
+  const template = normalizeGenerationDraft(preset.draft);
+  const normalized = normalizeGenerationDraft(current);
   return {
-    ...current,
-    ...(mode === "workflow" ? template : {instructions:template.instructions}),
-    prompts:{...current.prompts},
-    custom_prompt:template.prompts[template.preset],
+    ...normalized,
+    ...(mode === "workflow" ? template : {}),
+    prompts:{...normalized.prompts},
+    custom_prompt:activeGenerationPrompt(template),
     custom_preset_id:preset.preset_id,
     custom_preset_name:preset.name,
   };
 }
 
 export function activeGenerationPrompt(draft:GenerationDraft):string {
-  return draft.custom_preset_id ? draft.custom_prompt??draft.prompts[draft.preset] : draft.prompts[draft.preset];
+  const prompt = draft.custom_preset_id ? draft.custom_prompt??draft.prompts[draft.preset] : draft.prompts[draft.preset];
+  return combineEditingPrompt(prompt ?? "", draft.instructions);
+}
+
+export function combineEditingPrompt(prompt:string, instructions:string):string {
+  return [prompt,instructions].filter(part=>part.length>0).join("\n\n");
+}
+
+// Legacy requirements were shared by all built-ins. Carry that text into each
+// cached prompt once, without altering any submitted history or library record.
+export function normalizeGenerationDraft(draft:GenerationDraft):GenerationDraft {
+  if (!draft.instructions) return draft;
+  return {...draft,instructions:"",
+    prompts:Object.fromEntries(Object.entries(draft.prompts).map(([key,prompt])=>[key,combineEditingPrompt(prompt,draft.instructions)])),
+    custom_prompt:draft.custom_prompt == null ? draft.custom_prompt : combineEditingPrompt(draft.custom_prompt,draft.instructions),
+  };
 }
 
 export function generationValidationError(draft:GenerationDraft):string {
   if (!Number.isInteger(draft.count) || draft.count < 1 || draft.count > 10 ||
       (draft.preset !== "clean_speech" && draft.limit_duration && (!Number.isFinite(draft.min_seconds) || !Number.isFinite(draft.max_seconds) || draft.min_seconds <= 0 || draft.max_seconds < draft.min_seconds)) ||
       (draft.count !== 1 && (!Number.isFinite(draft.overlap_percent) || draft.overlap_percent < 0 || draft.overlap_percent > 100))) return "请检查数量（1–10）与时长范围、重复比例";
-  if (!activeGenerationPrompt(draft)?.trim()) return "请填写预设提示词";
+  if (!activeGenerationPrompt(draft)?.trim()) return "请填写剪辑提示词";
+  if (activeGenerationPrompt(draft).length > 25000) return "剪辑提示词不能超过 25000 字符";
   if (draft.hook_enabled && (!Number.isFinite(draft.hook_seconds) || draft.hook_seconds < 1 || draft.hook_seconds > 60)) return "开场预告目标时长需在 1–60 秒之间";
   return "";
 }
@@ -79,5 +95,5 @@ export function draftFromHistory(entry:GenerationHistoryEntry):GenerationDraft {
   const draft = draftFromBrief(entry.brief);
   if (!entry.custom_preset_id) return draft;
   return {...draft,custom_preset_id:entry.custom_preset_id,custom_preset_name:entry.custom_preset_name??null,
-    custom_prompt:entry.brief.preset_prompt??draft.prompts[draft.preset],prompts:defaultGenerationDraft().prompts};
+    custom_prompt:draft.prompts[draft.preset],prompts:defaultGenerationDraft().prompts};
 }

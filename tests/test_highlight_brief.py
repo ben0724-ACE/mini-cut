@@ -63,3 +63,32 @@ def test_custom_hook_limits_match_api(duration: int) -> None:
         HighlightTaskBody(
             asset_id="a", preset=HighlightPreset.PODCAST, count=1, hook_ms=duration
         )
+
+
+def test_unified_prompt_has_no_injected_builtin_or_duplicate_legacy_fields() -> None:
+    brief = HighlightBrief.for_preset(
+        HighlightPreset.PODCAST, editing_prompt="保留完整的反方观点"
+    )
+    snapshot = brief.to_dict()
+    assert snapshot["editing_prompt"] == "保留完整的反方观点"
+    assert "preset_prompt" not in snapshot and "instructions" not in snapshot
+    assert (
+        "editing_prompt"
+        not in HighlightBrief.for_preset(HighlightPreset.PODCAST).to_dict()
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"editing_prompt": " "},
+        {"editing_prompt": "x" * 25001},
+        {"editing_prompt": "统一要求", "instructions": "另一个要求"},
+        {"editing_prompt": "统一要求", "preset_prompt": "另一个预设"},
+    ],
+)
+def test_ambiguous_or_invalid_unified_prompts_are_rejected(
+    kwargs: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError):
+        HighlightBrief.for_preset(HighlightPreset.PODCAST, **kwargs)

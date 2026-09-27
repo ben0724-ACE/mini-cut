@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { getGenerationHistory, type GenerationHistoryEntry } from "./api";
+import { combineEditingPrompt } from "./generationDraft";
 
 const labels:Record<string,string> = {
-  preset:"预设", preset_prompt:"预设提示词", instructions:"剪辑要求", count:"数量",
+  preset:"预设", editing_prompt:"剪辑提示词", preset_prompt:"预设提示词", instructions:"剪辑要求", count:"数量",
   min_ms:"最短时长", max_ms:"最长时长", hook_ms:"开场预告", max_source_overlap:"作品间素材重叠上限",
   body_mode:"正文模式", translation_language:"翻译语言", subtitle_mode:"字幕显示",
 };
@@ -50,9 +51,13 @@ export function GenerationHistory({project,asset,refreshKey,disabled,onLoad}:{pr
         <p className="helper-text">素材：{entry.asset_name??entry.asset_id} · {statuses[entry.status]??entry.status}</p>
         {entry.custom_preset_name&&<p className="helper-text">当次自定义预设：{entry.custom_preset_name}</p>}
         {entry.error&&<p>当次错误：{entry.error}</p>}
-        <label>历史预设提示词<textarea aria-label="历史预设提示词" readOnly value={entry.brief.preset_prompt??"未记录，无法确认当时使用的预设提示词"} /></label>
-        <label>历史剪辑要求<textarea aria-label="历史剪辑要求" readOnly value={entry.brief.instructions??"未记录"} /></label>
-        <dl className="generation-history-parameters">{Object.entries(labels).filter(([key])=>key!=="preset_prompt"&&key!=="instructions").map(([key,label])=>{
+        <label>历史剪辑提示词<textarea aria-label="历史剪辑提示词" readOnly value={entry.brief.editing_prompt??(combineEditingPrompt(entry.brief.preset_prompt??"",entry.brief.instructions??"")||"未记录")} /></label>
+        {entry.brief.editing_prompt==null&&<details><summary>旧记录的原始提示词字段</summary>
+          <p className="helper-text">上方合并展示原文，旧任务当时仍按分开的字段提交。缺失内容不会用当前预设补填。</p>
+          <label>历史预设提示词<textarea aria-label="历史预设提示词" readOnly value={entry.brief.preset_prompt??"未记录，无法确认当时使用的预设提示词"} /></label>
+          <label>历史剪辑要求<textarea aria-label="历史剪辑要求" readOnly value={entry.brief.instructions??"未记录"} /></label>
+        </details>}
+        <dl className="generation-history-parameters">{Object.entries(labels).filter(([key])=>!["preset_prompt","instructions","editing_prompt"].includes(key)).map(([key,label])=>{
           const value=entry.brief[key as keyof typeof entry.brief];
           return <div key={key}><dt>{label}</dt><dd>{entry.missing_fields.includes(key)||value===undefined?"未记录":display(key,value)}</dd></div>;
         })}</dl>

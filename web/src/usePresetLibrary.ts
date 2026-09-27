@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createGenerationPreset, deleteGenerationPreset, listGenerationPresets, renameGenerationPreset, updateGenerationPreset, type GenerationPreset } from "./api";
-import { generationValidationError, type GenerationDraft } from "./generationDraft";
+import { generationValidationError, normalizeGenerationDraft, type GenerationDraft } from "./generationDraft";
 
 export function usePresetLibrary() {
   const [presets, setPresets] = useState<GenerationPreset[]>([]);
@@ -31,7 +31,8 @@ export function usePresetLibrary() {
   function upsert(preset:GenerationPreset) {
     setPresets(current=>[...current.filter(item=>item.preset_id!==preset.preset_id),preset].sort((a,b)=>a.name.localeCompare(b.name)));
   }
-  function save(name:string,draft:GenerationDraft,id?:string) {
+  function save(name:string,rawDraft:GenerationDraft,id?:string) {
+    const draft = normalizeGenerationDraft(rawDraft);
     const validation = generationValidationError(draft);
     if (validation) {setError(validation);return Promise.resolve(undefined);}
     return mutate(()=>id?updateGenerationPreset(id,name,draft):createGenerationPreset(name,draft),upsert);

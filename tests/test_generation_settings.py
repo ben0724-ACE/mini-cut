@@ -94,7 +94,7 @@ def test_drafts_survive_restart_and_remain_asset_and_project_specific(
             assert (
                 await client.put(
                     path,
-                    json={**draft(""), "prompts": {"podcast_highlights": "x" * 12001}},
+                    json={**draft(""), "prompts": {"podcast_highlights": "x" * 25001}},
                 )
             ).status_code == 422
             assert (await client.get(path)).json()["draft"] == draft("")
@@ -168,6 +168,77 @@ def test_history_snapshots_include_failures_cancellation_and_resolved_defaults(
             )
             assert len((await client.get(history_path)).json()) == 3
             assert len(calls) == 3
+
+    asyncio.run(run())
+
+
+def test_unified_prompt_snapshot_survives_resume_without_filling_a_builtin(
+    tmp_path: Path,
+) -> None:
+    setup_project(tmp_path)
+    calls: list[HighlightBrief] = []
+
+    def generate(
+        project: Path, asset: str, collection: str, brief: HighlightBrief
+    ) -> dict[str, object]:
+        calls.append(brief)
+        if len(calls) == 1:
+            raise UserInputError("模拟可恢复失败")
+        return {
+            "collection_id": collection,
+            "asset_id": asset,
+            "brief": brief.to_dict(),
+            "outputs": [],
+        }
+
+    async def run() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(
+                app=create_app(tmp_path, highlights=generate)
+            ),
+            base_url="http://test",
+        ) as client:
+            body = {
+                "asset_id": "one",
+                "preset": "podcast_highlights",
+                "count": 2,
+                "editing_prompt": "完整选材方向\n\n保留反方论述",
+                "custom_preset_name": "我的流程",
+            }
+            task_path = "/api/projects/demo/tasks/highlights"
+            assert (
+                await client.post(
+                    task_path,
+                    json={**body, "instructions": "额外旧字段"},
+                    headers={"Idempotency-Key": "ambiguous"},
+                )
+            ).status_code == 422
+            assert (
+                await client.post(
+                    task_path, json=body, headers={"Idempotency-Key": "unified"}
+                )
+            ).status_code == 202
+            history_path = "/api/projects/demo/generation-history"
+            old = (await client.get(history_path)).json()[0]
+            assert old["status"] == "failed" and not old["missing_fields"]
+            assert old["brief"]["editing_prompt"] == body["editing_prompt"]
+            assert (
+                "preset_prompt" not in old["brief"]
+                and "instructions" not in old["brief"]
+            )
+            assert old["custom_preset_name"] == "我的流程"
+            await client.put(
+                "/api/projects/demo/assets/one/generation-draft",
+                json=draft("完全不同的草稿"),
+            )
+            response = await client.post("/api/projects/demo/tasks/unified/resume")
+            assert response.status_code == 202
+            assert calls[0].to_dict() == calls[1].to_dict() == old["brief"]
+            entries = (await client.get(history_path)).json()
+            assert (
+                next(entry for entry in entries if entry["history_id"] == "unified")
+                == old
+            )
 
     asyncio.run(run())
 

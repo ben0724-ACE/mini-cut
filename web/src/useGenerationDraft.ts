@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getGenerationDraft, saveGenerationDraft, type GenerationHistoryEntry } from "./api";
-import { defaultGenerationDraft, draftFromHistory, type GenerationDraft } from "./generationDraft";
+import { defaultGenerationDraft, draftFromHistory, normalizeGenerationDraft, type GenerationDraft } from "./generationDraft";
 
 interface SaveSession {
   pending: GenerationDraft | null;
@@ -91,7 +91,8 @@ export function useGenerationDraft(project:string, asset:string) {
       if (controller.signal.aborted) return;
       const pending = session.pending ?? pendingDraft(key);
       const defaults = defaultGenerationDraft();
-      const next = pending ?? (response.draft ? {...defaults,...response.draft,prompts:{...defaults.prompts,...response.draft.prompts}} : response.history ? draftFromHistory(response.history) : defaults);
+      const restored = pending ?? (response.draft ? {...defaults,...response.draft,prompts:{...defaults.prompts,...response.draft.prompts}} : response.history ? draftFromHistory(response.history) : defaults);
+      const next = normalizeGenerationDraft(restored);
       setDraft(next); setLoaded(true);
       const messages = {
         asset:"已恢复当前素材的草稿", project:"已沿用项目最近保存的配置，各素材草稿分别保存",
@@ -100,7 +101,7 @@ export function useGenerationDraft(project:string, asset:string) {
       };
       setNotice(pending ? "已恢复尚未同步的本机草稿，正在保存到项目" : messages[response.source]);
       if (!pending && response.history?.missing_fields.length) setNotice(`${messages[response.source]}；旧记录缺失的字段已用当前默认设置补齐，请核对。这些默认值不代表当时的配置。`);
-      if (pending || response.source !== "asset") queue(project, asset, next);
+      if (pending || response.source !== "asset" || next !== restored) queue(project, asset, next);
     }).catch(reason=>{if (!controller.signal.aborted) setLoadError(reason instanceof Error ? reason.message : "无法恢复生成草稿");});
     return ()=>controller.abort();
   }, [project, asset, key, retry, session]);

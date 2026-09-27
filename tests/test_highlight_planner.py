@@ -36,6 +36,41 @@ def candidate(ids: list[str]) -> dict[str, object]:
     }
 
 
+def test_unified_prompt_is_sent_once_as_user_content_while_legacy_calls_stay_compatible() -> (
+    None
+):
+    import asyncio
+
+    from minicut.highlight_planner import SYSTEM_PROMPT, UNIFIED_PROMPT_VERSION
+
+    provider = FakeProvider({"candidates": [candidate(["a", "b"])], "notes": []})
+    planner = HighlightPlanner(provider)
+    text = "选择完整故事；保留反方观点和限定条件"
+    result = asyncio.run(
+        planner.plan(
+            HighlightBrief.for_preset(HighlightPreset.PODCAST, editing_prompt=text),
+            source(),
+        )
+    )
+    request = provider.requests[0]
+    assert text not in request.system_prompt
+    assert request.user_prompt.count(text) == 1
+    assert "同一等级" in request.system_prompt
+    assert "用户具体要求优先于预设" not in request.system_prompt
+    assert "brief.preset_prompt" not in request.system_prompt
+    brief = json.loads(request.user_prompt)["brief"]
+    assert brief["editing_prompt"] == text
+    assert "preset_prompt" not in brief and "instructions" not in brief
+    assert result.prompt_version == UNIFIED_PROMPT_VERSION
+    asyncio.run(
+        planner.plan(HighlightBrief.for_preset(HighlightPreset.PODCAST), source())
+    )
+    legacy = provider.requests[1]
+    assert legacy.system_prompt == SYSTEM_PROMPT
+    assert json.loads(legacy.user_prompt)["prompt_version"] == "highlights-v10"
+    assert "editing_prompt" not in json.loads(legacy.user_prompt)["brief"]
+
+
 def test_single_request_multiple_candidates_and_insufficiency() -> None:
     import asyncio
 
@@ -52,6 +87,7 @@ def test_single_request_multiple_candidates_and_insufficiency() -> None:
     )
     assert len(provider.requests) == 1
     assert len(result.suggestions) == 2
+    assert result.suggestions[0].social_copy is not None
     assert result.suggestions[0].social_copy.startswith("用一段完整原话")
     assert result.notes == ("只有两个独立话题",)
     payload = json.loads(provider.requests[0].user_prompt)

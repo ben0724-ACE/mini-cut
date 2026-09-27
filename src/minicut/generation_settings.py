@@ -18,8 +18,8 @@ class GenerationDraft(BaseModel):
     preset: HighlightPreset
     custom_preset_id: str | None = Field(default=None, max_length=80)
     custom_preset_name: str | None = Field(default=None, max_length=80)
-    custom_prompt: str | None = Field(default=None, max_length=12000)
-    prompts: dict[HighlightPreset, Annotated[str, Field(max_length=12000)]] = Field(
+    custom_prompt: str | None = Field(default=None, max_length=25000)
+    prompts: dict[HighlightPreset, Annotated[str, Field(max_length=25000)]] = Field(
         max_length=4
     )
     instructions: str = Field(max_length=12000)

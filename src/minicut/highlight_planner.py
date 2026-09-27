@@ -39,6 +39,15 @@ notes 最多三条，只写候选不足、素材缺陷或钩子缺失的具体�
 不虚构事实、人物身份、数据或视频中未表达的结论，不添加平台专属格式或标签，不把选材理由写成发布文案。
 """
 
+UNIFIED_PROMPT_VERSION = "highlights-v11"
+UNIFIED_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
+    "按 brief 预设及用户要求\n选择不同且能独立理解的精彩论述。正文模式和钩子开关是硬约束，优先于所有文字要求；在这些约束内用户具体要求优先于预设。",
+    "按 brief.editing_prompt 中统一的剪辑提示词选择不同且能独立理解的精彩论述。提示词内的选材方向、受众和具体要求为同一等级；不要根据出现位置赋予不同优先级，冲突或无法满足时在 notes 简要说明。正文模式和钩子开关是硬约束，优先于所有文字要求。",
+).replace(
+    "选材方向以 brief.preset_prompt 中可编辑的预设提示词为准，brief.instructions 为具体要求。",
+    "所有可编辑的选材要求仅来自 brief.editing_prompt。",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class HighlightSuggestion:
@@ -88,6 +97,14 @@ class HighlightPlanner:
         publication_metadata: bool = True,
     ) -> HighlightProposal:
         validate_segment_context_dependencies(segments)
+        prompt_version = (
+            UNIFIED_PROMPT_VERSION
+            if brief.editing_prompt is not None
+            else PROMPT_VERSION
+        )
+        system_prompt = (
+            UNIFIED_SYSTEM_PROMPT if brief.editing_prompt is not None else SYSTEM_PROMPT
+        )
         if not segments:
             raise ValueError("transcribed segments are required")
         compact = any(len(s.segment_id) > 64 for s in segments)
@@ -106,7 +123,7 @@ class HighlightPlanner:
         if publication_metadata:
             example["social_copy"] = "忠于原话、可直接发布的中文简介文案。"
         payload = {
-            "prompt_version": PROMPT_VERSION,
+            "prompt_version": prompt_version,
             "segments": [
                 {
                     "segment_id": aliases[s.segment_id],
@@ -128,7 +145,9 @@ class HighlightPlanner:
                 "body_mode": "连续正文：保留起止之间全部音视频及停顿、重复、重说；口播清理也不得跳切"
                 if brief.body_mode == "continuous"
                 else "精简拼接：允许省略完整源片段，保留必要背景；所选正文仍按源顺序播放",
-                "preset_scope": "预设只控制选材方向；正文模式与钩子开关优先于预设及自定义文字，不自动更改参数",
+                "preset_scope": "选材只依据统一剪辑提示词；preset 为基础配置类型，不附加隐藏选材要求。正文模式与钩子开关优先于提示词，不自动更改参数"
+                if brief.editing_prompt is not None
+                else "预设只控制选材方向；正文模式与钩子开关优先于预设及自定义文字，不自动更改参数",
                 "hook": "所有 hook_segment_ids 必须为 []；不得前置钩子"
                 if brief.hook_ms is None
                 else f"完整原话钩子目标 {brief.hook_ms} ms，允许范围 {brief.hook_bounds_ms} ms，找不到合适内容则省略并解释",
@@ -145,7 +164,7 @@ class HighlightPlanner:
         response = await asyncio.wait_for(
             self.provider.generate(
                 TextModelRequest(
-                    self.model, SYSTEM_PROMPT, json.dumps(payload, ensure_ascii=False)
+                    self.model, system_prompt, json.dumps(payload, ensure_ascii=False)
                 )
             ),
             self.timeout,
@@ -163,7 +182,7 @@ class HighlightPlanner:
                 self.provider.generate(
                     TextModelRequest(
                         self.model,
-                        SYSTEM_PROMPT,
+                        system_prompt,
                         json.dumps(payload, ensure_ascii=False),
                     )
                 ),
@@ -253,5 +272,8 @@ class HighlightPlanner:
                 "所有候选均引用了重复或未知素材 ID（duplicate or unknown source IDs），无法安全生成，请调整要求后重新生成。"
             )
         return HighlightProposal(
-            tuple(suggestions), tuple(cast(list[str], notes)), response.model
+            tuple(suggestions),
+            tuple(cast(list[str], notes)),
+            response.model,
+            prompt_version,
         )

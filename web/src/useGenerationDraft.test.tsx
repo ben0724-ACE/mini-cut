@@ -23,15 +23,15 @@ it("快速输入顺序保存最新值，旧响应不会覆盖草稿",async()=>{
   vi.mocked(saveGenerationDraft).mockReset().mockReturnValueOnce(first.promise).mockImplementation(async(_project,_asset,draft)=>({source:"asset",draft}));
   render(<Harness project="queue" />);
   await screen.findByText("已保存");
-  fireEvent.change(screen.getByLabelText("剪辑要求"),{target:{value:"第一版"}});
-  fireEvent.change(screen.getByLabelText("剪辑要求"),{target:{value:"第二版"}});
-  fireEvent.change(screen.getByLabelText("剪辑要求"),{target:{value:"最终版"}});
+  fireEvent.change(screen.getByLabelText("剪辑提示词"),{target:{value:"第一版"}});
+  fireEvent.change(screen.getByLabelText("剪辑提示词"),{target:{value:"第二版"}});
+  fireEvent.change(screen.getByLabelText("剪辑提示词"),{target:{value:"最终版"}});
   expect(saveGenerationDraft).toHaveBeenCalledTimes(1);
   first.resolve({source:"asset",draft});
   await screen.findByText("已保存");
   expect(saveGenerationDraft).toHaveBeenCalledTimes(2);
-  expect(saveGenerationDraft).toHaveBeenLastCalledWith("queue","one",expect.objectContaining({instructions:"最终版"}));
-  expect(screen.getByLabelText("剪辑要求")).toHaveValue("最终版");
+  expect(saveGenerationDraft).toHaveBeenLastCalledWith("queue","one",expect.objectContaining({instructions:"",prompts:expect.objectContaining({podcast_highlights:"最终版"})}));
+  expect(screen.getByLabelText("剪辑提示词")).toHaveValue("最终版");
 });
 
 it("保存失败后的页面重开恢复本机未同步文本，重试保存到项目",async()=>{
@@ -40,21 +40,19 @@ it("保存失败后的页面重开恢复本机未同步文本，重试保存到�
   vi.mocked(saveGenerationDraft).mockReset().mockRejectedValue(new Error("磁盘暂不可写"));
   const first=render(<Harness project="retry" />);
   await screen.findByText("已保存");
-  fireEvent.change(screen.getByLabelText("预设提示词"),{target:{value:"新提示词"}});
-  fireEvent.change(screen.getByLabelText("剪辑要求"),{target:{value:"不能丢的要求"}});
+  fireEvent.change(screen.getByLabelText("剪辑提示词"),{target:{value:"新提示词\n\n不能丢的要求"}});
   await screen.findByText("保存失败");
   first.unmount();
   vi.mocked(saveGenerationDraft).mockImplementation(async(_project,_asset,draft)=>({source:"asset",draft}));
   const reopened=render(<Harness project="retry" />);
   await screen.findByText("已保存");
-  expect(screen.getByLabelText("预设提示词")).toHaveValue("新提示词");
-  expect(screen.getByLabelText("剪辑要求")).toHaveValue("不能丢的要求");
-  expect(saveGenerationDraft).toHaveBeenLastCalledWith("retry","one",expect.objectContaining({instructions:"不能丢的要求"}));
+  expect(screen.getByLabelText("剪辑提示词")).toHaveValue("新提示词\n\n不能丢的要求");
+  expect(saveGenerationDraft).toHaveBeenLastCalledWith("retry","one",expect.objectContaining({instructions:"",prompts:expect.objectContaining({podcast_highlights:"新提示词\n\n不能丢的要求"})}));
   reopened.unmount();
   localStorage.setItem("minicut:generation-draft:reload:one",JSON.stringify({...initial,instructions:"刷新前未同步"}));
   render(<Harness project="reload" />);
   await screen.findByText("已保存");
-  expect(screen.getByLabelText("剪辑要求")).toHaveValue("刷新前未同步");
+  expect(screen.getByLabelText("剪辑提示词")).toHaveValue(initial.prompts[initial.preset]+"\n\n刷新前未同步");
   expect(localStorage.getItem("minicut:generation-draft:reload:one")).toBeNull();
 });
 
@@ -66,14 +64,14 @@ it("读取前等待上一面板的保存，防止返回旧草稿",async()=>{
   vi.mocked(saveGenerationDraft).mockReset().mockReturnValueOnce(saving.promise).mockImplementation(async(_project,_asset,draft)=>({source:"asset",draft}));
   const view=render(<Harness project="navigation" />);
   await screen.findByText("已保存");
-  fireEvent.change(screen.getByLabelText("剪辑要求"),{target:{value:"切换前最新文本"}});
+  fireEvent.change(screen.getByLabelText("剪辑提示词"),{target:{value:"切换前最新文本"}});
   view.unmount();
   render(<Harness project="navigation" />);
   expect(screen.getByText("读取中")).toBeInTheDocument();
-  persisted={...initial,instructions:"切换前最新文本"};
+  persisted={...initial,prompts:{...initial.prompts,[initial.preset]:"切换前最新文本"}};
   saving.resolve({source:"asset",draft:persisted});
   await screen.findByText("已保存");
-  expect(screen.getByLabelText("剪辑要求")).toHaveValue("切换前最新文本");
+  expect(screen.getByLabelText("剪辑提示词")).toHaveValue("切换前最新文本");
 });
 
 it("载入旧历史只修改草稿，原始记录保持不变并提示默认补齐",async()=>{
@@ -85,8 +83,7 @@ it("载入旧历史只修改草稿，原始记录保持不变并提示默认补�
   await screen.findByText("已保存");
   await userEvent.click(screen.getByRole("button",{name:"载入历史"}));
   await waitFor(()=>expect(saveGenerationDraft).toHaveBeenCalled());
-  expect(screen.getByLabelText("预设提示词")).toHaveValue("旧自定义提示词");
-  expect(screen.getByLabelText("剪辑要求")).toHaveValue("旧要求");
+  expect(screen.getByLabelText("剪辑提示词")).toHaveValue("旧自定义提示词\n\n旧要求");
   expect(screen.getByLabelText("开场预告目标秒数")).toHaveValue(12.5);
   expect(screen.getByLabelText("翻译为")).toHaveValue("en");
   expect(screen.getByText(/默认值不代表当时的配置/)).toBeInTheDocument();
@@ -100,12 +97,32 @@ it("旧格式草稿和带自定义预设的未同步草稿都能恢复",async()=
   vi.mocked(saveGenerationDraft).mockReset().mockImplementation(async(_project,_asset,draft)=>({source:"asset",draft}));
   const old=render(<Harness project="legacy-compatible" />);
   await screen.findByText("已保存");
-  expect(screen.getByLabelText("预设提示词")).toHaveValue(initial.prompts[initial.preset]);
+  expect(screen.getByLabelText("剪辑提示词")).toHaveValue(initial.prompts[initial.preset]);
   old.unmount();
   const custom={...initial,custom_preset_id:"deleted",custom_preset_name:"已删除的模板",custom_prompt:"未同步的自定义文字"};
   localStorage.setItem("minicut:generation-draft:custom-reload:one",JSON.stringify(custom));
   render(<Harness project="custom-reload" />);
   await screen.findByText("已保存");
-  expect(screen.getByLabelText("预设提示词")).toHaveValue("未同步的自定义文字");
+  expect(screen.getByLabelText("剪辑提示词")).toHaveValue("未同步的自定义文字");
   expect(saveGenerationDraft).toHaveBeenLastCalledWith("custom-reload","one",expect.objectContaining({custom_preset_id:"deleted",custom_preset_name:"已删除的模板",custom_prompt:"未同步的自定义文字"}));
+});
+
+it("旧草稿完整合并一次，再次打开和新历史载入不会重复追加要求",async()=>{
+  const initial={...defaultGenerationDraft(),prompts:{...defaultGenerationDraft().prompts,podcast_highlights:"原始方向"},instructions:"保留反方论述"};
+  let persisted:GenerationDraft=initial;
+  vi.mocked(getGenerationDraft).mockImplementation(async()=>({source:"asset",draft:persisted}));
+  vi.mocked(saveGenerationDraft).mockReset().mockImplementation(async(_project,_asset,draft)=>{persisted=draft;return {source:"asset",draft};});
+  const original=JSON.stringify(initial);
+  const first=render(<Harness project="merge-once" />);
+  await screen.findByText("已保存");
+  expect(screen.getByLabelText("剪辑提示词")).toHaveValue("原始方向\n\n保留反方论述");
+  expect(persisted.instructions).toBe("");
+  expect(JSON.stringify(initial)).toBe(original);
+  first.unmount();
+  const history:GenerationHistoryEntry={history_id:"unified",asset_id:"one",asset_name:null,created_at:null,status:"succeeded",error:null,collection_id:null,brief:{preset:"knowledge_digest",editing_prompt:"新历史的统一原文"},missing_fields:[]};
+  render(<Harness project="merge-once" history={history} />);
+  await screen.findByText("已保存");
+  expect(screen.getByLabelText("剪辑提示词")).toHaveValue("原始方向\n\n保留反方论述");
+  await userEvent.click(screen.getByRole("button",{name:"载入历史"}));
+  expect(screen.getByLabelText("剪辑提示词")).toHaveValue("新历史的统一原文");
 });

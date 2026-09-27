@@ -80,9 +80,7 @@ async def plan_chapters(
     candidates: list[dict[str, object]] = []
     references: dict[str, set[str]] = {}
     for index, window in enumerate(windows):
-        proposal = await planner.plan(
-            discovery, window, publication_metadata=False
-        )
+        proposal = await planner.plan(discovery, window, publication_metadata=False)
         for ordinal, suggestion in enumerate(proposal.suggestions):
             candidate = suggestion.candidate
             identity = f"chapter-{index + 1}-candidate-{ordinal + 1}"
@@ -103,7 +101,9 @@ async def plan_chapters(
             (), ("各章节未找到可独立理解的候选。",), planner.model
         ), segments
     prompt = {
-        "version": "chapter-selection-v1",
+        "version": "chapter-selection-v2"
+        if brief.editing_prompt is not None
+        else "chapter-selection-v1",
         "candidates": candidates,
         "brief": brief.to_dict(),
     }

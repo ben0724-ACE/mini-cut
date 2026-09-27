@@ -27,8 +27,23 @@ class HighlightBrief:
     body_mode: str = "continuous"
     translation_language: str | None = None
     subtitle_mode: str = "bilingual"
+    editing_prompt: str | None = None
 
     def __post_init__(self) -> None:
+        if self.editing_prompt is not None and (
+            type(self.editing_prompt) is not str
+            or not self.editing_prompt.strip()
+            or len(self.editing_prompt) > 25000
+        ):
+            raise ValueError(
+                "editing prompt must be nonempty text within 25000 characters"
+            )
+        if self.editing_prompt is not None and (
+            self.preset_prompt is not None or self.instructions
+        ):
+            raise ValueError(
+                "editing prompt cannot be combined with legacy prompt fields"
+            )
         if self.translation_language not in {None, "zh", "en"}:
             raise ValueError("translation language must be zh or en")
         if self.subtitle_mode not in {"bilingual", "translated"}:
@@ -81,6 +96,12 @@ class HighlightBrief:
 
     def to_dict(self) -> dict[str, object]:
         data = asdict(self)
+        if self.editing_prompt is not None:
+            data.pop("preset_prompt")
+            data.pop("instructions")
+            return data
+        # Keep legacy snapshots and model-journal request keys unchanged.
+        data.pop("editing_prompt")
         if self.preset_prompt is None:
             defaults = cast(
                 dict[str, str],
