@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from urllib.parse import quote
 
+from minicut.cover_design import CoverDesign, render_cover, validate_design
 from minicut.errors import UserInputError
 from minicut.highlight_service import source_segments
 from minicut.output_plan import OutputPlan
@@ -61,6 +62,8 @@ def export_output(
     cancellation: CancellationToken,
     profile: RenderProfile = _DEFAULT_PROFILE,
     preview: bool = False,
+    cover_design: CoverDesign | None = None,
+    cover_version: int | None = None,
 ) -> dict[str, object]:
     repository = OutputCollectionRepository(project, collection)
     try:
@@ -91,6 +94,8 @@ def export_output(
             raise UserInputError("Requested preview version is unavailable") from error
     if plan is None or plan.revision != revision:
         raise UserInputError("Output version changed; refresh before exporting")
+    if not preview and cover_design is not None:
+        validate_design(project, collection, output, revision, cover_design)
     cancellation.raise_if_cancelled()
     asset = next(
         asset
@@ -103,6 +108,12 @@ def export_output(
         metadata = VideoOutputMetadata(
             max(2, int(metadata.width * scale) // 2 * 2),
             max(2, int(metadata.height * scale) // 2 * 2),
+        )
+    cover_data: bytes | None = None
+    warnings: list[str] = []
+    if not preview and cover_design is not None and cover_design.mode == "design":
+        cover_data, warnings = render_cover(
+            project, collection, output, revision, cover_design, "jpg", cancellation
         )
     result = RenderOutputUseCase().execute(
         OutputRenderRequest(
@@ -127,7 +138,11 @@ def export_output(
         cover_path = result.output_path.with_name(
             f"{result.output_path.stem}-cover.jpg"
         )
-        _extract_cover(result.output_path, cover_path, cancellation)
+        if cover_data is not None:
+            cancellation.raise_if_cancelled()
+            cover_path.write_bytes(cover_data)
+        else:
+            _extract_cover(result.output_path, cover_path, cancellation)
     base = f"/api/projects/{quote(project.name, safe='')}/media/exports/"
     response: dict[str, object] = {
         "output_id": output,
@@ -148,6 +163,9 @@ def export_output(
         + quote(str(result.subtitle_path.relative_to(project / "exports")), safe="/"),
     }
     if cover_path is not None:
+        response["cover_version"] = cover_version
+        response["cover_design"] = cover_design.model_dump() if cover_design else None
+        response["cover_warnings"] = warnings
         response["cover_url"] = base + quote(
             str(cover_path.relative_to(project / "exports")), safe="/"
         )

@@ -48,6 +48,8 @@ from minicut.application import (
     TranscribeProjectUseCase,
     TranscribeRequest,
 )
+from minicut.cover_api import cover_router
+from minicut.cover_design import CoverDesign, CoverStore
 from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError, UserInputError
 from minicut.generation_presets import (
@@ -259,6 +261,8 @@ class OutputPreviewBody(BaseModel):
 
 
 class OutputExportBody(BaseModel):
+    cover_version: int | None = Field(default=None, ge=0)
+    cover_snapshot: CoverDesign | None = None
     collection_id: SafeFileName
     output_id: SafeFileName
     revision: int = Field(ge=1)
@@ -940,6 +944,29 @@ def create_app(
         idempotency_key: str,
         runners: list[Callable[[], None]] | None = None,
     ) -> TaskResponse:
+        existing_path = _job_path(root / project_id, idempotency_key)
+        if body.cover_version is None and existing_path.is_file():
+            existing_request = _read_job(existing_path).get("request")
+            if isinstance(existing_request, dict):
+                body = body.model_copy(
+                    update={
+                        "cover_version": cast(dict[str, object], existing_request).get(
+                            "cover_version", 0
+                        )
+                    }
+                )
+        store = CoverStore(root / project_id, body.collection_id, body.output_id)
+        saved_cover = (
+            store.read(body.cover_version) if body.cover_version != 0 else None
+        )
+        if body.cover_version and saved_cover is None:
+            raise HTTPException(400, "保存的封面版本不存在")
+        body = body.model_copy(
+            update={
+                "cover_version": saved_cover[0] if saved_cover else 0,
+                "cover_snapshot": saved_cover[1] if saved_cover else None,
+            }
+        )
         token = export_tokens.setdefault(
             (project_id, idempotency_key), CancellationToken()
         )
@@ -965,6 +992,9 @@ def create_app(
                         body.crop_top,
                         body.crop_bottom,
                     ),
+                    False,
+                    body.cover_snapshot,
+                    body.cover_version,
                 )
             finally:
                 export_tokens.pop((project_id, idempotency_key), None)
@@ -1780,7 +1810,9 @@ def create_app(
         if job.get("kind") == "output-export":
             return submit_output_export(
                 project_id,
-                OutputExportBody.model_validate(request),
+                OutputExportBody.model_validate(
+                    {"cover_version": 0, **cast(dict[str, object], request)}
+                ),
                 background_tasks,
                 identity,
             )
@@ -1946,6 +1978,7 @@ def create_app(
             requested_range,
         )
 
+    api.include_router(cover_router(root))
     return api
 
 

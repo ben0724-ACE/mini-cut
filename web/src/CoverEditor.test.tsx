@@ -1,0 +1,57 @@
+import {beforeEach,expect,it,vi} from "vitest";
+import {fireEvent,render,screen,waitFor} from "@testing-library/react";
+import {CoverEditor} from "./CoverEditor";
+import * as api from "./coverApi";
+import type {CoverDesign} from "./coverApi";
+vi.mock("./coverApi",async original=>({...await original<typeof import("./coverApi")>(),loadCover:vi.fn(),saveCover:vi.fn(),previewCover:vi.fn(),uploadCoverBackground:vi.fn()}));
+const design:CoverDesign={mode:"first_frame",aspect_ratio:"9:16",background_color:"#172033",background_image:null,background_scale:1,background_x:.5,background_y:.5,frame_ms:null,frame:{x:.08,y:.14,width:.84,height:.46},frame_fit:"contain",title:"作品原标题",title_box:{x:.08,y:.66,width:.84,height:.25},font_id:null,font_size:88,bold:true,text_color:"#ffffff",stroke_color:"#000000",stroke_width:0,align:"center"};
+const props={project:"p",collection:"c",output:"o",revision:1,clips:[{instance_id:"a",segment_id:"s",role:"body",text:"第一段",start_ms:1000,end_ms:2000},{instance_id:"deleted",segment_id:"d",role:"body",text:"已删除",start_ms:2000,end_ms:3000,deleted:true},{instance_id:"b",segment_id:"t",role:"body",text:"第二段",start_ms:4000,end_ms:5000}],onDirty:vi.fn(),onSaved:vi.fn()};
+beforeEach(()=>{vi.clearAllMocks();sessionStorage.clear();vi.mocked(api.loadCover).mockResolvedValue({version:0,design:structuredClone(design),fonts:[{id:"heiti",name:"黑体"}]});vi.mocked(api.saveCover).mockImplementation(async(_route,_revision,_base,draft)=>({version:1,design:draft}));vi.mocked(api.previewCover).mockResolvedValue({blob:new Blob(),warnings:[]});URL.createObjectURL=vi.fn(()=>"blob:preview");URL.revokeObjectURL=vi.fn();});
+it("编辑、保存和独立下载使用同一个封面配置，尺寸不改变视频",async()=>{
+  render(<CoverEditor {...props}/>);await screen.findByLabelText("封面模式");
+  expect(screen.queryByText("下载封面（无需导出视频）")).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("封面模式"),{target:{value:"design"}});
+  fireEvent.change(screen.getByLabelText("封面尺寸"),{target:{value:"16:9"}});
+  fireEvent.change(screen.getByLabelText("封面标题"),{target:{value:"新封面\n两行标题"}});
+  fireEvent.change(screen.getByLabelText("字体"),{target:{value:"heiti"}});
+  expect(props.onDirty).toHaveBeenLastCalledWith(true);
+  fireEvent.click(screen.getByText("保存封面设计"));
+  await waitFor(()=>expect(api.saveCover).toHaveBeenCalledWith(expect.any(String),1,0,expect.objectContaining({mode:"design",aspect_ratio:"16:9",title:"新封面\n两行标题",font_id:"heiti"})));
+  const download=await screen.findByRole("link",{name:"下载封面（无需导出视频）"});
+  expect(download).toHaveAttribute("href",expect.stringContaining("version=1&format=png"));
+  fireEvent.change(screen.getByLabelText("封面文件格式"),{target:{value:"jpg"}});
+  expect(download).toHaveAttribute("href",expect.stringContaining("format=jpg"));
+  expect(props.onSaved).toHaveBeenLastCalledWith(1);expect(props.onDirty).toHaveBeenLastCalledWith(false);
+});
+it("保留片段选帧与位置微调写入预览配置",async()=>{
+  render(<CoverEditor {...props}/>);await screen.findByLabelText("封面模式");
+  fireEvent.change(screen.getByLabelText("封面模式"),{target:{value:"design"}});
+  expect(screen.queryByRole("option",{name:/已删除/})).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("选择保留片段"),{target:{value:"b"}});
+  fireEvent.change(screen.getByLabelText("帧时间（源视频秒数）"),{target:{value:"4.5"}});
+  fireEvent.keyDown(screen.getByRole("button",{name:"视频帧位置"}),{key:"ArrowRight",shiftKey:true});
+  await waitFor(()=>expect(api.previewCover).toHaveBeenCalledWith(expect.any(String),1,expect.objectContaining({frame_ms:4500,frame:expect.objectContaining({x:.1})}),expect.any(AbortSignal)));
+});
+it("上传背景、保存失败和草稿恢复不丢失用户编辑",async()=>{
+  vi.mocked(api.uploadCoverBackground).mockResolvedValue("a".repeat(32));
+  vi.mocked(api.saveCover).mockRejectedValue(new Error("保存失败"));
+  const view=render(<CoverEditor {...props}/>);await screen.findByLabelText("封面模式");
+  fireEvent.change(screen.getByLabelText("封面模式"),{target:{value:"design"}});
+  const file=new File(["image"],"背景.png",{type:"image/png"});
+  fireEvent.change(screen.getByLabelText("上传背景图片"),{target:{files:[file]}});
+  await screen.findByText("改用纯色背景");
+  fireEvent.change(screen.getByLabelText("封面标题"),{target:{value:"保留草稿"}});
+  fireEvent.click(screen.getByText("保存封面设计"));await screen.findByText("保存失败");
+  expect(screen.getByLabelText("封面标题")).toHaveValue("保留草稿");
+  expect(screen.queryByRole("link",{name:"下载封面（无需导出视频）"})).not.toBeInTheDocument();
+  view.unmount();render(<CoverEditor {...props}/>);
+  expect(await screen.findByLabelText("封面标题")).toHaveValue("保留草稿");
+  fireEvent.click(screen.getByText("放弃封面修改"));
+  expect(screen.getByLabelText("封面模式")).toHaveValue("first_frame");
+});
+it("预览显示超出边界警告",async()=>{
+  vi.mocked(api.loadCover).mockResolvedValue({version:1,design:{...design,mode:"design"}});
+  vi.mocked(api.previewCover).mockResolvedValue({blob:new Blob(),warnings:["标题超出文本框"]});
+  render(<CoverEditor {...props}/>);
+  expect(await screen.findByText("标题超出文本框")).toBeInTheDocument();
+});

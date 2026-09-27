@@ -6,18 +6,19 @@ import { registerDraftGuard } from "./draftNavigation";
 import { RenderedPreview } from "./RenderedPreview";
 import { OutputItemEditor } from "./OutputItemEditor";
 import { OutputOrderControls } from "./OutputOrderControls";
+import { CoverEditor } from "./CoverEditor";
 import { OutputExport } from "./OutputExport";
 import { Workbench } from "./Workbench";
 import { outputBoundaryWarnings } from "./GenerationDetails";
 interface Panels {preview:ReactNode;edit:ReactNode;exportPanel:ReactNode}
 export function OutputWorkspace({project,collection,output,compose,onUpdated,onDirty,onExportSubmitted}:{project:string;collection:string;output:string;compose?:(panels:Panels)=>ReactNode;onUpdated?:(result:HighlightResult)=>void;onDirty?:(dirty:boolean)=>void;onExportSubmitted?:(entries:{outputId:string;taskId:string}[])=>void}) {
-  const [result,setResult]=useState<HighlightResult|null>(null);const [error,setError]=useState("");const [busy,setBusy]=useState(false);const lock=useRef(false);
+  const [result,setResult]=useState<HighlightResult|null>(null);const [error,setError]=useState("");const [saving,setBusy]=useState(false);const [coverDirty,setCoverDirty]=useState(false);const [coverVersion,setCoverVersion]=useState<number>();const busy=saving||coverDirty;const lock=useRef(false);
   const [ranges,setRanges]=useState<Record<string,{start:number;end:number}>>({});
   const [undo,setUndo]=useState<typeof ranges[]>([]);const [redo,setRedo]=useState<typeof ranges[]>([]);
   const [audition,setAudition]=useState<Audition>();const [rendered,setRendered]=useState(false);const [duration,setDuration]=useState(0);
   const [navigation,setNavigation]=useState<(()=>void)|null>(null);
   const dirty=Object.keys(ranges).length>0;
-  useEffect(()=>{onDirty?.(dirty);return()=>onDirty?.(false);},[dirty,onDirty]);
+  useEffect(()=>{onDirty?.(dirty||coverDirty);return()=>onDirty?.(false);},[dirty,coverDirty,onDirty]);
   useEffect(()=>{if(!dirty)return;const unload=(event:BeforeUnloadEvent)=>event.preventDefault();window.addEventListener("beforeunload",unload);const unregister=registerDraftGuard(proceed=>setNavigation(()=>proceed));return()=>{window.removeEventListener("beforeunload",unload);unregister();};},[dirty]);
   function changeRange(id:string,start:number,end:number){setUndo([...undo,ranges]);setRedo([]);setRanges({...ranges,[id]:{start,end}});setRendered(false);}
   function discard(){setRanges({});setUndo([]);setRedo([]);}
@@ -43,6 +44,6 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
 <button disabled={busy||historical||dirty||index===visibleClips.length-1||visibleClips[index+1]?.role!==clip.role} onClick={()=>{const order=visibleClips.map(c=>c.instance_id);[order[index+1],order[index]]=[order[index],order[index+1]];void update(()=>reorderOutput(project,collection,output,order,{})).catch(reason=>setActionError(String(reason)));}}>下移</button>
 <button disabled={busy||historical||dirty||!!clip.deleted||(clip.role!=="hook"&&visibleClips.some(c=>c.role==="hook"&&c.segment_id===clip.segment_id&&c.start_ms===clip.start_ms&&c.end_ms===clip.end_ms))} onClick={()=>{const role=clip.role==="hook"?"body":"hook";const rank=(c:HighlightClip)=>(c.instance_id===clip.instance_id?role:c.role)==="hook"?0:1;const ordered=[...visibleClips].sort((a,b)=>rank(a)-rank(b));void update(()=>reorderOutput(project,collection,output,ordered.map(c=>c.instance_id),{[clip.instance_id]:role})).catch(reason=>setActionError(String(reason)));}}>{clip.role==="hook"?"取消开场预告":"复制为开场预告"}</button>
 </>} />)}</ol></>;
-  const exportPanel=dirty?<p>请先保存或放弃范围修改后导出。</p>:historical?<p>切回当前版本后导出</p>:<OutputExport sourceUrl={`/api/projects/${encodeURIComponent(project)}/media/source/${encodeURIComponent(result.asset_id)}`} sourceTime={plan.clips.find(c=>!c.deleted)?.start_ms===undefined?0:plan.clips.find(c=>!c.deleted)!.start_ms/1000} key={`${collection}:${output}:${plan.revision}`} project={project} collection={collection} output={output} revision={plan.revision} onSubmitted={onExportSubmitted} />;
+  const exportPanel=dirty?<p>请先保存或放弃范围修改后导出。</p>:historical?<p>切回当前版本后导出</p>:<><CoverEditor key={`cover:${collection}:${output}:${plan.revision}`} project={project} collection={collection} output={output} revision={plan.revision} clips={plan.clips} onDirty={setCoverDirty} onSaved={setCoverVersion} /><OutputExport disabled={coverDirty||coverVersion===undefined} coverVersion={coverVersion} sourceUrl={`/api/projects/${encodeURIComponent(project)}/media/source/${encodeURIComponent(result.asset_id)}`} sourceTime={plan.clips.find(c=>!c.deleted)?.start_ms===undefined?0:plan.clips.find(c=>!c.deleted)!.start_ms/1000} key={`${collection}:${output}:${plan.revision}`} project={project} collection={collection} output={output} revision={plan.revision} onSubmitted={onExportSubmitted} /></>;
   return compose?compose({preview,edit,exportPanel}):<Workbench initialTab={new URLSearchParams(window.location.search).get("panel")==="export"?"export":"edit"} sidebar={<><h2>当前作品</h2><p>{plan.title}</p><details><summary>选材理由</summary><p>{plan.reason}</p></details><a href={`?project=${encodeURIComponent(project)}`}>返回候选列表</a></>} preview={preview} generate={<p>返回候选列表以生成新作品</p>} edit={edit} exportPanel={exportPanel} />;
 }

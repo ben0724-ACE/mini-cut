@@ -100,12 +100,14 @@ export interface RenderDownload {
   media_url: string;
   subtitle_url: string;
   cover_url?: string;
+  cover_version?:number|null;
+  cover_warnings?:string[];
   title?: string;
   social_copy?: string | null;
   duration_ms: number;
 }
 
-export interface OutputExportOptions extends Partial<import("./GeometrySettings").GeometryOptions> {subtitle_mode:"soft"|"burned"; audio_fade_ms:number; denoiser_id:"none"|"afftdn"}
+export interface OutputExportOptions extends Partial<import("./GeometrySettings").GeometryOptions> {cover_version?:number;subtitle_mode:"soft"|"burned"; audio_fade_ms:number; denoiser_id:"none"|"afftdn"}
 export const startOutputExportBatch=(project:string,collection:string,outputs:{output_id:string;revision:number}[],options:OutputExportOptions,key:string,overrides:Record<string,Partial<import("./GeometrySettings").GeometryOptions>>={})=>projectRequest<OutputExportTask[]>(`/api/projects/${encodeURIComponent(project)}/tasks/output-export-batch`,{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":key},body:JSON.stringify({outputs:outputs.map(output=>({collection_id:collection,...output,...options,...overrides[output.output_id]}))})});
 export interface OutputExportTask {resumable?:boolean;task_id:string; status:"pending"|"running"|"succeeded"|"failed"|"cancelled"; result:RenderDownload & {revision:number;output_id:string}|null; error:string|null}
 export const startOutputPreview=(project:string,collection:string,output:string,revision:number,key:string)=>projectRequest<OutputExportTask>(`/api/projects/${encodeURIComponent(project)}/tasks/output-preview`,{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":key},body:JSON.stringify({collection_id:collection,output_id:output,revision})});

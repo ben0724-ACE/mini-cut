@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from minicut.media import MediaAsset
-from minicut.output_export import _extract_cover
+from minicut.output_export import _extract_cover  # pyright: ignore[reportPrivateUsage]
 from minicut.output_plan import (
     HighlightCandidate,
     OutputCollection,

@@ -144,7 +144,10 @@ def test_export_returns_publication_metadata_and_cover_url(
         token.raise_if_cancelled()
         destination.write_bytes(b"jpeg")
 
-    monkeypatch.setattr(module, "source_dimensions", lambda path: (1920, 1080))
+    def dimensions(path: Path) -> tuple[int, int]:
+        return (1920, 1080)
+
+    monkeypatch.setattr(module, "source_dimensions", dimensions)
     monkeypatch.setattr(module.RenderOutputUseCase, "execute", execute)
     monkeypatch.setattr(module, "_extract_cover", cover)
     result = export_output(
@@ -160,4 +163,5 @@ def test_export_returns_publication_metadata_and_cover_url(
     )
     assert result["title"] == "发布标题"
     assert result["social_copy"] == "发布简介文案。"
-    assert result["cover_url"].endswith("v0001-cover.jpg")
+    cover_url = result["cover_url"]
+    assert isinstance(cover_url, str) and cover_url.endswith("v0001-cover.jpg")
