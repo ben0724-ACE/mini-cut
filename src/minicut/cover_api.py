@@ -21,6 +21,14 @@ from minicut.cover_design import (
     render_cover,
     validate_design,
 )
+from minicut.cover_templates import (
+    ApplyMode,
+    CoverTemplateLibrary,
+    TemplateNameConflict,
+    TemplateNotFound,
+    TemplateRename,
+    TemplateSource,
+)
 from minicut.errors import MiniCutError
 from minicut.project import ProjectRepository
 
@@ -38,21 +46,159 @@ class CoverSaveRequest(CoverRequest):
     base_version: int = Field(ge=0)
 
 
+class TemplateApplyRequest(CoverRequest):
+    template_id: SafeId
+    mode: ApplyMode = "all"
+
+
+class BatchCoverTarget(BaseModel):
+    output_id: SafeId
+    revision: int = Field(ge=1)
+
+
+class BatchTemplateApplyRequest(BaseModel):
+    collection_id: SafeId
+    template_id: SafeId
+    mode: ApplyMode = "all"
+    outputs: list[BatchCoverTarget] = Field(min_length=1, max_length=10)
+
+
 def checked(operation: Callable[[], T]) -> T:
     try:
         return operation()
+    except TemplateNotFound as error:
+        raise HTTPException(404, str(error)) from error
+    except TemplateNameConflict as error:
+        raise HTTPException(409, str(error)) from error
     except MiniCutError as error:
         raise HTTPException(400, str(error)) from error
 
 
 def cover_router(root: Path) -> APIRouter:
     router = APIRouter()
+    library = CoverTemplateLibrary(root)
     route = "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/cover"
 
     def project_path(project_id: str) -> Path:
         project = root / project_id
         checked(lambda: ProjectRepository(project).read())
         return project
+
+    @router.get("/api/cover-templates")
+    def list_templates() -> list[dict[str, object]]:  # pyright: ignore[reportUnusedFunction]
+        return [item.model_dump() for item in library.list()]
+
+    def save_template(
+        body: TemplateSource, identity: str | None = None
+    ) -> dict[str, object]:
+        project = project_path(body.project_id)
+        checked(
+            lambda: validate_design(
+                project, body.collection_id, body.output_id, body.revision, body.design
+            )
+        )
+        template = checked(
+            lambda: library.save(
+                body.name,
+                body.design,
+                design_directory(project, body.collection_id, body.output_id),
+                identity,
+            )
+        )
+        return template.model_dump()
+
+    @router.post("/api/cover-templates", status_code=201)
+    def create_template(body: TemplateSource) -> dict[str, object]:  # pyright: ignore[reportUnusedFunction]
+        return save_template(body)
+
+    @router.put("/api/cover-templates/{template_id}")
+    def update_template(template_id: SafeId, body: TemplateSource) -> dict[str, object]:  # pyright: ignore[reportUnusedFunction]
+        return save_template(body, template_id)
+
+    @router.patch("/api/cover-templates/{template_id}")
+    def rename_template(template_id: SafeId, body: TemplateRename) -> dict[str, object]:  # pyright: ignore[reportUnusedFunction]
+        return checked(lambda: library.rename(template_id, body.name)).model_dump()
+
+    @router.delete("/api/cover-templates/{template_id}", status_code=204)
+    def delete_template(template_id: SafeId) -> Response:  # pyright: ignore[reportUnusedFunction]
+        checked(lambda: library.delete(template_id))
+        return Response(status_code=204)
+
+    @router.post(route + "/apply-template")
+    def apply_template(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        collection_id: SafeId,
+        output_id: SafeId,
+        body: TemplateApplyRequest,
+    ) -> dict[str, object]:  # pyright: ignore[reportUnusedFunction]
+        project = project_path(project_id)
+        checked(lambda: cover_context(project, collection_id, output_id, body.revision))
+        template = checked(lambda: library.get(body.template_id))
+        design = checked(
+            lambda: library.apply(
+                template, project, collection_id, output_id, body.design, body.mode
+            )
+        )
+        checked(
+            lambda: validate_design(
+                project, collection_id, output_id, body.revision, design
+            )
+        )
+        return {"design": design.model_dump()}
+
+    @router.post("/api/projects/{project_id}/cover-template-batch")
+    def apply_template_batch(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId, body: BatchTemplateApplyRequest
+    ) -> list[dict[str, object]]:  # pyright: ignore[reportUnusedFunction]
+        if len({target.output_id for target in body.outputs}) != len(body.outputs):
+            raise HTTPException(400, "批量封面作品不能重复")
+        project = project_path(project_id)
+        template = checked(lambda: library.get(body.template_id))
+        results: list[dict[str, object]] = []
+        for target in body.outputs:
+            try:
+                plan, _, _ = cover_context(
+                    project, body.collection_id, target.output_id, target.revision
+                )
+                store = CoverStore(project, body.collection_id, target.output_id)
+                saved = store.read()
+                current = saved[1] if saved else CoverDesign(title=plan.title)
+                design = library.apply(
+                    template,
+                    project,
+                    body.collection_id,
+                    target.output_id,
+                    current,
+                    body.mode,
+                )
+                validate_design(
+                    project,
+                    body.collection_id,
+                    target.output_id,
+                    target.revision,
+                    design,
+                )
+                version = store.save(design, saved[0] if saved else 0)
+                results.append(
+                    {"output_id": target.output_id, "version": version, "error": None}
+                )
+            except MiniCutError as error:
+                results.append(
+                    {
+                        "output_id": target.output_id,
+                        "version": None,
+                        "error": str(error),
+                    }
+                )
+            except OSError:
+                results.append(
+                    {
+                        "output_id": target.output_id,
+                        "version": None,
+                        "error": "无法保存封面，请检查项目目录",
+                    }
+                )
+        return results
 
     @router.get(route)
     def read(  # pyright: ignore[reportUnusedFunction]

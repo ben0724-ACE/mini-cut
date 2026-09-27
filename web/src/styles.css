@@ -280,6 +280,9 @@ hr { border:0;border-top:1px solid #343d4c;margin:24px 0; }
 .preset-apply-controls { margin: 12px 0; }
 .preset-apply-actions { display: flex; gap: 8px; }
 .preset-apply-actions button { flex: 1; }
+.export-mode-switch { display:flex;gap:8px;position:sticky;top:-14px;z-index:2;margin:-14px -14px 14px;padding:12px 14px;background:#1c2026;border-bottom:1px solid #303743; }
+.export-mode-switch button { flex:1;margin:0; }
+.export-mode-switch button[aria-pressed="true"] { background:#2b3548;color:#8db2ff;border-color:#536b93; }
 .generate-candidates-button,
 .workbench button.generate-candidates-button {
   display: block;
@@ -295,8 +298,8 @@ hr { border:0;border-top:1px solid #343d4c;margin:24px 0; }
 
 .cover-editor { border-bottom: 1px solid var(--border, #dce1e9); padding-bottom: 24px; margin-bottom: 24px; }
 .cover-editor fieldset { border: 0; padding: 0; min-width: 0; }
-.cover-editor details { margin: 12px 0; padding: 10px; border: 1px solid var(--border, #dce1e9); border-radius: 10px; }
-.cover-editor label { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.cover-editor > fieldset details { margin: 12px 0; padding: 10px; border: 1px solid var(--border, #dce1e9); border-radius: 10px; }
+.cover-editor > fieldset label,.cover-editor > label { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
 .cover-editor input[type="checkbox"] { width: auto; }
 .cover-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; }
 .cover-canvas { position: relative; width: min(100%, 380px); margin: 16px auto 0; background: #172033; overflow: hidden; border-radius: 4px; box-shadow: 0 4px 18px #0003; }

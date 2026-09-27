@@ -37,7 +37,7 @@ class CoverBox(BaseModel):
     height: float = Field(default=0.46, ge=0.05, le=2)
 
 
-class CoverDesign(BaseModel):
+class CoverStyle(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     mode: Literal["first_frame", "design"] = "first_frame"
     aspect_ratio: Literal["9:16", "16:9", "1:1", "3:4"] = "9:16"
@@ -46,10 +46,8 @@ class CoverDesign(BaseModel):
     background_scale: float = Field(default=1, ge=1, le=4)
     background_x: float = Field(default=0.5, ge=0, le=1)
     background_y: float = Field(default=0.5, ge=0, le=1)
-    frame_ms: int | None = Field(default=None, ge=0, strict=True)
     frame: CoverBox = Field(default_factory=CoverBox)
     frame_fit: Literal["contain", "crop"] = "contain"
-    title: str = Field(default="", max_length=500)
     title_box: CoverBox = Field(default_factory=lambda: CoverBox(y=0.66, height=0.25))
     font_id: str | None = Field(default=None, pattern=r"^[a-z0-9_-]+$")
     font_size: int = Field(default=88, ge=16, le=300)
@@ -58,6 +56,13 @@ class CoverDesign(BaseModel):
     stroke_color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")
     stroke_width: int = Field(default=0, ge=0, le=12)
     align: Literal["left", "center", "right"] = "center"
+
+
+class CoverDesign(CoverStyle):
+    frame_ms: int | None = Field(default=None, ge=0, strict=True)
+    title: str = Field(default="", max_length=500)
+    template_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]+$")
+    template_name: str | None = Field(default=None, max_length=80)
 
 
 def cover_fonts() -> dict[str, tuple[str, Path]]:

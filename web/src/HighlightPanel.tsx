@@ -3,6 +3,7 @@ import { recoverHighlights, readHighlightTask, resumeTask, cancelOutputExport, s
 import { HighlightForm, type HighlightBrief } from "./HighlightForm";
 import { ModelUsage } from "./ModelUsage";
 import { BatchExport } from "./BatchExport";
+import { ExportModePanels,type ExportMode } from "./ExportModePanels";
 import { Workbench, type WorkbenchTab } from "./Workbench";
 import { navigateWithDraft } from "./draftNavigation";
 import { OutputWorkspace } from "./OutputWorkspace";
@@ -19,6 +20,7 @@ export function HighlightPanel({project, asset, recover = recoverHighlights, tra
   const presetLibrary = usePresetLibrary();
   const selectedPreset = presetLibrary.presets.find(item=>item.preset_id===generationDraft.draft.custom_preset_id);
   const [dirty,setDirty]=useState(false);
+  const [exportMode,setExportMode]=useState<ExportMode>("single");
   const [task, setTask] = useState<HighlightTask | null>(null);
   const [loading, setLoading] = useState(true); const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false); const [retry, setRetry] = useState(0);
@@ -87,6 +89,6 @@ export function HighlightPanel({project, asset, recover = recoverHighlights, tra
   const shortlist=<section className="candidate-sidebar" aria-label="候选作品列表" ref={node=>{if(node)node.scrollTop=candidateScrollTop.current;}} onScroll={event=>{candidateScrollTop.current=event.currentTarget.scrollTop;}}><h2>候选作品</h2>{result&&<><label><input type="checkbox" checked={onlySelected} onChange={event=>setOnlySelected(event.target.checked)} />只看已选作品</label><p className="muted">{result.outputs.length} 条候选 · 已选 {selected.length} 条{saving?" · 保存中":""}</p>{selectionError&&<p role="alert">{selectionError}</p>}<div className="candidate-list">{result.outputs.filter(output=>!onlySelected||selected.includes(output.output_id)).map(output=><article key={output.output_id} className={`candidate-row ${current?.output_id===output.output_id?"is-current":""}`}><button className="candidate-title" aria-pressed={current?.output_id===output.output_id} onClick={()=>focusOutput(output.output_id)}>{output.title}</button><p className="muted">{(output.duration_ms/1000).toFixed(1)} 秒 · v{output.revision}</p><label><input type="checkbox" aria-label={`选择${output.title}`} disabled={saving||selectionLoading} checked={selected.includes(output.output_id)} onChange={event=>void select(output.output_id,event.target.checked)} />加入批量</label><details><summary>选材理由</summary><p className="helper-text">{output.reason}</p></details></article>)}</div>{onlySelected&&selected.length===0&&<p>尚未选择作品</p>}{result.outputs.length===0&&<p>没有符合要求的候选，请调整要求。</p>}</>}{!result&&<p className="muted">生成后在此选择作品</p>}</section>;
   const showExports=(entries:{outputId:string;taskId:string}[])=>navigateToExportResults(project,collection,entries);
   const batch=result&&result.outputs.length>0?<BatchExport project={project} collection={collection} outputs={result.outputs} selected={selected} disabled={saving||selectionLoading||dirty} onSubmitted={showExports} />:null;
-  if(current) return <OutputWorkspace onDirty={setDirty} key={`${collection}:${current.output_id}`} project={project} collection={collection} output={current.output_id} onExportSubmitted={showExports} compose={({preview,edit,exportPanel})=><Workbench tab={panel} onTabChange={setPanel} sidebar={shortlist} preview={preview} generate={generation} edit={edit} exportPanel={<>{exportPanel}<hr />{batch}</>} />} onUpdated={updated=>setTask(previous=>previous?{...previous,result:updated}:previous)} />;
+  if(current) return <OutputWorkspace onDirty={setDirty} key={`${collection}:${current.output_id}`} project={project} collection={collection} output={current.output_id} onExportSubmitted={showExports} compose={({preview,edit,exportPanel})=><Workbench tab={panel} onTabChange={setPanel} sidebar={shortlist} preview={preview} generate={generation} edit={edit} exportPanel={<ExportModePanels mode={exportMode} onChange={setExportMode} single={exportPanel} batch={batch} />} />} onUpdated={updated=>setTask(previous=>previous?{...previous,result:updated}:previous)} />;
   return <Workbench tab={panel} onTabChange={setPanel} sidebar={shortlist} preview={<div className="empty-preview">导入并转录素材，生成候选后预览</div>} generate={generation} edit={<p>先选择一个候选作品</p>} exportPanel={<p>尚无可导出作品</p>} />;
 }

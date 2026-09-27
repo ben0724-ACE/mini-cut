@@ -55,3 +55,14 @@ it("预览显示超出边界警告",async()=>{
   render(<CoverEditor {...props}/>);
   expect(await screen.findByText("标题超出文本框")).toBeInTheDocument();
 });
+it("批量保存成功后重新读取当前封面版本，其他作品事件不影响当前页面",async()=>{
+  render(<CoverEditor {...props}/>);await screen.findByLabelText("封面模式");
+  expect(api.loadCover).toHaveBeenCalledTimes(1);
+  window.dispatchEvent(new CustomEvent(api.coversSaved,{detail:{project:"p",collection:"c",outputs:["other"]}}));
+  expect(api.loadCover).toHaveBeenCalledTimes(1);
+  vi.mocked(api.loadCover).mockResolvedValue({version:2,design:{...design,mode:"design",font_size:120,template_id:"cover-template-one",template_name:"批量模板"}});
+  window.dispatchEvent(new CustomEvent(api.coversSaved,{detail:{project:"p",collection:"c",outputs:["o"]}}));
+  await screen.findByText("封面已保存 · v2");
+  expect(screen.getByLabelText("字号")).toHaveValue(120);expect(props.onSaved).toHaveBeenLastCalledWith(2);
+  expect(screen.getByText("保存封面设计")).toBeDisabled();
+});

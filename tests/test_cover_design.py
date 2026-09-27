@@ -333,3 +333,71 @@ def test_real_video_export_keeps_audio_and_custom_cover(
         design.model_copy(update={"title": "新封面"}), 0
     )
     assert cover.read_bytes() == before
+
+
+def test_real_export_uses_applied_template_after_library_deletion(
+    cover_project: Path, font: str
+) -> None:
+    from minicut.cover_design import design_directory
+    from minicut.cover_templates import CoverTemplateLibrary
+
+    directory = design_directory(cover_project, "collection", "o")
+    directory.mkdir(parents=True)
+    image_id = "a" * 32
+    Image.new("RGB", (16, 16), "green").save(directory / f"{image_id}.png")
+    library = CoverTemplateLibrary(cover_project.parent)
+    template = library.save(
+        "可复用的封面",
+        CoverDesign(
+            mode="design",
+            aspect_ratio="1:1",
+            title="模板来源文字",
+            frame_ms=0,
+            font_id=font,
+            background_image=image_id,
+        ),
+        directory,
+    )
+    applied = library.apply(
+        template,
+        cover_project,
+        "collection",
+        "o",
+        CoverDesign(title="当前作品标题", frame_ms=1200),
+        "all",
+    )
+    CoverStore(cover_project, "collection", "o").save(applied, 0)
+    library.delete(template.template_id)
+
+    async def run() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(cover_project.parent)),
+            base_url="http://test",
+        ) as client:
+            response = await client.post(
+                "/api/projects/demo/tasks/output-export",
+                json={
+                    "collection_id": "collection",
+                    "output_id": "o",
+                    "revision": 1,
+                    "resolution": 720,
+                },
+                headers={"Idempotency-Key": "template-export"},
+            )
+            assert response.status_code == 202
+            task = (await client.get("/api/projects/demo/tasks/template-export")).json()
+            assert task["status"] == "succeeded", task["error"]
+            result = task["result"]
+            assert result["cover_version"] == 1
+            assert (
+                result["cover_design"]["title"] == "当前作品标题"
+                and result["cover_design"]["frame_ms"] == 1200
+            )
+            assert result["cover_design"]["template_name"] == template.name
+            download = await client.get(result["cover_url"])
+            image = Image.open(io.BytesIO(download.content))
+            assert image.size == (1080, 1080)
+            color = image.getpixel((0, 0))
+            assert isinstance(color, tuple) and color[1] > 120 and color[0] < 10
+
+    asyncio.run(run())

@@ -46,8 +46,14 @@ it("点击候选直接进入编辑，切换作品不回到生成", async () => {
   expect(screen.getByRole("tab",{name:"编辑"})).toHaveAttribute("aria-selected","true");
   expect(screen.getByRole("region",{name:"候选作品列表"}).scrollTop).toBe(120);
   await userEvent.click(screen.getByRole("tab",{name:"导出"}));
+  expect(screen.queryByRole("region",{name:"批量导出"})).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button",{name:/^批量$/}));
+  expect(screen.getByRole("region",{name:"批量导出"})).toBeVisible();
+  expect(screen.queryByRole("region",{name:"单作品导出"})).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button",{name:"第二条"}));
   await waitFor(()=>expect(screen.getByRole("tab",{name:"编辑"})).toHaveAttribute("aria-selected","true"));
+  await userEvent.click(screen.getByRole("tab",{name:"导出"}));
+  expect(screen.getByRole("button",{name:/^批量$/})).toHaveAttribute("aria-pressed","true");
   expect(screen.getByRole("region",{name:"候选作品列表"}).scrollTop).toBe(120);
 });
 

@@ -1,16 +1,17 @@
+import {CoverTemplateControls} from "./CoverTemplateControls";
 import {useEffect,useRef,useState,type PointerEvent} from "react";
-import {coverRoute,loadCover,saveCover,previewCover,uploadCoverBackground,type CoverDesign,type CoverBox,type CoverRecord} from "./coverApi";
+import {coversSaved,coverRoute,loadCover,saveCover,previewCover,uploadCoverBackground,type CoverDesign,type CoverBox,type CoverRecord} from "./coverApi";
 import type {HighlightClip} from "./api";
 import {registerDraftGuard} from "./draftNavigation";
 
 const sizes={"9:16":[1080,1920],"16:9":[1920,1080],"1:1":[1080,1080],"3:4":[1080,1440]} as const;
 function layout(ratio:CoverDesign["aspect_ratio"]){return ratio==="16:9"?{frame:{x:.08,y:.06,width:.84,height:.64},title_box:{x:.08,y:.74,width:.84,height:.22},font_size:76}:{frame:{x:.08,y:.14,width:.84,height:.46},title_box:{x:.08,y:.66,width:.84,height:.25},font_size:88};}
 const clamp=(value:number,min:number,max:number)=>Math.min(max,Math.max(min,value));
-export function CoverEditor({project,collection,output,revision,clips,onDirty,onSaved}:{project:string;collection:string;output:string;revision:number;clips:HighlightClip[];onDirty:(value:boolean)=>void;onSaved:(version:number)=>void}){
+export function CoverEditor({project,collection,output,revision,clips,onDirty,onSaved}:{project:string;collection:string;output:string;revision:number;clips:HighlightClip[];onDirty:(value:boolean)=>void;onSaved:(version:number|undefined)=>void}){
   const route=coverRoute(project,collection,output);const storageKey=`minicut-cover-draft:${project}:${collection}:${output}`;
   const [saved,setSaved]=useState<CoverRecord>();const [design,setDesign]=useState<CoverDesign>();
   const [fonts,setFonts]=useState<{id:string;name:string}[]>([]);const [error,setError]=useState("");const [previewError,setPreviewError]=useState("");
-  const [image,setImage]=useState("");const [warnings,setWarnings]=useState<string[]>([]);const [busy,setBusy]=useState(false);const [rendering,setRendering]=useState(false);const [retry,setRetry]=useState(0);
+  const [image,setImage]=useState("");const [warnings,setWarnings]=useState<string[]>([]);const [working,setBusy]=useState(false);const [templateBusy,setTemplateBusy]=useState(false);const busy=working||templateBusy;const [rendering,setRendering]=useState(false);const [retry,setRetry]=useState(0);
   const [target,setTarget]=useState<"frame"|"title_box">("frame");const [format,setFormat]=useState<"png"|"jpg">("png");
   const canvas=useRef<HTMLDivElement>(null);const lock=useRef(false);const imageUrl=useRef("");
   const drag=useRef<{x:number;y:number;box:CoverBox;resize:boolean;target:"frame"|"title_box";width:number;height:number}|undefined>(undefined);
@@ -18,7 +19,8 @@ export function CoverEditor({project,collection,output,revision,clips,onDirty,on
   const retained=clips.filter(c=>!c.deleted);
   useEffect(()=>()=>onDirty(false),[onDirty]);
   useEffect(()=>{onDirty(dirty||busy);},[saved,dirty,busy,onDirty]);
-  useEffect(()=>{const controller=new AbortController();setSaved(undefined);setDesign(undefined);setError("");loadCover(route,revision,controller.signal).then(record=>{
+  useEffect(()=>{const refresh=(event:Event)=>{const detail=(event as CustomEvent<{project:string;collection:string;outputs:string[]}>).detail;if(detail?.project===project&&detail.collection===collection&&detail.outputs.includes(output))setRetry(value=>value+1);};window.addEventListener(coversSaved,refresh);return()=>window.removeEventListener(coversSaved,refresh);},[project,collection,output]);
+  useEffect(()=>{const controller=new AbortController();setSaved(undefined);setDesign(undefined);onSaved(undefined);setError("");loadCover(route,revision,controller.signal).then(record=>{
     if(controller.signal.aborted)return;setSaved(record);setFonts(record.fonts??[]);onSaved(record.version);
     let draft:CoverDesign|undefined;try{const value=JSON.parse(sessionStorage.getItem(storageKey)??"null");if(value?.base_version===record.version)draft=value.design;}catch{/* Browser storage may be disabled. */}
     setDesign(draft??record.design);
@@ -28,7 +30,7 @@ export function CoverEditor({project,collection,output,revision,clips,onDirty,on
   useEffect(()=>{const controller=new AbortController();if(!design||design.mode!=="design"){setRendering(false);setPreviewError("");return;}setRendering(true);const timer=setTimeout(()=>{previewCover(route,revision,design,controller.signal).then(value=>{if(controller.signal.aborted)return;const url=URL.createObjectURL(value.blob);if(imageUrl.current)URL.revokeObjectURL(imageUrl.current);imageUrl.current=url;setImage(url);setWarnings(value.warnings);setPreviewError("");setRendering(false);}).catch(reason=>{if(!controller.signal.aborted){setPreviewError(String(reason.message??reason));setRendering(false);}});},250);return()=>{controller.abort();clearTimeout(timer);};},[route,revision,design]);
   useEffect(()=>()=>{if(imageUrl.current)URL.revokeObjectURL(imageUrl.current);},[]);
   function change(patch:Partial<CoverDesign>){setDesign(previous=>previous?{...previous,...patch}:previous);setError("");}
-  async function save(){if(!design||!saved||lock.current)return;lock.current=true;setBusy(true);setError("");try{const record=await saveCover(route,revision,saved.version,design);setSaved(record);onSaved(record.version);}catch(reason){setError(reason instanceof Error?reason.message:"保存封面失败");}finally{lock.current=false;setBusy(false);}}
+  async function save(){if(!design||!saved||lock.current)return;lock.current=true;setBusy(true);setError("");try{const record=await saveCover(route,revision,saved.version,design);setSaved(record);setDesign(record.design);onSaved(record.version);}catch(reason){setError(reason instanceof Error?reason.message:"保存封面失败");}finally{lock.current=false;setBusy(false);}}
   async function upload(file:File){if(lock.current)return;lock.current=true;setBusy(true);setError("");try{if(file.size>15*1024*1024)throw new Error("背景图片不能超过 15 MB");const identity=await uploadCoverBackground(route,revision,file);change({background_image:identity});}catch(reason){setError(reason instanceof Error?reason.message:"上传失败");}finally{lock.current=false;setBusy(false);}}
   function pointerDown(event:PointerEvent<HTMLElement>,resize:boolean,element:"frame"|"title_box"){
     if(!design||busy||!canvas.current)return;event.preventDefault();event.stopPropagation();setTarget(element);const rect=canvas.current.getBoundingClientRect();drag.current={x:event.clientX,y:event.clientY,box:{...design[element]},resize,target:element,width:rect.width,height:rect.height};event.currentTarget.setPointerCapture(event.pointerId);
@@ -39,6 +41,7 @@ export function CoverEditor({project,collection,output,revision,clips,onDirty,on
   const [width,height]=sizes[design.aspect_ratio];const box=design[target];const frameMs=design.frame_ms??retained[0]?.start_ms??0;
   const selectedClip=retained.find(c=>c.start_ms<=frameMs&&frameMs<c.end_ms);
   return <section className="cover-editor" aria-label="封面设计"><h2>封面设计</h2><p className="helper-text">背景、视频帧和大标题组成独立封面。保存封面不重新渲染视频。</p>
+    <CoverTemplateControls project={project} collection={collection} output={output} revision={revision} design={design} onChange={setDesign} disabled={working} onBusy={setTemplateBusy}/>
     <fieldset disabled={busy}><label>封面模式<select value={design.mode} onChange={e=>change({mode:e.target.value as CoverDesign["mode"]})}><option value="first_frame">直接使用成片第一帧</option><option value="design">自定义封面</option></select></label>
     {design.mode==="design"&&<>
       <label>封面尺寸<select value={design.aspect_ratio} onChange={e=>{const ratio=e.target.value as CoverDesign["aspect_ratio"];change({aspect_ratio:ratio,...layout(ratio)});}}><option value="9:16">竖屏 9:16 · 1080 × 1920</option><option value="16:9">横屏 16:9 · 1920 × 1080</option><option value="1:1">方形 1:1 · 1080 × 1080</option><option value="3:4">竖版 3:4 · 1080 × 1440</option></select></label>
