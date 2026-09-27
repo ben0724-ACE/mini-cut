@@ -10,9 +10,13 @@ import { GenerationDetails } from "./GenerationDetails";
 import { navigateToExportResults } from "./exportNavigation";
 import { useGenerationDraft } from "./useGenerationDraft";
 import { GenerationHistory } from "./GenerationHistory";
+import { PresetControls } from "./PresetControls";
+import { usePresetLibrary } from "./usePresetLibrary";
 
 export function HighlightPanel({project, asset, recover = recoverHighlights, transcription}: {project: string; asset: AssetDetail; recover?: typeof recoverHighlights;transcription?:ReactNode}) {
   const generationDraft = useGenerationDraft(project, asset.asset_id);
+  const presetLibrary = usePresetLibrary();
+  const selectedPreset = presetLibrary.presets.find(item=>item.preset_id===generationDraft.draft.custom_preset_id);
   const [dirty,setDirty]=useState(false);
   const [task, setTask] = useState<HighlightTask | null>(null);
   const [loading, setLoading] = useState(true); const [error, setError] = useState("");
@@ -70,10 +74,12 @@ export function HighlightPanel({project, asset, recover = recoverHighlights, tra
     <p role="status">{!generationDraft.loaded ? "正在恢复生成配置…" : generationDraft.saveError ? "草稿尚未保存到项目" : generationDraft.saving ? "正在保存草稿…" : "草稿已保存到项目"}</p>
     {generationDraft.saveError && <p role="alert">{generationDraft.saveError}<button type="button" onClick={()=>void generationDraft.flush().catch(()=>{})}>重试保存草稿</button></p>}
     <HighlightForm draft={generationDraft.draft} onChange={generationDraft.change}
-      ready={asset.has_transcript} busy={loading||submitting||active||!!error||!generationDraft.loaded}
+      ready={asset.has_transcript} busy={loading||submitting||active||!!error||!generationDraft.loaded||presetLibrary.busy}
+      presetDefaultPrompt={selectedPreset?.draft.prompts[selectedPreset.draft.preset]??null}
+      presetControls={<PresetControls draft={generationDraft.draft} onChange={generationDraft.change} library={presetLibrary} disabled={loading||submitting||active||!!error||!generationDraft.loaded} />}
       onSubmit={brief=>navigateWithDraft(()=>void submit(brief))} />
     <GenerationHistory project={project} asset={asset.asset_id}
-      refreshKey={`${task?.task_id}:${task?.status}`} disabled={submitting||active||!generationDraft.loaded}
+      refreshKey={`${task?.task_id}:${task?.status}`} disabled={submitting||active||!generationDraft.loaded||presetLibrary.busy}
       onLoad={generationDraft.loadHistory} />
   </>;
   const generation=<>{transcription}{draftControls}{error&&<p role="alert">{error}<button onClick={()=>{setError("");setLoading(true);setRetry(value=>value+1);}}>恢复查询</button></p>}{active&&<p role="status">{task.status==="pending"?"等待 AI 生成":"AI 正在生成"}</p>}{active&&<button onClick={()=>void cancelOutputExport(project,task.task_id).catch(reason=>setError(reason instanceof Error?reason.message:"取消失败"))}>取消生成</button>}{task?.status==="failed"&&<p role="alert">生成失败：{task.error}</p>}{(task?.status==="failed"||task?.status==="cancelled")&&task.resumable&&<button disabled={submitting} onClick={async()=>{setSubmitting(true);setError("");try{setTask(await resumeTask<HighlightTask>(project,task.task_id));}catch(reason){setError(reason instanceof Error?reason.message:"恢复失败");}finally{setSubmitting(false);}}}>恢复生成（复用已完成分析）</button>}{task?.status==="cancelled"&&<p role="status">生成已取消，已完成分析可恢复。</p>}{result?.model_requests&&<ModelUsage requests={result.model_requests} />}{result&&<GenerationDetails assetName={asset.name} result={result} />}</>;

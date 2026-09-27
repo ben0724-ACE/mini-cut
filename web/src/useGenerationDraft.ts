@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getGenerationDraft, saveGenerationDraft, type GenerationHistoryEntry } from "./api";
-import { defaultGenerationDraft, draftFromBrief, type GenerationDraft } from "./generationDraft";
+import { defaultGenerationDraft, draftFromHistory, type GenerationDraft } from "./generationDraft";
 
 interface SaveSession {
   pending: GenerationDraft | null;
@@ -23,10 +23,12 @@ function remember(key:string, draft:GenerationDraft) {
 function pendingDraft(key:string): GenerationDraft | null {
   try {
     const raw = JSON.parse(localStorage.getItem(key) ?? "null") as Partial<GenerationDraft> | null;
-    const value = raw ? {...raw, limit_duration:raw.limit_duration ?? true} as GenerationDraft : null;
+    const value = raw ? {...raw, limit_duration:raw.limit_duration ?? true, custom_preset_id:raw.custom_preset_id??null, custom_preset_name:raw.custom_preset_name??null,custom_prompt:raw.custom_prompt??null} as GenerationDraft : null;
     if (!value || !value.prompts || typeof value.instructions !== "string" || !(value.preset in defaultGenerationDraft().prompts)) return null;
     const defaults = defaultGenerationDraft();
-    if (Object.keys(defaults).some(key=>typeof value[key as keyof GenerationDraft] !== typeof defaults[key as keyof GenerationDraft])) return null;
+    const metadata = ["custom_preset_id", "custom_preset_name", "custom_prompt"];
+    if (Object.keys(defaults).filter(key=>!metadata.includes(key)).some(key=>typeof value[key as keyof GenerationDraft] !== typeof defaults[key as keyof GenerationDraft])) return null;
+    if (metadata.some(key=>value[key as keyof GenerationDraft] !== null && typeof value[key as keyof GenerationDraft] !== "string")) return null;
     return value;
   } catch {return null;}
 }
@@ -88,7 +90,8 @@ export function useGenerationDraft(project:string, asset:string) {
     load().then(response=>{
       if (controller.signal.aborted) return;
       const pending = session.pending ?? pendingDraft(key);
-      const next = pending ?? response.draft ?? (response.history ? draftFromBrief(response.history.brief) : defaultGenerationDraft());
+      const defaults = defaultGenerationDraft();
+      const next = pending ?? (response.draft ? {...defaults,...response.draft,prompts:{...defaults.prompts,...response.draft.prompts}} : response.history ? draftFromHistory(response.history) : defaults);
       setDraft(next); setLoaded(true);
       const messages = {
         asset:"已恢复当前素材的草稿", project:"已沿用项目最近保存的配置，各素材草稿分别保存",
@@ -105,7 +108,7 @@ export function useGenerationDraft(project:string, asset:string) {
     setDraft(next); queue(project, asset, next);
   }, [project, asset]);
   const loadHistory = (entry:GenerationHistoryEntry)=>{
-    change(draftFromBrief(entry.brief));
+    change(draftFromHistory(entry));
     setNotice(entry.missing_fields.length ? "已载入历史为新草稿；未记录的字段已用当前默认设置补齐，请核对。这些默认值不代表当时的配置。" : "已载入历史为新草稿；尚未生成，现有作品保持不变");
   };
   return {draft, loaded, loadError, notice, change, loadHistory,

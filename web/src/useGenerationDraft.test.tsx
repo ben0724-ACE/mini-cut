@@ -92,3 +92,20 @@ it("载入旧历史只修改草稿，原始记录保持不变并提示默认补�
   expect(screen.getByText(/默认值不代表当时的配置/)).toBeInTheDocument();
   expect(JSON.stringify(history)).toBe(original);
 });
+
+it("旧格式草稿和带自定义预设的未同步草稿都能恢复",async()=>{
+  const initial=defaultGenerationDraft();
+  const {custom_preset_id:_id,custom_preset_name:_name,custom_prompt:_prompt,...legacy}=initial;
+  vi.mocked(getGenerationDraft).mockResolvedValue({source:"asset",draft:legacy});
+  vi.mocked(saveGenerationDraft).mockReset().mockImplementation(async(_project,_asset,draft)=>({source:"asset",draft}));
+  const old=render(<Harness project="legacy-compatible" />);
+  await screen.findByText("已保存");
+  expect(screen.getByLabelText("预设提示词")).toHaveValue(initial.prompts[initial.preset]);
+  old.unmount();
+  const custom={...initial,custom_preset_id:"deleted",custom_preset_name:"已删除的模板",custom_prompt:"未同步的自定义文字"};
+  localStorage.setItem("minicut:generation-draft:custom-reload:one",JSON.stringify(custom));
+  render(<Harness project="custom-reload" />);
+  await screen.findByText("已保存");
+  expect(screen.getByLabelText("预设提示词")).toHaveValue("未同步的自定义文字");
+  expect(saveGenerationDraft).toHaveBeenLastCalledWith("custom-reload","one",expect.objectContaining({custom_preset_id:"deleted",custom_preset_name:"已删除的模板",custom_prompt:"未同步的自定义文字"}));
+});

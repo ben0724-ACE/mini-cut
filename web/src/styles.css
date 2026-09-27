@@ -269,3 +269,26 @@ hr { border:0;border-top:1px solid #343d4c;margin:24px 0; }
 .generation-history-parameters { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .generation-history-parameters dt { color: #aebbd0; font-size: 12px; }
 .generation-history-parameters dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+
+.preset-controls { margin-bottom: 14px; }
+.preset-management { padding: 12px; margin: 12px 0; border: 1px solid #344154; border-radius: 8px; }
+.preset-management summary { cursor: pointer; font-weight: 600; }
+.preset-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.preset-delete-confirm { margin-top: 12px; padding: 10px; background: #35282b; border-radius: 6px; }
+.preset-delete-confirm button { margin-right: 8px; }
+
+.preset-apply-controls { margin: 12px 0; }
+.preset-apply-actions { display: flex; gap: 8px; }
+.preset-apply-actions button { flex: 1; }
+.generate-candidates-button,
+.workbench button.generate-candidates-button {
+  display: block;
+  width: auto;
+  min-width: 140px;
+  min-height: 40px;
+  margin-top: 16px;
+  padding: 9px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 8px;
+}

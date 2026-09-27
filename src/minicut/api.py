@@ -50,6 +50,13 @@ from minicut.application import (
 )
 from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError, UserInputError
+from minicut.generation_presets import (
+    GenerationPresetBody,
+    GenerationPresetLibrary,
+    PresetNameConflict,
+    PresetNotFound,
+    PresetRenameBody,
+)
 from minicut.generation_settings import GenerationDraft, GenerationSettings
 from minicut.highlight_brief import HighlightBrief, HighlightPreset
 from minicut.highlight_service import (
@@ -154,6 +161,8 @@ class PlanTaskBody(BaseModel):
 class HighlightTaskBody(BaseModel):
     asset_id: SafeFileName
     preset: HighlightPreset
+    custom_preset_id: str | None = Field(default=None, max_length=80)
+    custom_preset_name: str | None = Field(default=None, max_length=80)
     body_mode: str = Field(default="continuous", pattern=r"^(continuous|compact)$")
     translation_language: str | None = Field(default=None, pattern=r"^(zh|en)$")
     subtitle_mode: str = Field(default="bilingual", pattern=r"^(bilingual|translated)$")
@@ -166,7 +175,11 @@ class HighlightTaskBody(BaseModel):
     max_source_overlap: float = Field(default=0.3, ge=0, le=1)
 
     def brief(self) -> HighlightBrief:
-        return HighlightBrief(**self.model_dump(exclude={"asset_id"}))
+        return HighlightBrief(
+            **self.model_dump(
+                exclude={"asset_id", "custom_preset_id", "custom_preset_name"}
+            )
+        )
 
     @model_validator(mode="after")
     def valid_brief(self) -> Self:
@@ -560,6 +573,48 @@ def create_app(
     api = FastAPI(title="MiniCut local API", version="0.1.0")
 
     api.add_middleware(ProjectDeletionGuard)
+    preset_library = GenerationPresetLibrary(root)
+
+    @api.get("/api/generation-presets")
+    def list_generation_presets() -> list[dict[str, object]]:  # pyright: ignore[reportUnusedFunction]
+        return preset_library.list()
+
+    @api.post("/api/generation-presets", status_code=201)
+    def create_generation_preset(body: GenerationPresetBody) -> dict[str, object]:  # pyright: ignore[reportUnusedFunction]
+        try:
+            return preset_library.create(body)
+        except PresetNameConflict:
+            raise HTTPException(409, "已有同名预设，请换一个名称") from None
+
+    @api.put("/api/generation-presets/{preset_id}")
+    def update_generation_preset(  # pyright: ignore[reportUnusedFunction]
+        preset_id: SafeFileName, body: GenerationPresetBody
+    ) -> dict[str, object]:
+        try:
+            return preset_library.update(preset_id, body)
+        except PresetNameConflict:
+            raise HTTPException(409, "已有同名预设，请换一个名称") from None
+        except PresetNotFound:
+            raise HTTPException(404, "预设已删除或不存在，请重新读取预设库") from None
+
+    @api.patch("/api/generation-presets/{preset_id}")
+    def rename_generation_preset(  # pyright: ignore[reportUnusedFunction]
+        preset_id: SafeFileName, body: PresetRenameBody
+    ) -> dict[str, object]:
+        try:
+            return preset_library.rename(preset_id, body.name)
+        except PresetNameConflict:
+            raise HTTPException(409, "已有同名预设，请换一个名称") from None
+        except PresetNotFound:
+            raise HTTPException(404, "预设已删除或不存在，请重新读取预设库") from None
+
+    @api.delete("/api/generation-presets/{preset_id}")
+    def delete_generation_preset(preset_id: SafeFileName) -> dict[str, bool]:  # pyright: ignore[reportUnusedFunction]
+        try:
+            preset_library.delete(preset_id)
+        except PresetNotFound:
+            raise HTTPException(404, "预设已删除或不存在，请重新读取预设库") from None
+        return {"deleted": True}
 
     def inspect(project_id: str) -> InspectResult:
         try:
@@ -1200,7 +1255,11 @@ def create_app(
             asset.asset_id: Path(asset.source_path).name
             for asset in ProjectRepository(directory).read().assets
         }
-        fields = set(HighlightTaskBody.model_fields) - {"asset_id"}
+        fields = set(HighlightTaskBody.model_fields) - {
+            "asset_id",
+            "custom_preset_id",
+            "custom_preset_name",
+        }
         entries: list[tuple[int, dict[str, object]]] = []
         collections: set[str] = set()
 
@@ -1238,6 +1297,8 @@ def create_app(
                         "error": job.get("error"),
                         "collection_id": collection,
                         "brief": brief,
+                        "custom_preset_id": request.get("custom_preset_id"),
+                        "custom_preset_name": request.get("custom_preset_name"),
                         "missing_fields": sorted(
                             key
                             for key in fields
@@ -1269,6 +1330,8 @@ def create_app(
                         "error": None,
                         "collection_id": path.stem,
                         "brief": brief,
+                        "custom_preset_id": result.get("custom_preset_id"),
+                        "custom_preset_name": result.get("custom_preset_name"),
                         "missing_fields": sorted(
                             key
                             for key in fields
@@ -1365,11 +1428,16 @@ def create_app(
                 )
             return highlights(root / project_id, body.asset_id, collection, resolved)
 
+        request_data = body.model_dump(mode="json")
+        # Retain old idempotency requests when no custom template was used.
+        for field in ("custom_preset_id", "custom_preset_name"):
+            if request_data[field] is None:
+                request_data.pop(field)
         return submit_task(
             project_id,
             idempotency_key,
             "highlights",
-            body.model_dump(mode="json"),
+            request_data,
             background_tasks,
             operation,
             generation_config=resolved.to_dict(),

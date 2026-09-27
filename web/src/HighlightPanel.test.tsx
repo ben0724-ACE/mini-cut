@@ -2,10 +2,10 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HighlightPanel } from "./HighlightPanel";
-import { startHighlights, getHighlights, getGenerationDraft, saveGenerationDraft, getGenerationHistory } from "./api";
-vi.mock("./api", async original => ({...await original<typeof import("./api")>(), getGenerationDraft: vi.fn().mockResolvedValue({source:"default",draft:null}), saveGenerationDraft: vi.fn().mockImplementation(async (_project,_asset,draft)=>({source:"asset",draft})), getGenerationHistory: vi.fn().mockResolvedValue([]), startHighlights: vi.fn().mockResolvedValue({task_id:"new",status:"pending",result:null,error:null}), getHighlights: vi.fn().mockResolvedValue({selected_output_ids: []}), saveHighlightSelection: vi.fn().mockResolvedValue({selected_output_ids:["video-1"]})}));
+import { startHighlights, getHighlights, getGenerationDraft, saveGenerationDraft, getGenerationHistory, listGenerationPresets } from "./api";
+vi.mock("./api", async original => ({...await original<typeof import("./api")>(), getGenerationDraft: vi.fn().mockResolvedValue({source:"default",draft:null}), saveGenerationDraft: vi.fn().mockImplementation(async (_project,_asset,draft)=>({source:"asset",draft})), getGenerationHistory: vi.fn().mockResolvedValue([]), listGenerationPresets: vi.fn().mockResolvedValue([]), startHighlights: vi.fn().mockResolvedValue({task_id:"new",status:"pending",result:null,error:null}), getHighlights: vi.fn().mockResolvedValue({selected_output_ids: []}), saveHighlightSelection: vi.fn().mockResolvedValue({selected_output_ids:["video-1"]})}));
 
-beforeEach(()=>{localStorage.clear();vi.mocked(getGenerationDraft).mockResolvedValue({source:"default",draft:null});vi.mocked(saveGenerationDraft).mockImplementation(async (_project,_asset,draft)=>({source:"asset",draft}));vi.mocked(getGenerationHistory).mockResolvedValue([]);});
+beforeEach(()=>{localStorage.clear();vi.mocked(getGenerationDraft).mockResolvedValue({source:"default",draft:null});vi.mocked(saveGenerationDraft).mockImplementation(async (_project,_asset,draft)=>({source:"asset",draft}));vi.mocked(getGenerationHistory).mockResolvedValue([]);vi.mocked(listGenerationPresets).mockResolvedValue([]);});
 
 it("连续点击只提交一个生成任务", async () => {
   vi.mocked(startHighlights).mockClear();

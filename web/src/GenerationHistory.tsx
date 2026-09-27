@@ -48,6 +48,7 @@ export function GenerationHistory({project,asset,refreshKey,disabled,onLoad}:{pr
       {!loading&&!error&&entry&&<>
         <label>生成记录<select aria-label="生成记录" value={selected} onChange={event=>setSelected(event.target.value)}>{entries.map(item=><option key={item.history_id} value={item.history_id}>{item.created_at?new Date(item.created_at).toLocaleString():"时间未记录"} · {statuses[item.status]??item.status} · {item.asset_name??item.asset_id} · {item.history_id}</option>)}</select></label>
         <p className="helper-text">素材：{entry.asset_name??entry.asset_id} · {statuses[entry.status]??entry.status}</p>
+        {entry.custom_preset_name&&<p className="helper-text">当次自定义预设：{entry.custom_preset_name}</p>}
         {entry.error&&<p>当次错误：{entry.error}</p>}
         <label>历史预设提示词<textarea aria-label="历史预设提示词" readOnly value={entry.brief.preset_prompt??"未记录，无法确认当时使用的预设提示词"} /></label>
         <label>历史剪辑要求<textarea aria-label="历史剪辑要求" readOnly value={entry.brief.instructions??"未记录"} /></label>

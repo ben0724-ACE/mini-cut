@@ -16,6 +16,9 @@ class GenerationDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     preset: HighlightPreset
+    custom_preset_id: str | None = Field(default=None, max_length=80)
+    custom_preset_name: str | None = Field(default=None, max_length=80)
+    custom_prompt: str | None = Field(default=None, max_length=12000)
     prompts: dict[HighlightPreset, Annotated[str, Field(max_length=12000)]] = Field(
         max_length=4
     )
