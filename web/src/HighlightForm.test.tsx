@@ -72,3 +72,14 @@ it("字幕翻译可选目标语言和仅译文，关闭后不请求翻译",async
   await userEvent.click(screen.getByRole("button",{name:"生成候选"}));
   expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({translation_language:null}));
 });
+
+it("载入历史不限时配置后不偷偷增加时长限制",async()=>{
+  const {draftFromBrief}=await import("./generationDraft");
+  const submit=vi.fn();
+  const saved=draftFromBrief({preset:"podcast_highlights",preset_prompt:"完整故事",min_ms:null,max_ms:null,count:2});
+  render(<HighlightForm ready busy={false} draft={saved} onSubmit={submit} />);
+  expect(screen.getByLabelText("限制目标时长")).not.toBeChecked();
+  expect(screen.getByLabelText("最短秒数")).toBeDisabled();
+  await userEvent.click(screen.getByRole("button",{name:"生成候选"}));
+  expect(submit).toHaveBeenCalledWith(expect.objectContaining({min_ms:null,max_ms:null}));
+});

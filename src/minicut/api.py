@@ -6,6 +6,7 @@ import os
 import shutil
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from threading import BoundedSemaphore, Lock
@@ -49,6 +50,7 @@ from minicut.application import (
 )
 from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError, UserInputError
+from minicut.generation_settings import GenerationDraft, GenerationSettings
 from minicut.highlight_brief import HighlightBrief, HighlightPreset
 from minicut.highlight_service import (
     RevisionConflict,
@@ -596,6 +598,7 @@ def create_app(
         operation: Callable[[], dict[str, object]],
         *,
         runners: list[Callable[[], None]] | None = None,
+        generation_config: dict[str, object] | None = None,
     ) -> TaskResponse:
         project_directory = root / project_id
         inspect(project_id)
@@ -611,6 +614,9 @@ def create_app(
             "result": None,
             "error": None,
         }
+        if kind == "highlights":
+            pending["created_at"] = datetime.now(UTC).isoformat()
+            pending["generation_config"] = generation_config
         try:
             _write_job(path, pending, create=True)
         except FileExistsError:
@@ -1178,6 +1184,148 @@ def create_app(
                 return _task_response(job)
         return None
 
+    def generation_asset(project_id: str, asset_id: str) -> None:
+        inspect(project_id)
+        if not any(
+            asset.asset_id == asset_id
+            for asset in ProjectRepository(root / project_id).read().assets
+        ):
+            raise HTTPException(404, "Asset does not exist")
+
+    def generation_history(
+        project_id: str, asset_id: str | None = None
+    ) -> list[dict[str, object]]:
+        directory = root / project_id
+        assets = {
+            asset.asset_id: Path(asset.source_path).name
+            for asset in ProjectRepository(directory).read().assets
+        }
+        fields = set(HighlightTaskBody.model_fields) - {"asset_id"}
+        entries: list[tuple[int, dict[str, object]]] = []
+        collections: set[str] = set()
+
+        def order(path: Path, record: dict[str, object]) -> int:
+            created = record.get("created_at")
+            if isinstance(created, str):
+                return int(datetime.fromisoformat(created).timestamp() * 1_000_000_000)
+            return path.stat().st_mtime_ns
+
+        for path in (directory / ".minicut/jobs").glob("*.json"):
+            job = _read_job(path)
+            if job.get("kind") != "highlights":
+                continue
+            request = cast(dict[str, object], job.get("request", {}))
+            if asset_id is not None and request.get("asset_id") != asset_id:
+                continue
+            result = cast(dict[str, object], job.get("result") or {})
+            brief = cast(
+                dict[str, object],
+                job.get("generation_config")
+                or result.get("brief")
+                or {key: value for key, value in request.items() if key in fields},
+            )
+            collection = result.get("collection_id") or f"highlights-{job['task_id']}"
+            collections.add(str(collection))
+            entries.append(
+                (
+                    order(path, job),
+                    {
+                        "history_id": job["task_id"],
+                        "asset_id": request.get("asset_id"),
+                        "asset_name": assets.get(str(request.get("asset_id"))),
+                        "created_at": job.get("created_at"),
+                        "status": job["status"],
+                        "error": job.get("error"),
+                        "collection_id": collection,
+                        "brief": brief,
+                        "missing_fields": sorted(
+                            key
+                            for key in fields
+                            if key not in brief
+                            or (key == "preset_prompt" and brief[key] is None)
+                        ),
+                    },
+                )
+            )
+        # Older results may survive without their original job file.
+        for path in (directory / ".minicut/highlight-results").glob("*.json"):
+            result = cast(
+                dict[str, object], json.loads(path.read_text(encoding="utf-8"))
+            )
+            if path.stem in collections or (
+                asset_id is not None and result.get("asset_id") != asset_id
+            ):
+                continue
+            brief = cast(dict[str, object], result.get("brief") or {})
+            entries.append(
+                (
+                    order(path, result),
+                    {
+                        "history_id": path.stem,
+                        "asset_id": result.get("asset_id"),
+                        "asset_name": assets.get(str(result.get("asset_id"))),
+                        "created_at": result.get("created_at"),
+                        "status": "succeeded",
+                        "error": None,
+                        "collection_id": path.stem,
+                        "brief": brief,
+                        "missing_fields": sorted(
+                            key
+                            for key in fields
+                            if key not in brief
+                            or (key == "preset_prompt" and brief[key] is None)
+                        ),
+                    },
+                )
+            )
+        return [
+            entry
+            for _, entry in sorted(entries, key=lambda pair: pair[0], reverse=True)
+        ]
+
+    @api.get("/api/projects/{project_id}/generation-history")
+    def list_generation_history(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId, asset_id: SafeFileName | None = None
+    ) -> list[dict[str, object]]:
+        inspect(project_id)
+        if asset_id is not None:
+            generation_asset(project_id, asset_id)
+        return generation_history(project_id, asset_id)
+
+    @api.get("/api/projects/{project_id}/assets/{asset_id}/generation-draft")
+    def get_generation_draft(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId, asset_id: SafeFileName
+    ) -> dict[str, object]:
+        generation_asset(project_id, asset_id)
+        settings = GenerationSettings(root / project_id)
+        own = settings.read(asset_id)
+        if own is not None:
+            return {**own, "source": "asset"}
+        history = generation_history(project_id, asset_id)
+        if history:
+            return {"source": "history", "history": history[0], "draft": None}
+        recent = settings.read()
+        if recent is not None:
+            return {**recent, "source": "project"}
+        project_history = generation_history(project_id)
+        if project_history:
+            return {
+                "source": "project_history",
+                "history": project_history[0],
+                "draft": None,
+            }
+        return {"source": "default", "draft": None}
+
+    @api.put("/api/projects/{project_id}/assets/{asset_id}/generation-draft")
+    def save_generation_draft(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId, asset_id: SafeFileName, body: GenerationDraft
+    ) -> dict[str, object]:
+        generation_asset(project_id, asset_id)
+        return {
+            **GenerationSettings(root / project_id).save(asset_id, body),
+            "source": "asset",
+        }
+
     @api.post(
         "/api/projects/{project_id}/tasks/highlights",
         response_model=TaskResponse,
@@ -1198,6 +1346,11 @@ def create_app(
         ).is_file():
             raise HTTPException(400, "Transcription is required")
 
+        # Resolve defaults once so the snapshot and the actual generation agree.
+        resolved = HighlightTaskBody.model_validate(
+            {"asset_id": body.asset_id, **body.brief().to_dict()}
+        ).brief()
+
         def operation() -> dict[str, object]:
             collection = f"highlights-{idempotency_key}"
             if highlights is generate_highlights:
@@ -1205,14 +1358,12 @@ def create_app(
                     root / project_id,
                     body.asset_id,
                     collection,
-                    body.brief(),
+                    resolved,
                     cancellation=export_tokens.setdefault(
                         (project_id, idempotency_key), CancellationToken()
                     ),
                 )
-            return highlights(
-                root / project_id, body.asset_id, collection, body.brief()
-            )
+            return highlights(root / project_id, body.asset_id, collection, resolved)
 
         return submit_task(
             project_id,
@@ -1221,6 +1372,7 @@ def create_app(
             body.model_dump(mode="json"),
             background_tasks,
             operation,
+            generation_config=resolved.to_dict(),
         )
 
     @api.get(
@@ -1544,6 +1696,13 @@ def create_app(
                 identity,
             )
         if job.get("kind") == "highlights":
+            if isinstance(request, dict) and isinstance(
+                job.get("generation_config"), dict
+            ):
+                request = {
+                    **cast(dict[str, object], request),
+                    **cast(dict[str, object], job["generation_config"]),
+                }
             return submit_highlights(
                 project_id,
                 HighlightTaskBody.model_validate(request),

@@ -8,8 +8,11 @@ import { navigateWithDraft } from "./draftNavigation";
 import { OutputWorkspace } from "./OutputWorkspace";
 import { GenerationDetails } from "./GenerationDetails";
 import { navigateToExportResults } from "./exportNavigation";
+import { useGenerationDraft } from "./useGenerationDraft";
+import { GenerationHistory } from "./GenerationHistory";
 
 export function HighlightPanel({project, asset, recover = recoverHighlights, transcription}: {project: string; asset: AssetDetail; recover?: typeof recoverHighlights;transcription?:ReactNode}) {
+  const generationDraft = useGenerationDraft(project, asset.asset_id);
   const [dirty,setDirty]=useState(false);
   const [task, setTask] = useState<HighlightTask | null>(null);
   const [loading, setLoading] = useState(true); const [error, setError] = useState("");
@@ -55,13 +58,25 @@ export function HighlightPanel({project, asset, recover = recoverHighlights, tra
     if (lock.current || active || loading || error) return;
     lock.current = true; setSubmitting(true);
     if (!identity.current || task?.status === "succeeded" || task?.status === "failed" || task?.status === "cancelled") identity.current = crypto.randomUUID();
-    try {setTask(await startHighlights(project, asset.asset_id, brief, identity.current));}
+    try {await generationDraft.flush();setTask(await startHighlights(project, asset.asset_id, brief, identity.current));}
     catch (reason: unknown) {setError(reason instanceof Error ? reason.message : "生成提交失败");}
     finally {lock.current = false; setSubmitting(false);}
   }
   const result=task?.status==="succeeded"?task.result:null;
   const current=result?.outputs.find(output=>output.output_id===focused)??result?.outputs[0];
-  const generation=<>{transcription}<HighlightForm ready={asset.has_transcript} busy={loading||submitting||active||!!error} onSubmit={brief=>navigateWithDraft(()=>void submit(brief))} />{error&&<p role="alert">{error}<button onClick={()=>{setError("");setLoading(true);setRetry(value=>value+1);}}>恢复查询</button></p>}{active&&<p role="status">{task.status==="pending"?"等待 AI 生成":"AI 正在生成"}</p>}{active&&<button onClick={()=>void cancelOutputExport(project,task.task_id).catch(reason=>setError(reason instanceof Error?reason.message:"取消失败"))}>取消生成</button>}{task?.status==="failed"&&<p role="alert">生成失败：{task.error}</p>}{(task?.status==="failed"||task?.status==="cancelled")&&task.resumable&&<button disabled={submitting} onClick={async()=>{setSubmitting(true);setError("");try{setTask(await resumeTask<HighlightTask>(project,task.task_id));}catch(reason){setError(reason instanceof Error?reason.message:"恢复失败");}finally{setSubmitting(false);}}}>恢复生成（复用已完成分析）</button>}{task?.status==="cancelled"&&<p role="status">生成已取消，已完成分析可恢复。</p>}{result?.model_requests&&<ModelUsage requests={result.model_requests} />}{result&&<GenerationDetails assetName={asset.name} result={result} />}</>;
+  const draftControls = <>
+    <p className="helper-text">{generationDraft.notice}</p>
+    {generationDraft.loadError && <p role="alert">无法恢复生成草稿：{generationDraft.loadError}<button type="button" onClick={generationDraft.retryLoad}>重试恢复草稿</button></p>}
+    <p role="status">{!generationDraft.loaded ? "正在恢复生成配置…" : generationDraft.saveError ? "草稿尚未保存到项目" : generationDraft.saving ? "正在保存草稿…" : "草稿已保存到项目"}</p>
+    {generationDraft.saveError && <p role="alert">{generationDraft.saveError}<button type="button" onClick={()=>void generationDraft.flush().catch(()=>{})}>重试保存草稿</button></p>}
+    <HighlightForm draft={generationDraft.draft} onChange={generationDraft.change}
+      ready={asset.has_transcript} busy={loading||submitting||active||!!error||!generationDraft.loaded}
+      onSubmit={brief=>navigateWithDraft(()=>void submit(brief))} />
+    <GenerationHistory project={project} asset={asset.asset_id}
+      refreshKey={`${task?.task_id}:${task?.status}`} disabled={submitting||active||!generationDraft.loaded}
+      onLoad={generationDraft.loadHistory} />
+  </>;
+  const generation=<>{transcription}{draftControls}{error&&<p role="alert">{error}<button onClick={()=>{setError("");setLoading(true);setRetry(value=>value+1);}}>恢复查询</button></p>}{active&&<p role="status">{task.status==="pending"?"等待 AI 生成":"AI 正在生成"}</p>}{active&&<button onClick={()=>void cancelOutputExport(project,task.task_id).catch(reason=>setError(reason instanceof Error?reason.message:"取消失败"))}>取消生成</button>}{task?.status==="failed"&&<p role="alert">生成失败：{task.error}</p>}{(task?.status==="failed"||task?.status==="cancelled")&&task.resumable&&<button disabled={submitting} onClick={async()=>{setSubmitting(true);setError("");try{setTask(await resumeTask<HighlightTask>(project,task.task_id));}catch(reason){setError(reason instanceof Error?reason.message:"恢复失败");}finally{setSubmitting(false);}}}>恢复生成（复用已完成分析）</button>}{task?.status==="cancelled"&&<p role="status">生成已取消，已完成分析可恢复。</p>}{result?.model_requests&&<ModelUsage requests={result.model_requests} />}{result&&<GenerationDetails assetName={asset.name} result={result} />}</>;
   const shortlist=<section className="candidate-sidebar" aria-label="候选作品列表" ref={node=>{if(node)node.scrollTop=candidateScrollTop.current;}} onScroll={event=>{candidateScrollTop.current=event.currentTarget.scrollTop;}}><h2>候选作品</h2>{result&&<><label><input type="checkbox" checked={onlySelected} onChange={event=>setOnlySelected(event.target.checked)} />只看已选作品</label><p className="muted">{result.outputs.length} 条候选 · 已选 {selected.length} 条{saving?" · 保存中":""}</p>{selectionError&&<p role="alert">{selectionError}</p>}<div className="candidate-list">{result.outputs.filter(output=>!onlySelected||selected.includes(output.output_id)).map(output=><article key={output.output_id} className={`candidate-row ${current?.output_id===output.output_id?"is-current":""}`}><button className="candidate-title" aria-pressed={current?.output_id===output.output_id} onClick={()=>focusOutput(output.output_id)}>{output.title}</button><p className="muted">{(output.duration_ms/1000).toFixed(1)} 秒 · v{output.revision}</p><label><input type="checkbox" aria-label={`选择${output.title}`} disabled={saving||selectionLoading} checked={selected.includes(output.output_id)} onChange={event=>void select(output.output_id,event.target.checked)} />加入批量</label><details><summary>选材理由</summary><p className="helper-text">{output.reason}</p></details></article>)}</div>{onlySelected&&selected.length===0&&<p>尚未选择作品</p>}{result.outputs.length===0&&<p>没有符合要求的候选，请调整要求。</p>}</>}{!result&&<p className="muted">生成后在此选择作品</p>}</section>;
   const showExports=(entries:{outputId:string;taskId:string}[])=>navigateToExportResults(project,collection,entries);
   const batch=result&&result.outputs.length>0?<BatchExport project={project} collection={collection} outputs={result.outputs} selected={selected} disabled={saving||selectionLoading||dirty} onSubmitted={showExports} />:null;

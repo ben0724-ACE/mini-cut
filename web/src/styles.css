@@ -255,3 +255,11 @@ hr { border:0;border-top:1px solid #343d4c;margin:24px 0; }
 .subtitle-unsaved { color:#e4bc7a; font-size:11px; }
 .subtitle-card-editor { padding:12px; border-top:1px solid #383e48; }
 .subtitle-card.segment--delete .subtitle-card-preview { color:#bcaeb3; text-decoration:line-through; }
+
+.generation-history { margin-top: 18px; padding-top: 12px; border-top: 1px solid #344154; }
+.generation-history summary { cursor: pointer; font-weight: 600; }
+.generation-history label { display: block; margin-top: 12px; }
+.generation-history textarea { min-height: 90px; white-space: pre-wrap; }
+.generation-history-parameters { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.generation-history-parameters dt { color: #aebbd0; font-size: 12px; }
+.generation-history-parameters dd { margin: 4px 0 0; overflow-wrap: anywhere; }
