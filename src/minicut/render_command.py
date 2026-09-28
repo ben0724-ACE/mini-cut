@@ -207,6 +207,7 @@ class RenderCommandBuilder:
         *,
         subtitle_font: SubtitleFont | None = None,
         video_metadata: VideoOutputMetadata | None = None,
+        styled_subtitles: bool = False,
     ) -> tuple[str, ...]:
         """Attach a selectable track or render subtitle text into video frames."""
         input_url = _local_file_url(input_path, label="subtitle video input")
@@ -240,11 +241,15 @@ class RenderCommandBuilder:
             subtitle_filter = (
                 f"subtitles=filename={_subtitle_filter_path(subtitle_path)}"
                 f":fontsdir={_subtitle_filter_path(str(subtitle_font.path.parent))}"
-                f":force_style='FontName={subtitle_font.family}"
                 + (
-                    "'"
-                    if video_metadata is None
-                    else f",FontSize={max(10, round(18 * min(1, video_metadata.width / video_metadata.height)))},MarginL=20,MarginR=20,MarginV=12'"
+                    ""
+                    if styled_subtitles
+                    else f":force_style='FontName={subtitle_font.family}"
+                    + (
+                        "'"
+                        if video_metadata is None
+                        else f",FontSize={max(10, round(18 * min(1, video_metadata.width / video_metadata.height)))},MarginL=20,MarginR=20,MarginV=12'"
+                    )
                 )
             )
             command.extend(

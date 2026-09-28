@@ -15,6 +15,7 @@ from minicut.output_plan import (
 )
 from minicut.output_timeline import (
     build_output_cues,
+    build_output_pages,
     compile_output_timeline,
     map_output_words,
 )
@@ -121,13 +122,16 @@ def test_bilingual_sentence_stays_together_when_languages_wrap_differently() -> 
         ),
     )
     timeline = compile_output_timeline(plan, (segment,), "a")
+    pages = build_output_pages(timeline, plan, ())
     cues = build_output_cues(timeline, plan, ())
     assert len(cues) == 2
     assert [(cue.start_ms, cue.end_ms) for cue in cues] == [
         (0, 4020),
         (4020, 8040),
     ]
-    assert [cue.text for cue in cues] == [
-        "Well, it's pretty\nobvious at this\n嗯，现在已经很明显了，AI",
-        "point that AI can\nbe very dangerous.\n可能会非常危险。",
-    ]
+    assert all(page.source and page.translation for page in pages)
+    assert all(len(cue.text.splitlines()) <= 2 for cue in cues)
+    assert " ".join(page.source.replace("\n", " ") for page in pages) == segment.text
+    assert "".join(page.translation or "" for page in pages) == (
+        "嗯，现在已经很明显了，AI 可能会非常危险。"
+    )

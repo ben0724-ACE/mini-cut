@@ -11,15 +11,16 @@ from minicut.output_render import OutputRenderRequest, RenderOutputUseCase
 from minicut.output_repository import OutputCollectionRepository
 from minicut.probe import probe_media
 from minicut.project import ProjectManifest, ProjectRepository
-from minicut.render_command import VideoOutputMetadata
+from minicut.render_command import SubtitleMode, VideoOutputMetadata
 from minicut.subtitle_translation import translate_collection
 from tests.test_subtitle_translation import Translator, fixture
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg required")
 @pytest.mark.parametrize("mode", ["bilingual", "translated"])
-def test_translated_soft_subtitle_export_keeps_audio_and_time(
-    tmp_path: Path, mode: str
+@pytest.mark.parametrize("subtitle_output", [SubtitleMode.SOFT, SubtitleMode.BURNED])
+def test_translated_subtitle_export_keeps_audio_and_time(
+    tmp_path: Path, mode: str, subtitle_output: SubtitleMode
 ) -> None:
     source = tmp_path / "source.mp4"
     subprocess.run(
@@ -61,7 +62,9 @@ def test_translated_soft_subtitle_export_keeps_audio_and_time(
     OutputCollectionRepository(tmp_path, "c").write(translated, s)
     result = RenderOutputUseCase().execute(
         OutputRenderRequest(
-            tmp_path, "c", "v", s, t, video_metadata=VideoOutputMetadata(160, 120, "25")
+            tmp_path, "c", "v", s, t,
+            subtitle_mode=subtitle_output,
+            video_metadata=VideoOutputMetadata(160, 120, "25"),
         )
     )
     exported = probe_media(result.output_path)
@@ -69,21 +72,27 @@ def test_translated_soft_subtitle_export_keeps_audio_and_time(
     assert any(stream.stream_type is StreamType.AUDIO for stream in exported.streams)
     text = result.subtitle_path.read_text()
     assert "你好" in text and ("Hello" in text) == (mode == "bilingual")
-    muxed = subprocess.run(
-        [
-            "ffmpeg",
-            "-v",
-            "error",
-            "-i",
-            str(result.output_path),
-            "-map",
-            "0:s:0",
-            "-f",
-            "srt",
-            "-",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    assert "你好" in muxed and ("Hello" in muxed) == (mode == "bilingual")
+    if subtitle_output is SubtitleMode.SOFT:
+        muxed = subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-i", str(result.output_path),
+                "-map", "0:s:0", "-f", "srt", "-",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert "你好" in muxed and ("Hello" in muxed) == (mode == "bilingual")
+    else:
+        pixels = subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-ss", "1", "-i", str(result.output_path),
+                "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+            ],
+            capture_output=True,
+            check=True,
+        ).stdout
+        assert sum(
+            1 for i in range(0, len(pixels), 3)
+            if all(channel > 180 for channel in pixels[i : i + 3])
+        ) > 10

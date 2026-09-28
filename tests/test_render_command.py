@@ -503,6 +503,16 @@ class SubtitleOutputCommandTest(unittest.TestCase):
                 "/base.mp4", "/text.srt", "/burned.mp4", SubtitleMode.BURNED
             )
 
+    def test_styled_ass_keeps_its_own_language_styles(self) -> None:
+        command = RenderCommandBuilder().build_subtitle_output(
+            "/base.mp4", "/text.ass", "/burned.mp4", SubtitleMode.BURNED,
+            subtitle_font=SubtitleFont("Noto Sans CJK SC", Path("/fonts/cjk.otf")),
+            styled_subtitles=True,
+        )
+        subtitle_filter = command[command.index("-vf") + 1]
+        self.assertIn("filename=/text.ass", subtitle_filter)
+        self.assertNotIn("force_style", subtitle_filter)
+
     def test_escapes_both_filter_layers_and_keeps_literal_percent_names(self) -> None:
         path = "/fonts/中 [文],v1:cut's/font.ttf"
         command = RenderCommandBuilder().build_subtitle_output(

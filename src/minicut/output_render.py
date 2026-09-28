@@ -15,7 +15,7 @@ from minicut.output_plan import OutputPlan, validate_output_id
 from minicut.output_repository import OutputCollectionRepository
 from minicut.output_timeline import (
     OutputContextIssue,
-    build_output_cues,
+    build_output_pages,
     compile_output_timeline,
     inspect_output_context,
     map_output_words,
@@ -30,7 +30,8 @@ from minicut.render_command import (
 )
 from minicut.renderer import FfmpegRenderer
 from minicut.semantic_segment import SemanticSegment
-from minicut.subtitle import SubtitleLayoutPolicy, render_srt
+from minicut.subtitle import SubtitleCue, SubtitleLayoutPolicy, render_srt
+from minicut.subtitle_ass import render_translated_ass
 from minicut.subtitle_font import SubtitleFont, resolve_subtitle_font
 from minicut.timeline import Timeline
 from minicut.timeline_validation import TimelineTrackRequirements
@@ -132,17 +133,19 @@ class RenderOutputUseCase:
             collection.asset_id,
             request.transcript.words,
         )
-        subtitle_text = render_srt(
-            build_output_cues(
-                timeline,
-                plan,
-                mapped,
-                SubtitleLayoutPolicy(
-                    max_characters_per_line=12
-                    if request.video_metadata.width < request.video_metadata.height
-                    else 18
-                ),
+        pages = build_output_pages(
+            timeline,
+            plan,
+            mapped,
+            SubtitleLayoutPolicy(
+                max_characters_per_line=12
+                if request.video_metadata.width < request.video_metadata.height
+                else 18
             ),
+            portrait=request.video_metadata.width < request.video_metadata.height,
+        )
+        subtitle_text = render_srt(
+            tuple(SubtitleCue(page.start_ms, page.end_ms, page.text) for page in pages),
             timeline.estimated_duration_ms,
         )
         font = (
@@ -217,13 +220,31 @@ class RenderOutputUseCase:
                     cancellation=request.cancellation,
                 )
                 staged_subtitle.write_text(subtitle_text, encoding="utf-8")
+                styled_subtitles = (
+                    request.subtitle_mode is SubtitleMode.BURNED
+                    and any(page.translation is not None for page in pages)
+                )
+                subtitle_input = staged_subtitle
+                if styled_subtitles:
+                    subtitle_input = staged_video.with_suffix(".ass")
+                    assert font is not None
+                    subtitle_input.write_text(
+                        render_translated_ass(
+                            pages,
+                            request.video_metadata.width,
+                            request.video_metadata.height,
+                            font,
+                        ),
+                        encoding="utf-8",
+                    )
                 command = self._builder.build_subtitle_output(
                     str(staged_video),
-                    str(staged_subtitle),
+                    str(subtitle_input),
                     str(staged_video),
                     request.subtitle_mode,
                     subtitle_font=font,
                     video_metadata=request.video_metadata,
+                    styled_subtitles=styled_subtitles,
                 )
                 self._renderer.render_to_path(
                     command,

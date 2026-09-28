@@ -1,7 +1,6 @@
 """Explicit-order compilation with validation bound to the source-ID plan."""
 
 from dataclasses import dataclass, replace
-from math import ceil
 from textwrap import wrap
 
 from minicut.media import MediaAsset, TimeRange
@@ -18,6 +17,7 @@ from minicut.subtitle import (
     build_readable_cues,
     map_retained_words,
 )
+from minicut.subtitle_pages import SubtitlePage, translated_pages
 from minicut.text_normalization import normalize_text
 from minicut.timeline import Clip, Timeline
 from minicut.timeline_validation import (
@@ -194,102 +194,44 @@ def map_output_words(
 _DEFAULT_SUBTITLE_POLICY = SubtitleLayoutPolicy()
 
 
-def _balanced_subtitle_pages(
-    text: str, count: int, max_characters_per_line: int
-) -> tuple[str, ...]:
-    """Distribute one language over the same number of timed bilingual pages."""
-    lines = wrap(text, width=max_characters_per_line)
-    if len(lines) < count:
-        lines = wrap(
-            text,
-            width=max(4, min(max_characters_per_line, ceil(len(text) / count))),
-        )
-    if len(lines) < count:
-        # A very short translation must remain present on every page.
-        return (text,) * count
-    return tuple(
-        "\n".join(
-            lines[index * len(lines) // count : (index + 1) * len(lines) // count]
-        )
-        for index in range(count)
-    )
-
-
-def build_output_cues(
+def build_output_pages(
     timeline: Timeline,
     plan: OutputPlan,
     mapped: tuple[MappedWord, ...],
     policy: SubtitleLayoutPolicy = _DEFAULT_SUBTITLE_POLICY,
-) -> tuple[SubtitleCue, ...]:
+    *,
+    portrait: bool = False,
+) -> tuple[SubtitlePage, ...]:
     by_instance = {item.instance_id: item for item in plan.items}
-    cues: list[SubtitleCue] = []
+    pages: list[SubtitlePage] = []
     for clip in timeline.clips:
         item = by_instance[clip.clip_id]
         if item.translation_text is not None:
+            words = tuple(word for word in mapped if word.clip_id == clip.clip_id)
             original = item.display_text or normalize_text(
-                " ".join(w.text for w in mapped if w.clip_id == clip.clip_id)
+                " ".join(word.text for word in words)
             )
-            translated = wrap(
-                item.translation_text, width=policy.max_characters_per_line
+            pages.extend(
+                translated_pages(
+                    original,
+                    item.translation_text,
+                    words if item.display_text is None else (),
+                    clip.output_range.start_ms,
+                    clip.output_range.end_ms,
+                    bilingual=item.subtitle_mode == "bilingual",
+                    translation_language=item.translation_language or "zh",
+                    portrait=portrait,
+                )
             )
-            if item.subtitle_mode == "bilingual":
-                source_lines = wrap(original, width=policy.max_characters_per_line)
-                # The two languages belong to one edited sentence, but their
-                # line counts differ. Page them together so neither language
-                # disappears before the sentence ends. Prefer at least two
-                # seconds per page over cramming a long sentence into a flash.
-                count = min(
-                    max(
-                        ceil(len(source_lines) / policy.max_lines),
-                        ceil(len(translated) / policy.max_lines),
-                    ),
-                    max(1, clip.output_range.duration_ms // 2000),
-                )
-                source_pages = _balanced_subtitle_pages(
-                    original, count, policy.max_characters_per_line
-                )
-                translated_pages = _balanced_subtitle_pages(
-                    item.translation_text, count, policy.max_characters_per_line
-                )
-                for index, (source_page, translated_page) in enumerate(
-                    zip(source_pages, translated_pages, strict=True)
-                ):
-                    start = (
-                        clip.output_range.start_ms
-                        + clip.output_range.duration_ms * index // count
-                    )
-                    end = (
-                        clip.output_range.start_ms
-                        + clip.output_range.duration_ms * (index + 1) // count
-                    )
-                    cues.append(
-                        SubtitleCue(start, end, f"{source_page}\n{translated_page}")
-                    )
-                continue
-            else:
-                pages = [
-                    "\n".join(translated[n : n + policy.max_lines])
-                    for n in range(0, len(translated), policy.max_lines)
-                ]
-            for n, text in enumerate(pages):
-                start = (
-                    clip.output_range.start_ms
-                    + clip.output_range.duration_ms * n // len(pages)
-                )
-                end = clip.output_range.start_ms + clip.output_range.duration_ms * (
-                    n + 1
-                ) // len(pages)
-                if end > start:
-                    cues.append(SubtitleCue(start, end, text))
         elif item.display_text is not None:
             lines = wrap(item.display_text, width=policy.max_characters_per_line)
-            pages = [
+            text_pages = [
                 "\n".join(lines[n : n + policy.max_lines])
                 for n in range(0, len(lines), policy.max_lines)
             ]
-            total = sum(len(page) for page in pages)
+            total = sum(len(page) for page in text_pages)
             consumed = 0
-            for page in pages:
+            for page in text_pages:
                 start = (
                     clip.output_range.start_ms
                     + clip.output_range.duration_ms * consumed // total
@@ -300,16 +242,29 @@ def build_output_cues(
                     + clip.output_range.duration_ms * consumed // total
                 )
                 if end > start:
-                    cues.append(SubtitleCue(start, end, page))
+                    pages.append(SubtitlePage(start, end, page))
         else:
-            cues.extend(
-                build_readable_cues(
+            pages.extend(
+                SubtitlePage(cue.start_ms, cue.end_ms, cue.text)
+                for cue in build_readable_cues(
                     tuple(word for word in mapped if word.clip_id == clip.clip_id),
                     clip.output_range.end_ms,
                     policy,
                 )
             )
-    return tuple(cues)
+    return tuple(pages)
+
+
+def build_output_cues(
+    timeline: Timeline,
+    plan: OutputPlan,
+    mapped: tuple[MappedWord, ...],
+    policy: SubtitleLayoutPolicy = _DEFAULT_SUBTITLE_POLICY,
+) -> tuple[SubtitleCue, ...]:
+    return tuple(
+        SubtitleCue(page.start_ms, page.end_ms, page.text)
+        for page in build_output_pages(timeline, plan, mapped, policy)
+    )
 
 
 def coalesce_output_media(timeline: Timeline, plan: OutputPlan) -> Timeline:
