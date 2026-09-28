@@ -72,14 +72,16 @@ it("默认收起仅显示字幕预览，折叠保留字幕和时间草稿",async
   expect(screen.getByLabelText("开始 i")).toHaveValue(2.5);
 });
 
-it("译文可修改并保存显示方式，原文不变",async()=>{
+it("原文和译文共用一次保存，逐句不提供显示方式",async()=>{
   const save=vi.fn().mockResolvedValue(undefined);
   render(<OutputItemEditor clip={{instance_id:"i",segment_id:"s",role:"body",text:"Hello",translation_text:"你好",translation_language:"zh",subtitle_mode:"bilingual",start_ms:0,end_ms:2000}} busy={false} onSave={save} onJump={vi.fn()} />);
   await userEvent.click(screen.getByLabelText("编辑字幕 i"));
+  await userEvent.clear(screen.getByLabelText("字幕 i"));
+  await userEvent.type(screen.getByLabelText("字幕 i"),"Hello!");
   await userEvent.clear(screen.getByLabelText("译文 i"));
   await userEvent.type(screen.getByLabelText("译文 i"),"您好");
-  await userEvent.selectOptions(screen.getByLabelText("字幕显示 i"),"translated");
-  await userEvent.click(screen.getByText("保存译文与显示方式"));
-  expect(save).toHaveBeenCalledWith({translation_text:"您好",subtitle_mode:"translated"});
-  expect(screen.getByLabelText("字幕 i")).toHaveValue("Hello");
+  expect(screen.queryByLabelText("字幕显示 i")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button",{name:"保存字幕"}));
+  expect(save).toHaveBeenCalledOnce();
+  expect(save).toHaveBeenCalledWith({display_text:"Hello!",translation_text:"您好"});
 });

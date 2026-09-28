@@ -56,7 +56,9 @@ def test_edit_preserves_source_and_other_output_and_rejects_empty_body(
         "c", "测试", "完整", tuple(segment.segment_id for segment in segments)
     )
     items = tuple(
-        OutputItem(f"i-{i}", segment.segment_id, OutputRole.BODY)
+        OutputItem(
+            f"i-{i}", segment.segment_id, OutputRole.BODY, translation_language="en"
+        )
         for i, segment in enumerate(segments)
     )
     collection = OutputCollection(
@@ -191,6 +193,37 @@ def test_edit_preserves_source_and_other_output_and_rejects_empty_body(
                 await client.put(output + "/ranges", json=invalid)
             ).status_code == 400
             assert repository.path.read_bytes() == before
+            settings = {
+                "base_revision": revision + 1,
+                "subtitle_mode": "source",
+                "subtitle_source_scale": 1.2,
+                "subtitle_translation_scale": 0.9,
+                "subtitle_horizontal_percent": 45,
+                "subtitle_bottom_percent": 18,
+                "subtitle_order": "translation_first",
+            }
+            styled = await client.put(output + "/subtitle-settings", json=settings)
+            assert styled.status_code == 200
+            row = styled.json()["outputs"][0]
+            assert row["revision"] == revision + 2
+            assert row["subtitle_order"] == "translation_first"
+            assert row["subtitle_mode"] == "source"
+            assert row["subtitle_source_scale"] == 1.2
+            assert (
+                await client.put(output + "/subtitle-settings", json=settings)
+            ).status_code == 409
+            text_save = await client.patch(
+                base + "i-0",
+                json={
+                    "display_text": "第一句修订。",
+                    "translation_text": "First sentence revised.",
+                },
+            )
+            assert text_save.status_code == 200
+            assert (
+                text_save.json()["outputs"][0]["clips"][0]["translation_text"]
+                == "First sentence revised."
+            )
 
     asyncio.run(run())
     updated = repository.read(segments)

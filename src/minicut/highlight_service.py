@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from contextlib import AbstractContextManager
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -208,6 +209,19 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
                 row["revision"] = plan.revision
                 row["hook_transition_ms"] = plan.hook_transition_ms
                 row["hook_transition_kind"] = plan.hook_transition_kind
+                row.update(
+                    {
+                        key: getattr(plan, key)
+                        for key in (
+                            "subtitle_mode",
+                            "subtitle_source_scale",
+                            "subtitle_translation_scale",
+                            "subtitle_horizontal_percent",
+                            "subtitle_bottom_percent",
+                            "subtitle_order",
+                        )
+                    }
+                )
                 row["duration_ms"] = compile_output_timeline(
                     plan, segments, collection.asset_id
                 ).estimated_duration_ms
@@ -349,6 +363,123 @@ def edit_output_item(
     return read_highlights(project, collection_id)
 
 
+def save_output_subtitle_settings(
+    project: Path,
+    collection_id: str,
+    output_id: str,
+    base_revision: int,
+    *,
+    subtitle_mode: str,
+    subtitle_source_scale: float,
+    subtitle_translation_scale: float,
+    subtitle_horizontal_percent: int,
+    subtitle_bottom_percent: int,
+    subtitle_order: str,
+) -> dict[str, object]:
+    result = read_highlights(project, collection_id)
+    segments = source_segments(project, cast(str, result["asset_id"]), collection_id)
+    repository = OutputCollectionRepository(project, collection_id)
+    collection = repository.read(segments)
+    plan = next((p for p in collection.plans if p.output_id == output_id), None)
+    if plan is None:
+        raise UserInputError("Output does not exist")
+    if plan.revision != base_revision:
+        raise RevisionConflict("作品已有新版本，请刷新后重试")
+    updated = replace(
+        plan,
+        revision=plan.revision + 1,
+        subtitle_mode=subtitle_mode,
+        subtitle_source_scale=subtitle_source_scale,
+        subtitle_translation_scale=subtitle_translation_scale,
+        subtitle_horizontal_percent=subtitle_horizontal_percent,
+        subtitle_bottom_percent=subtitle_bottom_percent,
+        subtitle_order=subtitle_order,
+    )
+    repository.write(
+        replace(
+            collection,
+            plans=tuple(
+                updated if p.output_id == output_id else p for p in collection.plans
+            ),
+        ),
+        segments,
+    )
+    return read_highlights(project, collection_id)
+
+
+def translate_output_subtitles(
+    project: Path,
+    collection_id: str,
+    output_id: str,
+    base_revision: int,
+    language: str,
+    save_lock: AbstractContextManager[object],
+    cancellation: CancellationToken | None = None,
+) -> dict[str, object]:
+    from minicut.subtitle_translation import translate_collection
+
+    result = read_highlights(project, collection_id)
+    segments = source_segments(project, cast(str, result["asset_id"]), collection_id)
+    repository = OutputCollectionRepository(project, collection_id)
+    collection = repository.read(segments)
+    plan = next((p for p in collection.plans if p.output_id == output_id), None)
+    if plan is None:
+        raise UserInputError("Output does not exist")
+    if plan.revision != base_revision:
+        raise RevisionConflict("作品已有新版本，请刷新后重试")
+    active = [i for i in plan.items if not i.deleted]
+    if any(i.translation_text and i.translation_language != language for i in active):
+        raise UserInputError("已有其他语言译文；请先保留当前版本并选择相同目标语言")
+    if not any(not i.translation_text for i in active):
+        raise UserInputError("当前作品的字幕均已有译文")
+    effective_mode = plan.subtitle_mode or next(
+        (i.subtitle_mode for i in active if i.translation_text), "bilingual"
+    )
+    key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if not key:
+        raise UserInputError("DeepSeek is not configured on the server")
+    recorded = RecordedProvider(
+        DeepSeekProvider(
+            key,
+            base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        ),
+        ModelJournal(project),
+        cancellation,
+    )
+    translated = asyncio.run(
+        translate_collection(
+            replace(collection, plans=(plan,)),
+            segments,
+            _source_transcript(project, collection.asset_id),
+            recorded,
+            os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+            language,
+            "bilingual" if effective_mode == "source" else effective_mode,
+            only_missing=True,
+        )
+    ).plans[0]
+    with save_lock:
+        current = repository.read(segments)
+        latest = next((p for p in current.plans if p.output_id == output_id), None)
+        if latest is None or latest.revision != base_revision:
+            raise RevisionConflict("翻译期间作品已修改，译文未写入；请重试")
+        updated = replace(
+            translated,
+            revision=base_revision + 1,
+            subtitle_mode=effective_mode,
+        )
+        repository.write(
+            replace(
+                current,
+                plans=tuple(
+                    updated if p.output_id == output_id else p for p in current.plans
+                ),
+            ),
+            segments,
+        )
+    return read_highlights(project, collection_id)
+
+
 def reorder_output(
     project: Path,
     collection_id: str,
@@ -463,6 +594,17 @@ def output_versions(
             "revision": plan.revision,
             "hook_transition_ms": plan.hook_transition_ms,
             "hook_transition_kind": plan.hook_transition_kind,
+            **{
+                key: getattr(plan, key)
+                for key in (
+                    "subtitle_mode",
+                    "subtitle_source_scale",
+                    "subtitle_translation_scale",
+                    "subtitle_horizontal_percent",
+                    "subtitle_bottom_percent",
+                    "subtitle_order",
+                )
+            },
             "duration_ms": compile_output_timeline(
                 plan, segments, cast(str, result["asset_id"])
             ).estimated_duration_ms,

@@ -20,6 +20,8 @@ async def translate_collection(
     model: str,
     language: str,
     mode: str,
+    *,
+    only_missing: bool = False,
 ) -> OutputCollection:
     from minicut.highlight_service import item_source_text
 
@@ -31,7 +33,7 @@ async def translate_collection(
         or item_source_text(i, by_id[i.segment_id], transcript)
         for p in collection.plans
         for i in p.items
-        if not i.deleted
+        if not i.deleted and (not only_missing or not i.translation_text)
     }
     unique = list(dict.fromkeys(texts.values()))
     translated: dict[str, str] = {}
@@ -96,6 +98,7 @@ async def translate_collection(
         plans=tuple(
             replace(
                 p,
+                subtitle_mode=mode,
                 items=tuple(
                     replace(
                         i,
@@ -103,7 +106,7 @@ async def translate_collection(
                         translation_language=language,
                         subtitle_mode=mode,
                     )
-                    if not i.deleted
+                    if (p.output_id, i.instance_id) in texts
                     else i
                     for i in p.items
                 ),

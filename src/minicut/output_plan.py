@@ -106,8 +106,33 @@ class OutputPlan:
     hook_transition_ms: int = 300
     hook_transition_kind: str = "fade"
     social_copy: str | None = None
+    subtitle_mode: str | None = None
+    subtitle_source_scale: float = 1.0
+    subtitle_translation_scale: float = 1.0
+    subtitle_horizontal_percent: int = 50
+    subtitle_bottom_percent: int = 10
+    subtitle_order: str = "source_first"
 
     def __post_init__(self) -> None:
+        if self.subtitle_mode not in {None, "bilingual", "translated", "source"}:
+            raise ValueError("invalid subtitle display mode")
+        if self.subtitle_order not in {"source_first", "translation_first"}:
+            raise ValueError("invalid subtitle order")
+        if not all(
+            type(value) in {int, float} and 0.7 <= value <= 1.5
+            for value in (self.subtitle_source_scale, self.subtitle_translation_scale)
+        ):
+            raise ValueError("subtitle scale must be between 0.7 and 1.5")
+        if (
+            type(self.subtitle_horizontal_percent) is not int
+            or not 20 <= self.subtitle_horizontal_percent <= 80
+        ):
+            raise ValueError("subtitle horizontal position must be between 20 and 80")
+        if (
+            type(self.subtitle_bottom_percent) is not int
+            or not 5 <= self.subtitle_bottom_percent <= 40
+        ):
+            raise ValueError("subtitle bottom position must be between 5 and 40")
         if (
             type(self.hook_transition_ms) is not int
             or not 0 <= self.hook_transition_ms <= 1000
@@ -184,6 +209,12 @@ class OutputPlan:
             cast(int, data.get("hook_transition_ms", 300)),
             cast(str, data.get("hook_transition_kind", "fade")),
             cast(str | None, data.get("social_copy")),
+            cast(str | None, data.get("subtitle_mode")),
+            cast(float, data.get("subtitle_source_scale", 1.0)),
+            cast(float, data.get("subtitle_translation_scale", 1.0)),
+            cast(int, data.get("subtitle_horizontal_percent", 50)),
+            cast(int, data.get("subtitle_bottom_percent", 10)),
+            cast(str, data.get("subtitle_order", "source_first")),
         )
 
 

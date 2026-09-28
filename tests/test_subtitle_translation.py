@@ -1,10 +1,13 @@
 import asyncio
 import json
 from dataclasses import replace
+from pathlib import Path
+from threading import Lock
 
 import pytest
 
 from minicut.errors import UserInputError
+from minicut.highlight_service import translate_output_subtitles
 from minicut.llm_provider import TextModelRequest, TextModelResponse
 from minicut.output_plan import (
     HighlightCandidate,
@@ -13,6 +16,7 @@ from minicut.output_plan import (
     OutputPlan,
     OutputRole,
 )
+from minicut.output_repository import OutputCollectionRepository
 from minicut.output_timeline import (
     build_output_cues,
     build_output_pages,
@@ -72,6 +76,7 @@ def test_translation_deduplicates_and_exports_selected_language_without_timing_c
     assert len(provider.requests) == 1
     assert len(json.loads(provider.requests[0].user_prompt)["subtitles"]) == 1
     plan = translated.plans[0]
+    assert plan.subtitle_mode == mode
     assert OutputPlan.from_dict(plan.to_dict()) == plan
     timeline = compile_output_timeline(plan, s, "a")
     assert timeline == compile_output_timeline(c.plans[0], s, "a")
@@ -95,6 +100,92 @@ def test_incomplete_translation_fails_without_mutating_candidate() -> None:
             translate_collection(c, s, t, Translator(True), "test", "en", "translated")
         )
     assert c.plans[0].items[0].translation_text is None
+
+
+def test_later_translation_preserves_existing_manual_translation() -> None:
+    c, s, t = fixture()
+    plan = c.plans[0]
+    c = replace(
+        c,
+        plans=(
+            replace(
+                plan,
+                items=(
+                    replace(
+                        plan.items[0],
+                        translation_text="您好",
+                        translation_language="zh",
+                    ),
+                    plan.items[1],
+                ),
+            ),
+        ),
+    )
+    provider = Translator()
+    translated = asyncio.run(
+        translate_collection(
+            c,
+            s,
+            t,
+            provider,
+            "test",
+            "zh",
+            "bilingual",
+            only_missing=True,
+        )
+    )
+    assert translated.plans[0].items[0].translation_text == "您好"
+    assert translated.plans[0].items[1].translation_text == "你好"
+    assert len(provider.requests) == 1
+
+
+def test_post_generation_translation_saves_one_version_without_paid_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    c, segments, transcript = fixture()
+    plan = c.plans[0]
+    c = replace(
+        c,
+        plans=(
+            replace(
+                plan,
+                items=(
+                    replace(
+                        plan.items[0],
+                        translation_text="您好",
+                        translation_language="zh",
+                    ),
+                    plan.items[1],
+                ),
+            ),
+        ),
+    )
+    repository = OutputCollectionRepository(tmp_path, "c")
+    repository.write_segments(segments)
+    repository.write(c, segments)
+    repository.write_highlight_result(
+        {
+            "asset_id": "a",
+            "collection_id": "c",
+            "source_duration_ms": 2000,
+            "outputs": [{"output_id": "v", "title": "title", "reason": "reason"}],
+        }
+    )
+    path = tmp_path / ".minicut/transcripts/a.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"transcript": transcript.to_dict()}))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-only")
+    monkeypatch.setattr(
+        "minicut.highlight_service.DeepSeekProvider",
+        lambda *args, **kwargs: Translator(),
+    )
+    result = translate_output_subtitles(tmp_path, "c", "v", 1, "zh", Lock())
+    assert result["outputs"][0]["revision"] == 2
+    saved = repository.read(segments).plans[0]
+    assert [item.translation_text for item in saved.items] == ["您好", "你好"]
+    with pytest.raises(UserInputError, match="新版本"):
+        translate_output_subtitles(tmp_path, "c", "v", 1, "zh", Lock())
 
 
 def test_bilingual_sentence_stays_together_when_languages_wrap_differently() -> None:

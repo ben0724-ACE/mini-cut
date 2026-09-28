@@ -39,7 +39,9 @@ def _safe_break(text: str, index: int) -> bool:
     before, after = text[index - 1], text[index]
     if after in _CLOSING or before in _OPENING:
         return False
-    return not (before.isascii() and before.isalnum() and after.isascii() and after.isalnum())
+    return not (
+        before.isascii() and before.isalnum() and after.isascii() and after.isalnum()
+    )
 
 
 def _boundary_bonus(text: str, index: int) -> float:
@@ -69,8 +71,10 @@ def _partition_text(
         return (cleaned,)
     if len(cleaned) < count * 4:
         return (cleaned,) * count
-    if stable_limit and _cells(cleaned) <= stable_limit and not any(
-        character in _STOP + _PAUSE for character in cleaned[:-1]
+    if (
+        stable_limit
+        and _cells(cleaned) <= stable_limit
+        and not any(character in _STOP + _PAUSE for character in cleaned[:-1])
     ):
         # An unpunctuated short phrase reads better held across source pages.
         return (cleaned,) * count
@@ -79,9 +83,7 @@ def _partition_text(
     for page in range(1, count):
         remaining = count - page
         target = targets[page - 1] if targets is not None else page / count
-        preferred = (
-            preferred_edges[page - 1] if preferred_edges is not None else None
-        )
+        preferred = preferred_edges[page - 1] if preferred_edges is not None else None
         choices = tuple(
             index
             for index in range(edges[-1] + 4, len(cleaned) - remaining * 4 + 1)
@@ -135,7 +137,9 @@ def _wrap_lines(text: str, limit: int) -> str:
     return "\n".join(lines)
 
 
-def _word_groups(words: tuple[MappedWord, ...], count: int) -> tuple[tuple[MappedWord, ...], ...]:
+def _word_groups(
+    words: tuple[MappedWord, ...], count: int
+) -> tuple[tuple[MappedWord, ...], ...]:
     if count == 1:
         return (words,)
     start, end = words[0].start_ms, words[-1].end_ms
@@ -151,7 +155,9 @@ def _word_groups(words: tuple[MappedWord, ...], count: int) -> tuple[tuple[Mappe
             time_ratio = (current.end_ms - start) / duration
             text_ratio = sum(_cells(word.text) + 1 for word in words[:index]) / total
             pause_ms = words[index].start_ms - current.end_ms
-            bonus = _boundary_bonus(current.text, len(current.text)) if current.text else 0
+            bonus = (
+                _boundary_bonus(current.text, len(current.text)) if current.text else 0
+            )
             if pause_ms >= 180:
                 bonus += 0.12
             return abs(time_ratio - target) + abs(text_ratio - target) - bonus
@@ -171,10 +177,18 @@ def translated_pages(
     bilingual: bool,
     translation_language: str,
     portrait: bool = False,
+    source_scale: float = 1.0,
+    translation_scale: float = 1.0,
+    horizontal_percent: int = 50,
 ) -> tuple[SubtitlePage, ...]:
     """Page saved text without changing either language or the source media."""
-    source_limit = 26 if portrait else 43
-    translation_limit = 22 if portrait else 46
+    available_width = min(horizontal_percent, 100 - horizontal_percent) / 50
+    source_limit = max(
+        8, round((26 if portrait else 43) * available_width / source_scale)
+    )
+    translation_limit = max(
+        8, round((22 if portrait else 46) * available_width / translation_scale)
+    )
     source = " ".join(source.split())
     translation = " ".join(translation.split())
     desired = max(
@@ -187,21 +201,30 @@ def translated_pages(
         count = min(count, len(words))
     if words and bilingual:
         groups = _word_groups(words, count)
-        source_parts = tuple(normalize_text(" ".join(w.text for w in group)) for group in groups)
+        source_parts = tuple(
+            normalize_text(" ".join(w.text for w in group)) for group in groups
+        )
         ends = tuple(group[-1].end_ms for group in groups[:-1]) + (end_ms,)
     else:
         source_parts = _partition_text(source, count) if bilingual else ("",) * count
-        ends = tuple(start_ms + duration * page // count for page in range(1, count + 1))
+        ends = tuple(
+            start_ms + duration * page // count for page in range(1, count + 1)
+        )
     if bilingual:
         total_source = sum(_cells(part) for part in source_parts)
-        targets = tuple(
-            sum(_cells(part) for part in source_parts[:page]) / total_source
-            for page in range(1, count)
-        ) if total_source else None
+        targets = (
+            tuple(
+                sum(_cells(part) for part in source_parts[:page]) / total_source
+                for page in range(1, count)
+            )
+            if total_source
+            else None
+        )
     else:
         targets = None
     translated_marks = [
-        index + 1 for index, character in enumerate(translation)
+        index + 1
+        for index, character in enumerate(translation)
         if character in _STOP + _PAUSE
     ]
     preferred_edges: tuple[int | None, ...] | None = None

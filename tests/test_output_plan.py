@@ -98,6 +98,22 @@ class OutputPlanTest(unittest.TestCase):
             replace(value, asset_id="")
         with self.assertRaises(ValueError):
             OutputItem("x", "a", "invalid")  # type: ignore[arg-type]
+
+    def test_subtitle_settings_round_trip_and_legacy_defaults(self) -> None:
+        plan = collection().plans[0]
+        updated = replace(
+            plan,
+            subtitle_mode="source",
+            subtitle_order="translation_first",
+            subtitle_source_scale=1.2,
+            subtitle_bottom_percent=20,
+        )
+        self.assertEqual(OutputPlan.from_dict(updated.to_dict()), updated)
+        self.assertIsNone(
+            OutputPlan.from_dict(plan.to_dict() | {"subtitle_mode": None}).subtitle_mode
+        )
+        with self.assertRaises(ValueError):
+            replace(plan, subtitle_bottom_percent=90)
         with self.assertRaises(ValueError):
             OutputCollectionRepository(Path("/project"), "../escape")
 

@@ -1,14 +1,12 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { HighlightClip, SplitRange } from "./api";
 
-type Changes = {deleted?: boolean; display_text?: string;translation_text?:string;subtitle_mode?:"bilingual"|"translated"; source_start_ms?: number; source_end_ms?: number};
-export function OutputItemEditor({clip, busy, onSave, onJump, actions, range, onRange, onAudition, durationMs, onSplitPreview, onSplitApply, splitDisabled}: {clip: HighlightClip; busy: boolean; onSave: (changes: Changes) => Promise<void>; onJump: (seconds?:number) => void; actions?:ReactNode;range?:{start:number;end:number};onRange?:(start:number,end:number)=>void;onAudition?:(part:"start"|"end"|"whole")=>void;durationMs?:number;onSplitPreview?:(lines:string[])=>Promise<SplitRange[]>;onSplitApply?:(lines:string[])=>Promise<void>;splitDisabled?:boolean}) {
+type Changes = {deleted?: boolean; display_text?: string;translation_text?:string; source_start_ms?: number; source_end_ms?: number};
+export function OutputItemEditor({clip, busy, subtitleMode, onSave, onJump, actions, range, onRange, onAudition, durationMs, onSplitPreview, onSplitApply, splitDisabled, onTextDraftChange}: {clip: HighlightClip; busy: boolean; subtitleMode?:"bilingual"|"translated"|"source"; onSave: (changes: Changes) => Promise<void>; onJump: (seconds?:number) => void; actions?:ReactNode;range?:{start:number;end:number};onRange?:(start:number,end:number)=>void;onAudition?:(part:"start"|"end"|"whole")=>void;durationMs?:number;onSplitPreview?:(lines:string[])=>Promise<SplitRange[]>;onSplitApply?:(lines:string[])=>Promise<void>;splitDisabled?:boolean;onTextDraftChange?:(id:string,dirty:boolean)=>void}) {
   const [splitPreview,setSplitPreview]=useState<{lines:string[];ranges:SplitRange[]}|null>(null);
   const [splitting,setSplitting]=useState(false);
   const [translation,setTranslation]=useState(clip.translation_text??"");
   const [savedTranslation,setSavedTranslation]=useState(clip.translation_text??"");
-  const [savedMode,setSavedMode]=useState(clip.subtitle_mode??"bilingual");
-  const [subtitleMode,setSubtitleMode]=useState<"bilingual"|"translated">(clip.subtitle_mode??"bilingual");
   const [draft, setDraft] = useState(clip.text);
   const [savedText, setSavedText] = useState(clip.text);
   const [localStart, setStart] = useState(clip.start_ms / 1000);
@@ -21,16 +19,19 @@ export function OutputItemEditor({clip, busy, onSave, onJump, actions, range, on
   const [message, setMessage] = useState("");
   async function save(changes: Changes) {
     setError(""); setMessage("");
-    try {await onSave(changes); if(changes.display_text !== undefined)setSavedText(changes.display_text); if(changes.translation_text !== undefined)setSavedTranslation(changes.translation_text); if(changes.subtitle_mode)setSavedMode(changes.subtitle_mode); setMessage(changes.translation_text !== undefined ? "译文与显示方式已保存" : changes.display_text !== undefined ? "字幕已保存" : changes.source_start_ms !== undefined ? "范围已保存，字幕已按新范围更新" : "片段状态已保存（未保存字幕草稿）");}
+    try {await onSave(changes); if(changes.display_text !== undefined)setSavedText(changes.display_text); if(changes.translation_text !== undefined)setSavedTranslation(changes.translation_text); setMessage(changes.display_text !== undefined || changes.translation_text !== undefined ? "字幕已保存" : changes.source_start_ms !== undefined ? "范围已保存，字幕已按新范围更新" : "片段状态已保存（未保存字幕草稿）");}
     catch (reason: unknown) {setError(reason instanceof Error ? reason.message : "保存失败");}
   }
   const valid = Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end > start && end <= limit;
-  const unsaved=draft!==savedText||translation!==savedTranslation||subtitleMode!==savedMode||Math.round(start*1000)!==clip.start_ms||Math.round(end*1000)!==clip.end_ms;
+  const unsaved=draft!==savedText||translation!==savedTranslation||Math.round(start*1000)!==clip.start_ms||Math.round(end*1000)!==clip.end_ms;
+  const textUnsaved=draft!==savedText||translation!==savedTranslation;
+  useEffect(()=>{onTextDraftChange?.(clip.instance_id,textUnsaved);},[clip.instance_id,textUnsaved,onTextDraftChange]);
+  useEffect(()=>()=>onTextDraftChange?.(clip.instance_id,false),[clip.instance_id,onTextDraftChange]);
   return <li className={clip.deleted ? "segment segment--delete subtitle-card" : "segment subtitle-card"}>
     <details className="subtitle-disclosure">
       <summary aria-label={`编辑字幕 ${clip.instance_id}`}>
         <span className="subtitle-card-meta"><span>{clip.role === "hook" ? "开场预告" : "正文"} · {clip.deleted ? "已删除" : `${(end-start).toFixed(2)} 秒`}</span>{unsaved&&<span className="subtitle-unsaved">未保存</span>}{error&&<span className="subtitle-unsaved">操作失败</span>}<span className="subtitle-toggle" aria-hidden="true" /></span>
-        <span className="subtitle-card-preview">{(clip.translation_language&&subtitleMode==="translated"?translation:draft).trim()||"（暂无字幕）"}</span>
+        <span className="subtitle-card-preview">{(clip.translation_language&&translation.trim()&&(subtitleMode??clip.subtitle_mode)==="translated"?translation:draft).trim()||"（暂无字幕）"}</span>
       </summary>
       <div className="subtitle-card-editor">
     <div className="clip-boundaries">
@@ -41,14 +42,14 @@ export function OutputItemEditor({clip, busy, onSave, onJump, actions, range, on
     <div className="boundary-actions"><button disabled={busy} onClick={()=>change(Math.max(0,start-step),end)}>开始 −</button><button disabled={busy} onClick={()=>change(Math.min(end-0.001,start+step),end)}>开始 ＋</button><button disabled={busy} onClick={()=>change(start,Math.max(start+0.001,end-step))}>结束 −</button><button disabled={busy} onClick={()=>change(start,Math.min(limit,end+step))}>结束 ＋</button></div>
     {onAudition?<><button disabled={!valid} onClick={()=>onAudition("start")}>试听开头</button><button disabled={!valid} onClick={()=>onAudition("end")}>试听结尾</button><button disabled={!valid} onClick={()=>onAudition("whole")}>播放片段</button></>:<button disabled={!valid} onClick={()=>onJump(start)}>跳转 {start.toFixed(2)} 秒</button>}
     {!onRange&&<button disabled={busy||!valid} onClick={()=>void save({source_start_ms:Math.round(start*1000),source_end_ms:Math.round(end*1000)})}>保存范围</button>}
-    <label>显示字幕<textarea aria-label={`字幕 ${clip.instance_id}`} value={draft} disabled={busy||splitting} maxLength={12000} onChange={event=>{setDraft(event.target.value);setMessage("");setSplitPreview(null);}} /></label>
-    {clip.translation_language&&<><label>译文（{clip.translation_language==="zh"?"中文":"英文"}）<textarea aria-label={`译文 ${clip.instance_id}`} value={translation} disabled={busy||splitting} maxLength={12000} onChange={e=>setTranslation(e.target.value)} /></label>{!clip.translation_text&&<p className="helper-text">范围或分句已更改，旧译文已清除，请根据新原文填写译文；填写前成片使用原文。</p>}<label>字幕显示<select aria-label={`字幕显示 ${clip.instance_id}`} value={subtitleMode} disabled={busy} onChange={e=>setSubtitleMode(e.target.value as "bilingual"|"translated")}><option value="bilingual">双语（原文＋译文）</option><option value="translated">仅译文</option></select></label><button disabled={busy||splitting||!translation.trim()} onClick={()=>void save({translation_text:translation.trim(),subtitle_mode:subtitleMode})}>保存译文与显示方式</button></>}
+    <label>原文字幕<textarea aria-label={`字幕 ${clip.instance_id}`} value={draft} disabled={busy||splitting} maxLength={12000} onChange={event=>{setDraft(event.target.value);setMessage("");setSplitPreview(null);}} /></label>
+    {clip.translation_language&&<><label>译文（{clip.translation_language==="zh"?"中文":"英文"}）<textarea aria-label={`译文 ${clip.instance_id}`} value={translation} disabled={busy||splitting} maxLength={12000} onChange={e=>setTranslation(e.target.value)} /></label>{!clip.translation_text&&<p className="helper-text">范围或分句已更改，旧译文已清除，请根据新原文填写译文；填写前成片使用原文。</p>}</>}
     {onSplitPreview && onSplitApply && <div className="manual-split">
       {clip.transcript_text && <button disabled={busy||splitting||splitDisabled} onClick={()=>{setDraft(clip.transcript_text!);setSplitPreview(null);setError("");}}>使用转录原文</button>}
       <button disabled={busy||splitting||splitDisabled||clip.deleted||draft.split("\n").filter(s=>s.trim()).length<2} onClick={async()=>{setSplitting(true);setError("");setSplitPreview(null);const lines=draft.split("\n").map(s=>s.trim()).filter(Boolean);try{const ranges=await onSplitPreview(lines);setSplitPreview({lines,ranges});}catch(reason){setError(reason instanceof Error?reason.message:"无法匹配分句时间");}finally{setSplitting(false);}}}>{splitting?"正在处理…":"预览分句时间"}</button>
       {splitPreview && <><ol>{splitPreview.ranges.map((part,index)=><li key={index}><span className="muted">{(part.start_ms/1000).toFixed(2)}–{(part.end_ms/1000).toFixed(2)} 秒</span><p>{part.text}</p></li>)}</ol><button disabled={busy||splitting||splitDisabled} onClick={async()=>{setSplitting(true);setError("");try{await onSplitApply(splitPreview.lines);setSplitPreview(null);}catch(reason){setError(reason instanceof Error?reason.message:"分句保存失败");}finally{setSplitting(false);}}}>确认分句</button><button disabled={splitting} onClick={()=>setSplitPreview(null)}>取消分句</button></>}
     </div>}
-    <button disabled={busy||splitting||!draft.trim()} onClick={()=>void save({display_text:draft.trim()})}>保存字幕</button>
+    <button disabled={busy||splitting||!draft.trim()||(!!clip.translation_language&&translation!==savedTranslation&&!translation.trim())||draft===savedText&&translation===savedTranslation} onClick={()=>void save({...(draft!==savedText?{display_text:draft.trim()}:{}),...(translation!==savedTranslation?{translation_text:translation.trim()}: {})})}>保存字幕</button>
     <button disabled={busy} onClick={()=>void save({deleted:!clip.deleted})}>{clip.deleted ? "恢复片段" : "删除片段"}</button>
     {actions}{error&&<p role="alert">{error}</p>}{message&&<p role="status">{message}</p>}
       </div>

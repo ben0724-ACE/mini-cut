@@ -19,7 +19,7 @@ from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
 
 _DEFAULT_PROFILE = RenderProfile()
-RENDER_ENGINE_VERSION = 7
+RENDER_ENGINE_VERSION = 8
 
 
 def _extract_cover(

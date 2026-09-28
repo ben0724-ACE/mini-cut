@@ -220,9 +220,11 @@ class RenderOutputUseCase:
                     cancellation=request.cancellation,
                 )
                 staged_subtitle.write_text(subtitle_text, encoding="utf-8")
-                styled_subtitles = (
-                    request.subtitle_mode is SubtitleMode.BURNED
-                    and any(page.translation is not None for page in pages)
+                styled_subtitles = request.subtitle_mode is SubtitleMode.BURNED and (
+                    any(page.translation is not None for page in pages)
+                    or plan.subtitle_source_scale != 1.0
+                    or plan.subtitle_horizontal_percent != 50
+                    or plan.subtitle_bottom_percent != 10
                 )
                 subtitle_input = staged_subtitle
                 if styled_subtitles:
@@ -234,6 +236,7 @@ class RenderOutputUseCase:
                             request.video_metadata.width,
                             request.video_metadata.height,
                             font,
+                            plan,
                         ),
                         encoding="utf-8",
                     )

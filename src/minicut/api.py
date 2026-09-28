@@ -69,6 +69,8 @@ from minicut.highlight_service import (
     read_highlights,
     reorder_output,
     save_output_ranges,
+    save_output_subtitle_settings,
+    translate_output_subtitles,
 )
 from minicut.importer import import_media
 from minicut.llm_provider import TextModelProviderError
@@ -247,6 +249,23 @@ class OutputOrderBody(BaseModel):
     hook_transition_kind: str | None = Field(
         default=None, pattern=r"^(fade|tv_static)$"
     )
+
+
+class OutputSubtitleSettingsBody(BaseModel):
+    base_revision: int = Field(ge=1, strict=True)
+    subtitle_mode: str = Field(pattern=r"^(bilingual|translated|source)$")
+    subtitle_source_scale: float = Field(ge=0.7, le=1.5)
+    subtitle_translation_scale: float = Field(ge=0.7, le=1.5)
+    subtitle_horizontal_percent: int = Field(ge=20, le=80, strict=True)
+    subtitle_bottom_percent: int = Field(ge=5, le=40, strict=True)
+    subtitle_order: str = Field(pattern=r"^(source_first|translation_first)$")
+
+
+class OutputTranslationBody(BaseModel):
+    collection_id: SafeFileName
+    output_id: SafeFileName
+    base_revision: int = Field(ge=1, strict=True)
+    language: str = Field(pattern=r"^(zh|en)$")
 
 
 class RenderTaskBody(BaseModel):
@@ -1644,6 +1663,64 @@ def create_app(
                 )
         except (MiniCutError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
+
+    @api.put(
+        "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/subtitle-settings"
+    )
+    def put_output_subtitle_settings(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        collection_id: SafeFileName,
+        output_id: SafeFileName,
+        body: OutputSubtitleSettingsBody,
+    ) -> dict[str, object]:
+        inspect(project_id)
+        try:
+            with output_edit_lock:
+                return save_output_subtitle_settings(
+                    root / project_id,
+                    collection_id,
+                    output_id,
+                    **body.model_dump(),
+                )
+        except RevisionConflict as error:
+            raise HTTPException(409, str(error)) from error
+        except (MiniCutError, ValueError) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @api.post(
+        "/api/projects/{project_id}/tasks/output-translation",
+        response_model=TaskResponse,
+        status_code=202,
+    )
+    def submit_output_translation(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        body: OutputTranslationBody,
+        background_tasks: BackgroundTasks,
+        idempotency_key: Annotated[str, task_key_header],
+    ) -> TaskResponse:
+        inspect(project_id)
+
+        def operation() -> dict[str, object]:
+            return translate_output_subtitles(
+                root / project_id,
+                body.collection_id,
+                body.output_id,
+                body.base_revision,
+                body.language,
+                output_edit_lock,
+                export_tokens.setdefault(
+                    (project_id, idempotency_key), CancellationToken()
+                ),
+            )
+
+        return submit_task(
+            project_id,
+            idempotency_key,
+            "output-translation",
+            body.model_dump(),
+            background_tasks,
+            operation,
+        )
 
     @api.put(
         "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/order"

@@ -203,10 +203,22 @@ def build_output_pages(
     portrait: bool = False,
 ) -> tuple[SubtitlePage, ...]:
     by_instance = {item.instance_id: item for item in plan.items}
+    source_width = max(
+        8,
+        round(
+            policy.max_characters_per_line
+            * min(
+                plan.subtitle_horizontal_percent, 100 - plan.subtitle_horizontal_percent
+            )
+            / 50
+            / plan.subtitle_source_scale
+        ),
+    )
+    source_policy = replace(policy, max_characters_per_line=source_width)
     pages: list[SubtitlePage] = []
     for clip in timeline.clips:
         item = by_instance[clip.clip_id]
-        if item.translation_text is not None:
+        if item.translation_text is not None and plan.subtitle_mode != "source":
             words = tuple(word for word in mapped if word.clip_id == clip.clip_id)
             original = item.display_text or normalize_text(
                 " ".join(word.text for word in words)
@@ -218,16 +230,19 @@ def build_output_pages(
                     words if item.display_text is None else (),
                     clip.output_range.start_ms,
                     clip.output_range.end_ms,
-                    bilingual=item.subtitle_mode == "bilingual",
+                    bilingual=(plan.subtitle_mode or item.subtitle_mode) == "bilingual",
                     translation_language=item.translation_language or "zh",
                     portrait=portrait,
+                    source_scale=plan.subtitle_source_scale,
+                    translation_scale=plan.subtitle_translation_scale,
+                    horizontal_percent=plan.subtitle_horizontal_percent,
                 )
             )
         elif item.display_text is not None:
-            lines = wrap(item.display_text, width=policy.max_characters_per_line)
+            lines = wrap(item.display_text, width=source_policy.max_characters_per_line)
             text_pages = [
-                "\n".join(lines[n : n + policy.max_lines])
-                for n in range(0, len(lines), policy.max_lines)
+                "\n".join(lines[n : n + source_policy.max_lines])
+                for n in range(0, len(lines), source_policy.max_lines)
             ]
             total = sum(len(page) for page in text_pages)
             consumed = 0
@@ -249,7 +264,7 @@ def build_output_pages(
                 for cue in build_readable_cues(
                     tuple(word for word in mapped if word.clip_id == clip.clip_id),
                     clip.output_range.end_ms,
-                    policy,
+                    source_policy,
                 )
             )
     return tuple(pages)
