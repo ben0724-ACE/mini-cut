@@ -327,3 +327,7 @@ hr { border:0;border-top:1px solid #343d4c;margin:24px 0; }
 .cover-canvas > img { position: absolute; inset: 0; }
 .cover-editor input[type="range"] { padding: 0; }
 .cover-editor .cover-resize { padding: 0; width: 16px; height: 16px; }
+
+.export-section-switch { display:flex;gap:8px;margin:0 0 14px; }
+.export-section-switch button { flex:1;margin:0;border:1px solid #383e48;border-radius:8px;padding:8px 12px;background:#282c34;color:#e8ebf1; }
+.export-section-switch button[aria-pressed="true"] { background:#2b3548;color:#8db2ff;border-color:#536b93; }

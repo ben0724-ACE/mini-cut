@@ -52,6 +52,7 @@ from minicut.cover_api import cover_router
 from minicut.cover_design import CoverDesign, CoverStore
 from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError, UserInputError
+from minicut.export_settings_api import export_settings_router
 from minicut.generation_presets import (
     GenerationPresetBody,
     GenerationPresetLibrary,
@@ -2065,6 +2066,7 @@ def create_app(
         )
 
     api.include_router(cover_router(root))
+    api.include_router(export_settings_router(root))
     return api
 
 

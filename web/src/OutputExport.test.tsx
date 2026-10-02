@@ -1,8 +1,11 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { OutputExport } from "./OutputExport";
 vi.mock("./api", () => ({recoverOutputExport: vi.fn().mockResolvedValue(null), startOutputExport: vi.fn().mockRejectedValue(new Error("导出失败")), readOutputExport: vi.fn(), cancelOutputExport: vi.fn()}));
+vi.mock("./exportSettingsApi",async original=>{const actual=await original<typeof import("./exportSettingsApi")>();return {...actual,getExportDraft:vi.fn().mockImplementation(async()=>({source:"default",draft:actual.defaultExportDraft()})),saveExportDraft:vi.fn().mockImplementation(async(_route,draft)=>({source:"saved",draft})),listExportPresets:vi.fn().mockResolvedValue([])};});
+beforeEach(()=>localStorage.clear());
+
 it("音频处理默认关闭，失败不显示下载", async () => {
   render(<OutputExport project="p" collection="c" output="o" revision={1} />);
   expect(screen.getByLabelText("降噪")).toHaveValue("none");
@@ -37,4 +40,14 @@ it("恢复已有导出后可重新进入结果页",async()=>{
   render(<OutputExport project="p" collection="c" output="o" revision={1} onSubmitted={onSubmitted} />);
   await userEvent.click(await screen.findByRole("button",{name:"查看导出结果页"}));
   expect(onSubmitted).toHaveBeenCalledWith([{outputId:"o",taskId:"saved-export"}]);
+});
+it("恢复保存的画面设置后按实际配置提交，封面草稿阻止导出",async()=>{
+  const settingsApi=await import("./exportSettingsApi");const api=await import("./api");
+  vi.mocked(settingsApi.getExportDraft).mockResolvedValueOnce({source:"saved",draft:{...settingsApi.defaultExportDraft(),options:{...settingsApi.defaultExportOptions(),aspect_ratio:"9:16",resolution:720,subtitle_mode:"burned",crop_bottom:12}}});
+  vi.mocked(api.recoverOutputExport).mockResolvedValueOnce(null);vi.mocked(api.startOutputExport).mockResolvedValueOnce({task_id:"configured",status:"pending",result:null,error:null});
+  const view=render(<OutputExport project="restored" collection="c" output="o" revision={2} disabled cover={<input aria-label="封面草稿"/>}/>);
+  expect(await screen.findByDisplayValue("720 档")).toBeInTheDocument();expect(screen.getByLabelText("字幕方式")).toHaveValue("burned");expect(screen.getByRole("button",{name:"导出当前作品"})).toBeDisabled();
+  await userEvent.click(screen.getByRole("button",{name:"封面"}));expect(screen.getByLabelText("封面草稿")).toBeVisible();expect(screen.getByRole("button",{name:"导出当前作品"})).toBeVisible();
+  view.rerender(<OutputExport project="restored" collection="c" output="o" revision={2} coverVersion={3} cover={<input aria-label="封面草稿"/>}/>);
+  await userEvent.click(screen.getByRole("button",{name:"导出当前作品"}));expect(api.startOutputExport).toHaveBeenLastCalledWith("restored","c","o",2,expect.objectContaining({aspect_ratio:"9:16",resolution:720,subtitle_mode:"burned",crop_bottom:12,cover_version:3}),expect.any(String));
 });

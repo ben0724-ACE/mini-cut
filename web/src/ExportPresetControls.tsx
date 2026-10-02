@@ -1,0 +1,29 @@
+import {useEffect,useRef,useState} from "react";
+import {defaultExportOptions,deleteExportPreset,exportPresetsChanged,listExportPresets,renameExportPreset,writeExportPreset,type ExportDraft,type ExportPreset} from "./exportSettingsApi";
+
+export function ExportPresetControls({draft,onChange,disabled=false,batch=false}:{draft:ExportDraft;onChange:(draft:ExportDraft)=>void;disabled?:boolean;batch?:boolean}){
+  const [presets,setPresets]=useState<ExportPreset[]>([]);const [loading,setLoading]=useState(true);const [loadError,setLoadError]=useState("");const [error,setError]=useState("");const [busy,setBusy]=useState(false);const [retry,setRetry]=useState(0);
+  const [selection,setSelection]=useState("");const [name,setName]=useState("");const [notice,setNotice]=useState("");const [confirmDelete,setConfirmDelete]=useState(false);const lock=useRef(false);
+  const latest=useRef(draft);latest.current=draft;
+  const current=presets.find(item=>item.preset_id===selection);const applied=presets.find(item=>item.preset_id===draft.preset_id);const blocked=disabled||busy||loading||!!loadError;
+  useEffect(()=>{const refresh=()=>setRetry(value=>value+1);window.addEventListener(exportPresetsChanged,refresh);return()=>window.removeEventListener(exportPresetsChanged,refresh);},[]);
+  useEffect(()=>{const controller=new AbortController();setLoading(true);setLoadError("");listExportPresets(controller.signal).then(value=>{if(!controller.signal.aborted){setPresets(value);setLoading(false);}}).catch(reason=>{if(!controller.signal.aborted){setLoadError(reason instanceof Error?reason.message:"无法读取导出预设");setLoading(false);}});return()=>controller.abort();},[retry]);
+  useEffect(()=>{setSelection(draft.preset_id??"");setName(draft.preset_name??"");},[draft.preset_id,draft.preset_name]);
+  function select(id:string){setSelection(id);setName(presets.find(item=>item.preset_id===id)?.name??"");setNotice("");setError("");setConfirmDelete(false);}
+  async function mutate(operation:()=>Promise<unknown>){if(blocked||lock.current)return;lock.current=true;setBusy(true);setError("");try{await operation();window.dispatchEvent(new Event(exportPresetsChanged));}catch(reason){setError(reason instanceof Error?reason.message:"导出预设操作失败");}finally{lock.current=false;setBusy(false);}}
+  function apply(){if(!current||blocked)return;onChange({...draft,options:{...current.options},preset_id:current.preset_id,preset_name:current.name});setNotice(`已应用“${current.name}”${batch?"到统一设置，逐条覆盖仍然保留":""}；请核对裁剪区域。`);}
+  async function saveAs(){const saved=await writeExportPreset(name.trim(),draft.options);onChange({...latest.current,preset_id:saved.preset_id,preset_name:saved.name});setNotice("已另存为导出预设");}
+  async function update(){if(!applied)return;await writeExportPreset(applied.name,draft.options,applied.preset_id);setNotice("已用当前配置更新预设；其他已应用的设置保持不变");}
+  async function rename(){if(!current)return;const saved=await renameExportPreset(current.preset_id,name.trim());if(latest.current.preset_id===saved.preset_id)onChange({...latest.current,preset_name:saved.name});setNotice("已重命名导出预设");}
+  async function remove(){if(!current)return;await deleteExportPreset(current.preset_id);if(latest.current.preset_id===current.preset_id)onChange({...latest.current,preset_id:null,preset_name:null});select("");setNotice("已删除预设，当前导出设置保留");}
+  return <div className="export-preset-controls">
+    <label>导出预设<select aria-label="导出预设" value={selection} disabled={disabled||busy} onChange={event=>select(event.target.value)}><option value="">当前设置</option>{presets.map(item=><option key={item.preset_id} value={item.preset_id}>{item.name}</option>)}{selection&&!current&&<option value={selection}>{draft.preset_name??"原预设"}（未找到）</option>}</select></label>
+    <div className="preset-actions"><button type="button" disabled={blocked||!current} onClick={apply}>应用预设</button><button type="button" disabled={disabled||busy} onClick={()=>{onChange({...draft,options:defaultExportOptions(),preset_id:null,preset_name:null});select("");setNotice(batch?"统一设置已恢复默认，逐条覆盖保留":"已恢复默认导出设置");}}>恢复默认导出设置</button></div>
+    {loading&&<p role="status">正在读取导出预设…</p>}{loadError&&<p role="alert">{loadError}<button type="button" onClick={()=>setRetry(value=>value+1)}>重试读取导出预设</button></p>}
+    {draft.preset_id&&!applied&&!loading&&!loadError&&<p className="helper-text">原预设已删除或未找到，当前设置仍然保留。</p>}
+    <details className="preset-management"><summary>管理我的导出预设</summary><p className="helper-text">选择后点击应用才填写设置。编辑自动保存当前配置；另存或更新才修改共享预设。{batch&&"预设只保存统一设置，不包含逐条覆盖。"}</p><label>导出预设名称<input aria-label="导出预设名称" maxLength={80} value={name} disabled={blocked} onChange={event=>setName(event.target.value)} placeholder="例如：竖屏 · 1080 · 烧录字幕" /></label>
+      <div className="preset-actions"><button type="button" disabled={blocked||!name.trim()} onClick={()=>void mutate(saveAs)}>另存为预设</button><button type="button" disabled={blocked||!applied||selection!==draft.preset_id} onClick={()=>void mutate(update)}>用当前配置更新预设</button><button type="button" disabled={blocked||!current||!name.trim()||name.trim()===current.name} onClick={()=>void mutate(rename)}>重命名预设</button><button type="button" disabled={blocked||!current} onClick={()=>setConfirmDelete(true)}>删除预设</button></div>
+      {confirmDelete&&current&&<div><p>删除“{current.name}”？已应用设置和已有导出保留。</p><button type="button" disabled={blocked} onClick={()=>void mutate(remove)}>确认删除预设</button><button type="button" disabled={busy} onClick={()=>setConfirmDelete(false)}>取消删除</button></div>}
+    </details>{busy&&<p role="status">正在保存导出预设…</p>}{error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
+  </div>;
+}
