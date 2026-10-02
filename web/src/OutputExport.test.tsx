@@ -8,8 +8,8 @@ beforeEach(()=>localStorage.clear());
 
 it("音频处理默认关闭，失败不显示下载", async () => {
   render(<OutputExport project="p" collection="c" output="o" revision={1} />);
-  expect(screen.getByLabelText("降噪")).toHaveValue("none");
-  expect(screen.getByLabelText("切点淡入淡出（毫秒）")).toHaveValue(0);
+  expect(await screen.findByText("淡入淡出 0 毫秒 · 降噪关闭")).toBeInTheDocument();
+  expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", {name:"导出当前作品"}));
   expect(await screen.findByRole("alert")).toHaveTextContent("导出失败");
   expect(screen.queryByRole("link", {name:"下载视频"})).not.toBeInTheDocument();
@@ -46,8 +46,14 @@ it("恢复保存的画面设置后按实际配置提交，封面草稿阻止导�
   vi.mocked(settingsApi.getExportDraft).mockResolvedValueOnce({source:"saved",draft:{...settingsApi.defaultExportDraft(),options:{...settingsApi.defaultExportOptions(),aspect_ratio:"9:16",resolution:720,subtitle_mode:"burned",crop_bottom:12}}});
   vi.mocked(api.recoverOutputExport).mockResolvedValueOnce(null);vi.mocked(api.startOutputExport).mockResolvedValueOnce({task_id:"configured",status:"pending",result:null,error:null});
   const view=render(<OutputExport project="restored" collection="c" output="o" revision={2} disabled cover={<input aria-label="封面草稿"/>}/>);
-  expect(await screen.findByDisplayValue("720 档")).toBeInTheDocument();expect(screen.getByLabelText("字幕方式")).toHaveValue("burned");expect(screen.getByRole("button",{name:"导出当前作品"})).toBeDisabled();
+  expect(await screen.findByText("9:16 · 720×1280 · 烧录字幕")).toBeInTheDocument();expect(screen.getByRole("button",{name:"导出当前作品"})).toBeDisabled();
   await userEvent.click(screen.getByRole("button",{name:"封面"}));expect(screen.getByLabelText("封面草稿")).toBeVisible();expect(screen.getByRole("button",{name:"导出当前作品"})).toBeVisible();
   view.rerender(<OutputExport project="restored" collection="c" output="o" revision={2} coverVersion={3} cover={<input aria-label="封面草稿"/>}/>);
   await userEvent.click(screen.getByRole("button",{name:"导出当前作品"}));expect(api.startOutputExport).toHaveBeenLastCalledWith("restored","c","o",2,expect.objectContaining({aspect_ratio:"9:16",resolution:720,subtitle_mode:"burned",crop_bottom:12,cover_version:3}),expect.any(String));
+});
+
+it("导出只核对设置，调整入口跳回对应编辑区",async()=>{
+  const onAdjust=vi.fn();render(<OutputExport project="summary" collection="c" output="o" revision={1} onAdjust={onAdjust}/>);
+  await userEvent.click(screen.getByRole("button",{name:"返回编辑调整画面"}));expect(onAdjust).toHaveBeenLastCalledWith("frame");
+  await userEvent.click(screen.getByRole("button",{name:"返回编辑调整字幕"}));expect(onAdjust).toHaveBeenLastCalledWith("subtitles");expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
 });

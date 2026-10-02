@@ -1,4 +1,5 @@
 import json
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,7 +23,7 @@ from minicut.transcript import Transcript, TranscriptSource, Word
 from minicut.transcription_task import CancellationToken
 
 
-def test_preview_is_low_resolution_and_reuses_only_matching_version(
+def test_preview_uses_target_dimensions_and_reuses_only_matching_version_and_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     asset = MediaAsset(
@@ -60,7 +61,7 @@ def test_preview_is_low_resolution_and_reuses_only_matching_version(
 
     def execute(self: object, request: module.OutputRenderRequest) -> object:
         calls.append(request)
-        assert request.video_metadata.width <= 640
+        assert request.video_metadata.width > 640
         output = (
             tmp_path / "exports/collection/v" / str(request.export_id) / "v0001.mp4"
         )
@@ -68,7 +69,18 @@ def test_preview_is_low_resolution_and_reuses_only_matching_version(
         output.write_bytes(b"video")
         subtitle = output.with_suffix(".srt")
         subtitle.write_text("Hello")
-        repo.write_render_record("v", 1, {"plan": plan.to_dict()}, request.export_id)
+        repo.write_render_record(
+            "v",
+            1,
+            {
+                "plan": plan.to_dict(),
+                "video_metadata": asdict(request.video_metadata),
+                "subtitle_mode": request.subtitle_mode.value,
+                "audio_fade_ms": request.audio_fade_ms,
+                "denoiser_id": request.denoiser_id,
+            },
+            request.export_id,
+        )
         return SimpleNamespace(
             output_path=output,
             subtitle_path=subtitle,
@@ -84,6 +96,26 @@ def test_preview_is_low_resolution_and_reuses_only_matching_version(
     second = preview_output(tmp_path, "collection", "v", 1, CancellationToken())
     assert first["revision"] == second["revision"] == 1
     assert second["reused"] is True and len(calls) == 1
+    from minicut.export_settings import PreviewOptions
+
+    options = PreviewOptions(
+        aspect_ratio="9:16",
+        resolution=720,
+        fit="crop",
+        crop_left=12,
+        audio_fade_ms=100,
+        denoiser_id="afftdn",
+    )
+    changed = preview_output(
+        tmp_path, "collection", "v", 1, CancellationToken(), options
+    )
+    assert len(calls) == 2
+    assert changed["media_url"] != first["media_url"]
+    reused = preview_output(
+        tmp_path, "collection", "v", 1, CancellationToken(), options
+    )
+    assert reused["reused"] and len(calls) == 2
+    assert reused["media_url"] == changed["media_url"]
     with pytest.raises(UserInputError):
         preview_output(tmp_path, "collection", "v", 2, CancellationToken())
 

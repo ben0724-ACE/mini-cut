@@ -207,3 +207,27 @@ def test_invalid_presets_and_drafts_do_not_replace_saved_configuration(
             )
 
     asyncio.run(run())
+
+
+def test_batch_source_survives_restart_and_new_collections_default_to_outputs(
+    tmp_path: Path,
+) -> None:
+    setup_projects(tmp_path)
+    store = ExportSettings(tmp_path / "one")
+    uniform = ExportDraft(
+        settings_source="uniform",
+        options=ExportOptions(aspect_ratio="9:16", subtitle_mode="burned"),
+    )
+    store.save("batch", "c", "", uniform)
+    restarted = ExportSettings(tmp_path / "one")
+    assert restarted.read("batch", "c", "")["draft"] == uniform.model_dump(mode="json")
+    inherited = restarted.read("batch", "other", "")["draft"]
+    assert isinstance(inherited, dict)
+    assert inherited["settings_source"] == "output"
+    assert inherited["options"] == uniform.options.model_dump(mode="json")
+    assert (
+        ExportDraft.model_validate(
+            {"options": uniform.options.model_dump()}
+        ).settings_source
+        == "output"
+    )

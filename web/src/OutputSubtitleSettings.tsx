@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { readHighlightTask, saveOutputSubtitleSettings, startOutputTranslation, type HighlightOutput, type HighlightResult, type SubtitleSettings } from "./api";
 
-export function OutputSubtitleSettings({project,collection,plan,disabled,onUpdated}:{project:string;collection:string;plan:HighlightOutput;disabled:boolean;onUpdated:(result:HighlightResult)=>void}) {
+export function OutputSubtitleSettings({project,collection,plan,disabled,onUpdated,onDirty}:{project:string;collection:string;plan:HighlightOutput;disabled:boolean;onUpdated:(result:HighlightResult)=>void;onDirty?:(dirty:boolean)=>void}) {
   const taskStorageKey=`minicut-translation:${project}:${collection}:${plan.output_id}`;
   const initial:SubtitleSettings={subtitle_mode:plan.subtitle_mode??plan.clips.find(c=>c.translation_language)?.subtitle_mode??"bilingual",subtitle_source_scale:plan.subtitle_source_scale??1,subtitle_translation_scale:plan.subtitle_translation_scale??1,subtitle_horizontal_percent:plan.subtitle_horizontal_percent??50,subtitle_bottom_percent:plan.subtitle_bottom_percent??10,subtitle_order:plan.subtitle_order??"source_first"};
   const [settings,setSettings]=useState(initial);
@@ -13,6 +13,7 @@ export function OutputSubtitleSettings({project,collection,plan,disabled,onUpdat
   const missing=plan.clips.some(c=>!c.deleted&&!c.translation_text);
   const existingLanguage=plan.clips.find(c=>!c.deleted&&c.translation_text)?.translation_language;
   const changed=JSON.stringify(settings)!==JSON.stringify(initial);
+  useEffect(()=>{onDirty?.(changed);return()=>onDirty?.(false);},[changed,onDirty]);
   useEffect(()=>{
     if(!taskId)return;
     let active=true;
@@ -29,7 +30,7 @@ export function OutputSubtitleSettings({project,collection,plan,disabled,onUpdat
   },[project,taskId,taskStorageKey,onUpdated]);
   return <section className="subtitle-settings" aria-label="本作品字幕设置">
     <h3>本作品字幕设置</h3>
-    <p className="helper-text">作用于当前作品全部字幕；保存后生成新版本。未翻译的句子仍显示原文。字号与位置用于成片预览和内嵌字幕导出。</p>
+    <p className="helper-text">作用于当前作品全部字幕；保存后生成新版本。未翻译的句子仍显示原文。字号与位置用于烧录字幕的成片预览及导出。</p>
     <div className="subtitle-settings-grid">
       <label>字幕显示<select aria-label="全局字幕显示" value={settings.subtitle_mode??"bilingual"} disabled={disabled||saving||!!taskId} onChange={e=>setSettings({...settings,subtitle_mode:e.target.value as "bilingual"|"translated"|"source"})}><option value="bilingual">双语（原文＋译文）</option><option value="translated">仅译文</option><option value="source">仅原文</option></select></label>
       <label>原文字号（倍）<input aria-label="原文字号" type="number" min="0.7" max="1.5" step="0.1" value={settings.subtitle_source_scale} disabled={disabled||saving||!!taskId} onChange={e=>setSettings({...settings,subtitle_source_scale:Number(e.target.value)})} /></label>

@@ -15,7 +15,15 @@ from typing import Annotated, Self, cast
 from uuid import uuid4
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, status
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    status,
+)
 from pydantic import BaseModel, Field, StringConstraints, model_validator
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
@@ -52,6 +60,7 @@ from minicut.cover_api import cover_router
 from minicut.cover_design import CoverDesign, CoverStore
 from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError, UserInputError
+from minicut.export_settings import PreviewOptions
 from minicut.export_settings_api import export_settings_router
 from minicut.generation_presets import (
     GenerationPresetBody,
@@ -275,10 +284,30 @@ class RenderTaskBody(BaseModel):
     timeout_seconds: float = Field(default=600, gt=0)
 
 
-class OutputPreviewBody(BaseModel):
+class OutputPreviewBody(PreviewOptions):
     collection_id: SafeFileName
     output_id: SafeFileName
     revision: int = Field(ge=1)
+
+
+class OutputPreviewQuery(PreviewOptions):
+    revision: int = Field(ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_query_integers(cls, value: object) -> object:
+        # URL parameters arrive as strings; retain the strict JSON body schema.
+        if isinstance(value, dict):
+            parsed = cast(dict[str, object], value).copy()
+            for key in ("resolution", "audio_fade_ms"):
+                raw = parsed.get(key)
+                if isinstance(raw, str):
+                    try:
+                        parsed[key] = int(raw)
+                    except ValueError:
+                        pass
+            return parsed
+        return value
 
 
 class OutputExportBody(BaseModel):
@@ -1096,6 +1125,9 @@ def create_app(
                     body.output_id,
                     body.revision,
                     token,
+                    PreviewOptions.model_validate(
+                        body.model_dump(include=set(PreviewOptions.model_fields))
+                    ),
                 )
             finally:
                 export_tokens.pop((project_id, idempotency_key), None)
@@ -1120,7 +1152,7 @@ def create_app(
         project_id: ProjectId,
         collection_id: SafeFileName,
         output_id: SafeFileName,
-        revision: int,
+        settings: Annotated[OutputPreviewQuery, Query()],
     ) -> TaskResponse | None:
         inspect(project_id)
         paths = sorted(
@@ -1137,7 +1169,15 @@ def create_app(
                     job.get("kind") == "output-preview"
                     and data.get("collection_id") == collection_id
                     and data.get("output_id") == output_id
-                    and data.get("revision") == revision
+                    and data.get("revision") == settings.revision
+                    and PreviewOptions.model_validate(
+                        {
+                            key: data[key]
+                            for key in PreviewOptions.model_fields
+                            if key in data
+                        }
+                    ).model_dump()
+                    == settings.model_dump(exclude={"revision"})
                 ):
                     result = job.get("result")
                     if job.get("status") == "succeeded" and (

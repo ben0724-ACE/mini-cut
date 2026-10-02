@@ -36,3 +36,11 @@ it("切换作品期间不开放旧配置，晚到的读取不会覆盖新作品"
 it("没有本机副本时读取失败，重试后才开放编辑",async()=>{
   vi.mocked(api.getExportDraft).mockRejectedValueOnce(new Error("读取失败"));render(<Harness route="/retry-read"/>);await screen.findByText("重试读取导出设置");expect(screen.getByLabelText("字幕")).toBeDisabled();fireEvent.click(screen.getByText("重试读取导出设置"));await waitFor(()=>expect(screen.getByLabelText("字幕")).toBeEnabled());
 });
+it("两个设置入口实时共用草稿，晚到的读取不能恢复旧配置",async()=>{
+  const route="/shared-settings";const late=deferred<api.ExportDraftResponse>();
+  vi.mocked(api.getExportDraft).mockResolvedValueOnce({source:"saved",draft:api.defaultExportDraft()}).mockImplementationOnce(()=>late.promise);
+  const {within}=await import("@testing-library/react");render(<><section aria-label="编辑入口"><Harness route={route}/></section><section aria-label="导出入口"><Harness route={route}/></section></>);
+  const edit=within(screen.getByRole("region",{name:"编辑入口"}));const exporting=within(screen.getByRole("region",{name:"导出入口"}));await waitFor(()=>expect(edit.getByLabelText("字幕")).toBeEnabled());fireEvent.change(edit.getByLabelText("字幕"),{target:{value:"burned"}});
+  late.resolve({source:"saved",draft:api.defaultExportDraft()});await waitFor(()=>expect(exporting.getByLabelText("字幕")).toBeEnabled());expect(exporting.getByLabelText("字幕")).toHaveValue("burned");expect(edit.getByLabelText("字幕")).toHaveValue("burned");
+  fireEvent.change(exporting.getByLabelText("字幕"),{target:{value:"soft"}});await waitFor(()=>expect(edit.getByLabelText("字幕")).toHaveValue("soft"));
+});

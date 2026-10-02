@@ -5,6 +5,8 @@ import { HighlightPanel } from "./HighlightPanel";
 import { startHighlights, getHighlights, getGenerationDraft, saveGenerationDraft, getGenerationHistory, listGenerationPresets } from "./api";
 vi.mock("./api", async original => ({...await original<typeof import("./api")>(), getGenerationDraft: vi.fn().mockResolvedValue({source:"default",draft:null}), saveGenerationDraft: vi.fn().mockImplementation(async (_project,_asset,draft)=>({source:"asset",draft})), getGenerationHistory: vi.fn().mockResolvedValue([]), listGenerationPresets: vi.fn().mockResolvedValue([]), startHighlights: vi.fn().mockResolvedValue({task_id:"new",status:"pending",result:null,error:null}), getHighlights: vi.fn().mockResolvedValue({selected_output_ids: []}), saveHighlightSelection: vi.fn().mockResolvedValue({selected_output_ids:["video-1"]})}));
 
+vi.mock("./exportSettingsApi",async original=>{const actual=await original<typeof import("./exportSettingsApi")>();return {...actual,getExportDraft:vi.fn().mockImplementation(async()=>({source:"default",draft:actual.defaultExportDraft()})),saveExportDraft:vi.fn().mockImplementation(async(_route,draft)=>({source:"saved",draft})),listExportPresets:vi.fn().mockResolvedValue([])};});
+
 beforeEach(()=>{localStorage.clear();vi.mocked(getGenerationDraft).mockResolvedValue({source:"default",draft:null});vi.mocked(saveGenerationDraft).mockImplementation(async (_project,_asset,draft)=>({source:"asset",draft}));vi.mocked(getGenerationHistory).mockResolvedValue([]);vi.mocked(listGenerationPresets).mockResolvedValue([]);});
 
 it("连续点击只提交一个生成任务", async () => {
@@ -98,4 +100,21 @@ it("恢复草稿失败时禁止用默认值覆盖记录，重试后才能生成"
   expect(screen.getByRole("button",{name:"生成候选"})).toBeDisabled();
   await userEvent.click(screen.getByRole("button",{name:"重试恢复草稿"}));
   await waitFor(()=>expect(screen.getByRole("button",{name:"生成候选"})).toBeEnabled());
+});
+
+it("切换单个与批量不改变成片，明确点击批量效果后才预览统一配置",async()=>{
+  const api=await import("./api");const settingsApi=await import("./exportSettingsApi");
+  const result={collection_id:"c",asset_id:"asset",brief:{preset:"podcast_highlights",count:1,min_ms:null,max_ms:null,hook_ms:null,instructions:"",max_source_overlap:1},notes:[],selected_output_ids:["o"],outputs:[{output_id:"o",title:"预览归属",reason:"完整",duration_ms:2000,clips:[],revision:1}]};
+  vi.mocked(getHighlights).mockResolvedValue(result);
+  vi.mocked(settingsApi.getExportDraft).mockImplementation(async route=>({source:"saved",draft:{...settingsApi.defaultExportDraft(),settings_source:"uniform",options:{...settingsApi.defaultExportOptions(),aspect_ratio:route.includes("/outputs/")?"9:16":"1:1",subtitle_mode:"burned"}}}));
+  vi.spyOn(api,"recoverOutputExport").mockResolvedValue(null);vi.spyOn(api,"recoverOutputPreview").mockResolvedValue(null);
+  const preview=vi.spyOn(api,"startOutputPreview").mockImplementation(async(_p,_c,_o,revision,key,options)=>({task_id:key,status:"succeeded",error:null,result:{output_id:"o",revision,duration_ms:2000,media_url:`/${options?.aspect_ratio}.mp4`,subtitle_url:"/sub.srt"}}));
+  render(<HighlightPanel project="mode-independent" asset={{asset_id:"asset",name:"test.mov",duration_ms:2000,has_transcript:true,has_plan:false}} recover={vi.fn().mockResolvedValue({task_id:"ready",status:"succeeded",error:null,result})}/>);
+  await waitFor(()=>expect(screen.getByRole("button",{name:"生成成片预览"})).toBeEnabled());await userEvent.click(screen.getByRole("button",{name:"生成成片预览"}));expect(await screen.findByLabelText("成片预览 · 预览归属")).toHaveAttribute("src","/9:16.mp4");
+  await userEvent.click(screen.getByRole("tab",{name:"导出"}));await userEvent.click(screen.getByRole("button",{name:/^批量$/}));expect(screen.getByLabelText("成片预览 · 预览归属")).toHaveAttribute("src","/9:16.mp4");expect(preview).toHaveBeenCalledTimes(1);
+  await waitFor(()=>expect(screen.getByRole("button",{name:"预览 预览归属 的批量效果"})).toBeEnabled());await userEvent.click(screen.getByRole("button",{name:"预览 预览归属 的批量效果"}));await waitFor(()=>expect(screen.getByLabelText("成片预览 · 预览归属")).toHaveAttribute("src","/1:1.mp4"));expect(screen.getByText(/批量效果预览/)).toBeInTheDocument();expect(preview).toHaveBeenCalledTimes(2);
+  await userEvent.click(screen.getByRole("button",{name:/^单个$/}));expect(screen.getByLabelText("成片预览 · 预览归属")).toHaveAttribute("src","/1:1.mp4");expect(preview).toHaveBeenCalledTimes(2);
+  await userEvent.click(screen.getByRole("button",{name:"调整批量配置"}));expect(screen.getByRole("button",{name:/^批量$/})).toHaveAttribute("aria-pressed","true");
+  await userEvent.click(screen.getByLabelText("沿用各作品设置"));expect(screen.getByText(/设置或作品版本已变化/)).toBeInTheDocument();expect(preview).toHaveBeenCalledTimes(2);
+  await userEvent.click(screen.getByRole("button",{name:"返回作品预览"}));expect(await screen.findByLabelText("快速预览 · 预览归属")).toBeInTheDocument();await userEvent.click(screen.getByRole("button",{name:"调整设置"}));expect(screen.getByRole("tab",{name:"编辑"})).toHaveAttribute("aria-selected","true");expect(screen.getByRole("tab",{name:"画面设置"})).toHaveAttribute("aria-selected","true");
 });

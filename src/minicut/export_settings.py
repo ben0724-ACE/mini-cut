@@ -41,8 +41,14 @@ class ExportOptions(ExportGeometry):
     denoiser_id: Literal["none", "afftdn"] = "none"
 
 
+class PreviewOptions(ExportOptions):
+    # Older callers did not submit output settings and expected burned captions.
+    subtitle_mode: Literal["soft", "burned"] = "burned"
+
+
 class ExportDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    settings_source: Literal["output", "uniform"] = "output"
     options: ExportOptions = Field(default_factory=ExportOptions)
     overrides: dict[SafeId, ExportGeometry] = Field(
         default_factory=dict, max_length=100
@@ -73,6 +79,7 @@ class ExportSettings:
                 draft = json.loads(row[0])
                 if source == "project":
                     draft["overrides"] = {}
+                    draft["settings_source"] = "output"
                 return {"source": source, "draft": draft, "updated_at": row[1]}
         return {"source": "default", "draft": ExportDraft().model_dump(mode="json")}
 

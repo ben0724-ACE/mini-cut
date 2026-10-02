@@ -1,25 +1,29 @@
 """Export one existing output without invoking the language model."""
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 from urllib.parse import quote
+from uuid import uuid4
 
 from minicut.cover_design import CoverDesign, render_cover, validate_design
 from minicut.errors import UserInputError
+from minicut.export_settings import ExportOptions, PreviewOptions
 from minicut.highlight_service import source_segments
 from minicut.output_plan import OutputPlan
 from minicut.output_render import OutputRenderRequest, RenderOutputUseCase
 from minicut.output_repository import OutputCollectionRepository
 from minicut.output_timeline import compile_output_timeline
 from minicut.project import ProjectRepository
-from minicut.render_command import SubtitleMode, VideoOutputMetadata
+from minicut.render_command import SubtitleMode
 from minicut.render_profile import RenderProfile, source_dimensions
 from minicut.renderer import FfmpegRenderer
+from minicut.subtitle import parse_srt
 from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
 
 _DEFAULT_PROFILE = RenderProfile()
-RENDER_ENGINE_VERSION = 8
+RENDER_ENGINE_VERSION = 9
 
 
 def _extract_cover(
@@ -103,12 +107,6 @@ def export_output(
         if asset.asset_id == asset_id
     )
     metadata = profile.metadata(*source_dimensions(Path(asset.source_path)))
-    if preview:
-        scale = min(1, 640 / max(metadata.width, metadata.height))
-        metadata = VideoOutputMetadata(
-            max(2, int(metadata.width * scale) // 2 * 2),
-            max(2, int(metadata.height * scale) // 2 * 2),
-        )
     cover_data: bytes | None = None
     warnings: list[str] = []
     if not preview and cover_design is not None and cover_design.mode == "design":
@@ -178,7 +176,12 @@ def preview_output(
     output: str,
     revision: int,
     cancellation: CancellationToken,
+    options: ExportOptions | None = None,
 ) -> dict[str, object]:
+    options = options or PreviewOptions()
+    profile = RenderProfile(
+        **options.model_dump(include=set(RenderProfile.__dataclass_fields__))
+    )
     repository = OutputCollectionRepository(project, collection)
     try:
         asset_id = json.loads(repository.path.read_text(encoding="utf-8"))["asset_id"]
@@ -199,17 +202,41 @@ def preview_output(
     except (OSError, ValueError, KeyError, TypeError, StopIteration) as error:
         raise UserInputError("Requested preview version is unavailable") from error
     cancellation.raise_if_cancelled()
-    export_id = f"preview-r{RENDER_ENGINE_VERSION}-v{revision:04d}"
-    path = (
-        project / "exports" / collection / output / export_id / f"v{revision:04d}.mp4"
+    asset = next(
+        asset
+        for asset in ProjectRepository(project).read().assets
+        if asset.asset_id == asset_id
     )
+    metadata = profile.metadata(*source_dimensions(Path(asset.source_path)))
+    prefix = f"preview-r{RENDER_ENGINE_VERSION}-v{revision:04d}"
     record = repository.render_record_path(output, revision)
-    record = record.parent / export_id / record.name
-    if path.is_file() and path.with_suffix(".srt").is_file() and record.is_file():
-        saved = json.loads(record.read_text(encoding="utf-8"))
-        if OutputPlan.from_dict(saved["plan"]) == plan:
+    for cached in sorted(record.parent.glob(f"{prefix}*/{record.name}"), reverse=True):
+        path = (
+            project
+            / "exports"
+            / collection
+            / output
+            / cached.parent.name
+            / f"v{revision:04d}.mp4"
+        )
+        if not path.is_file() or not path.with_suffix(".srt").is_file():
+            continue
+        try:
+            saved = json.loads(cached.read_text(encoding="utf-8"))
+            matches = (
+                OutputPlan.from_dict(saved["plan"]) == plan
+                and saved.get("video_metadata")
+                == json.loads(json.dumps(asdict(metadata)))
+                and saved.get("subtitle_mode") == options.subtitle_mode
+                and saved.get("audio_fade_ms") == options.audio_fade_ms
+                and saved.get("denoiser_id") == options.denoiser_id
+                and saved.get("preview_options") == options.model_dump()
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if matches:
             base = f"/api/projects/{quote(project.name, safe='')}/media/exports/"
-            return {
+            result: dict[str, object] = {
                 "output_id": output,
                 "render_engine_version": RENDER_ENGINE_VERSION,
                 "revision": revision,
@@ -224,19 +251,65 @@ def preview_output(
                     str(path.with_suffix(".srt").relative_to(project / "exports")),
                     safe="/",
                 ),
+                "width": metadata.width,
+                "height": metadata.height,
+                "preview_options": options.model_dump(),
             }
-    return {
+            return _preview_subtitle_track(project, path, result, options)
+    export_id = f"{prefix}-{uuid4().hex}"
+    result = {
         **export_output(
             project,
             collection,
             output,
             export_id,
             revision,
-            "burned",
-            0,
-            "none",
+            options.subtitle_mode,
+            options.audio_fade_ms,
+            options.denoiser_id,
             cancellation,
+            profile,
             preview=True,
         ),
         "reused": False,
+        "preview_options": options.model_dump(),
+    }
+    saved_record = record.parent / export_id / record.name
+    if saved_record.is_file():
+        saved = json.loads(saved_record.read_text(encoding="utf-8"))
+        saved["preview_options"] = options.model_dump()
+        repository.write_render_record(output, revision, saved, export_id)
+    path = (
+        project / "exports" / collection / output / export_id / f"v{revision:04d}.mp4"
+    )
+    return _preview_subtitle_track(project, path, result, options)
+
+
+def _preview_subtitle_track(
+    project: Path, video: Path, result: dict[str, object], options: ExportOptions
+) -> dict[str, object]:
+    if options.subtitle_mode != "soft":
+        return result
+    cues = parse_srt(video.with_suffix(".srt").read_text(encoding="utf-8"))
+
+    def timestamp(ms: int) -> str:
+        seconds, milliseconds = divmod(ms, 1000)
+        minutes, seconds = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
+
+    track = video.with_suffix(".vtt")
+    track.write_text(
+        "WEBVTT\n\n"
+        + "\n\n".join(
+            f"{timestamp(cue.start_ms)} --> {timestamp(cue.end_ms)}\n{cue.text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')}"
+            for cue in cues
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return {
+        **result,
+        "subtitle_track_url": f"/api/projects/{quote(project.name, safe='')}/media/exports/"
+        + quote(str(track.relative_to(project / "exports")), safe="/"),
     }
