@@ -9,7 +9,7 @@ it("只对选中的作品显式应用，逐条显示部分成功并通知当前�
   const listener=vi.fn();window.addEventListener(api.coversSaved,listener);
   render(<BatchCoverTemplates {...props}/>);fireEvent.click(screen.getByText("批量应用封面模板"));await screen.findByRole("option",{name:"共享模板"});
   fireEvent.change(screen.getByLabelText("批量封面模板"),{target:{value:"template"}});expect(api.applyBatchCoverTemplate).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByText("全部设计 · 保存到已选作品"));
+  fireEvent.click(screen.getByText("全部设计"));
   await screen.findByText("已保存 1 条；失败 1 条。");
   expect(api.applyBatchCoverTemplate).toHaveBeenCalledWith("p","c",[{output_id:"a",revision:1},{output_id:"b",revision:2}],"template","all");
   expect(screen.getByRole("alert")).toHaveTextContent("作品版本已变更");
@@ -19,14 +19,14 @@ it("只对选中的作品显式应用，逐条显示部分成功并通知当前�
 });
 it("当前封面有未保存修改时不能批量应用",async()=>{
   render(<BatchCoverTemplates {...props} disabled/>);fireEvent.click(screen.getByText("批量应用封面模板"));await screen.findByRole("option",{name:"共享模板"});
-  expect(screen.getByLabelText("批量封面模板")).toBeDisabled();expect(screen.getByText("仅标题样式 · 保存到已选作品")).toBeDisabled();
+  expect(screen.getByLabelText("批量封面模板")).toBeDisabled();expect(screen.getByText("仅标题样式")).toBeDisabled();
   expect(api.applyBatchCoverTemplate).not.toHaveBeenCalled();
 });
 it("操作进行中阻止重复请求",async()=>{
   let finish:((rows:api.BatchCoverResult[])=>void)|undefined;
   vi.mocked(api.applyBatchCoverTemplate).mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
   render(<BatchCoverTemplates {...props}/>);fireEvent.click(screen.getByText("批量应用封面模板"));await screen.findByRole("option",{name:"共享模板"});
-  fireEvent.change(screen.getByLabelText("批量封面模板"),{target:{value:"template"}});const button=screen.getByText("全部设计 · 保存到已选作品");fireEvent.click(button);fireEvent.click(button);
+  fireEvent.change(screen.getByLabelText("批量封面模板"),{target:{value:"template"}});const button=screen.getByText("全部设计");fireEvent.click(button);fireEvent.click(button);
   expect(api.applyBatchCoverTemplate).toHaveBeenCalledOnce();expect(button).toBeDisabled();
   finish?.([{output_id:"a",version:2,error:null}]);await waitFor(()=>expect(button).toBeEnabled());
 });

@@ -1,5 +1,6 @@
 import {beforeEach,expect,it,vi} from "vitest";
 import {fireEvent,render,screen,waitFor} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import {CoverEditor} from "./CoverEditor";
 import * as api from "./coverApi";
 import type {CoverDesign} from "./coverApi";
@@ -9,15 +10,17 @@ const props={project:"p",collection:"c",output:"o",revision:1,clips:[{instance_i
 beforeEach(()=>{vi.clearAllMocks();sessionStorage.clear();vi.mocked(api.loadCover).mockResolvedValue({version:0,design:structuredClone(design),fonts:[{id:"heiti",name:"黑体"}]});vi.mocked(api.saveCover).mockImplementation(async(_route,_revision,_base,draft)=>({version:1,design:draft}));vi.mocked(api.previewCover).mockResolvedValue({blob:new Blob(),warnings:[]});URL.createObjectURL=vi.fn(()=>"blob:preview");URL.revokeObjectURL=vi.fn();});
 it("编辑、保存和独立下载使用同一个封面配置，尺寸不改变视频",async()=>{
   render(<CoverEditor {...props}/>);await screen.findByLabelText("封面模式");
-  expect(screen.queryByText("下载封面（无需导出视频）")).not.toBeInTheDocument();
+  expect(screen.queryByText("下载封面")).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("封面模式"),{target:{value:"design"}});
   fireEvent.change(screen.getByLabelText("封面尺寸"),{target:{value:"16:9"}});
   fireEvent.change(screen.getByLabelText("封面标题"),{target:{value:"新封面\n两行标题"}});
   fireEvent.change(screen.getByLabelText("字体"),{target:{value:"heiti"}});
+  await userEvent.click(screen.getByText("加粗",{exact:true}));
+  expect(screen.getByRole("checkbox",{name:"加粗"})).not.toBeChecked();
   expect(props.onDirty).toHaveBeenLastCalledWith(true);
   fireEvent.click(screen.getByText("保存封面设计"));
-  await waitFor(()=>expect(api.saveCover).toHaveBeenCalledWith(expect.any(String),1,0,expect.objectContaining({mode:"design",aspect_ratio:"16:9",title:"新封面\n两行标题",font_id:"heiti"})));
-  const download=await screen.findByRole("link",{name:"下载封面（无需导出视频）"});
+  await waitFor(()=>expect(api.saveCover).toHaveBeenCalledWith(expect.any(String),1,0,expect.objectContaining({mode:"design",aspect_ratio:"16:9",title:"新封面\n两行标题",font_id:"heiti",bold:false})));
+  const download=await screen.findByRole("link",{name:"下载封面"});
   expect(download).toHaveAttribute("href",expect.stringContaining("version=1&format=png"));
   fireEvent.change(screen.getByLabelText("封面文件格式"),{target:{value:"jpg"}});
   expect(download).toHaveAttribute("href",expect.stringContaining("format=jpg"));
@@ -43,7 +46,7 @@ it("上传背景、保存失败和草稿恢复不丢失用户编辑",async()=>{
   fireEvent.change(screen.getByLabelText("封面标题"),{target:{value:"保留草稿"}});
   fireEvent.click(screen.getByText("保存封面设计"));await screen.findByText("保存失败");
   expect(screen.getByLabelText("封面标题")).toHaveValue("保留草稿");
-  expect(screen.queryByRole("link",{name:"下载封面（无需导出视频）"})).not.toBeInTheDocument();
+  expect(screen.queryByRole("link",{name:"下载封面"})).not.toBeInTheDocument();
   view.unmount();render(<CoverEditor {...props}/>);
   expect(await screen.findByLabelText("封面标题")).toHaveValue("保留草稿");
   fireEvent.click(screen.getByText("放弃封面修改"));

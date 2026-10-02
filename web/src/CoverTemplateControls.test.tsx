@@ -13,20 +13,20 @@ let templates:CoverTemplate[]=[];
 const busy=vi.fn();
 function Harness(){const [value,setValue]=useState(design);return <><CoverTemplateControls project="p" collection="c" output="o" revision={1} design={value} onChange={setValue} disabled={false} onBusy={busy}/><output aria-label="当前设计">{JSON.stringify(value)}</output><button onClick={()=>setValue({...value,font_size:66})}>调整当前字号</button></>;}
 beforeEach(()=>{vi.clearAllMocks();templates=[structuredClone(template)];vi.mocked(api.listCoverTemplates).mockImplementation(async()=>structuredClone(templates));vi.mocked(api.applyCoverTemplate).mockImplementation(async(_route,_revision,id,_mode,current)=>({...current,font_size:120,template_id:id,template_name:"深色访谈"}));vi.mocked(api.writeCoverTemplate).mockImplementation(async(name,source,id)=>{const record={...template,template_id:id??"cover-template-new",name,style:{...style,font_size:source.design.font_size}};templates=[...templates.filter(item=>item.template_id!==record.template_id),record];return record;});vi.mocked(api.renameCoverTemplate).mockImplementation(async(id,name)=>{const record={...template,template_id:id,name};templates=templates.map(item=>item.template_id===id?record:item);return record;});vi.mocked(api.deleteCoverTemplate).mockImplementation(async id=>{templates=templates.filter(item=>item.template_id!==id);});});
-it("选择不应用，显式应用后才能用当前配置更新模板",async()=>{
+it("选择不应用，显式应用后才能更新模板",async()=>{
   render(<Harness/>);await screen.findByRole("option",{name:"深色访谈"});
   fireEvent.change(screen.getByLabelText("封面模板"),{target:{value:template.template_id}});
   expect(api.applyCoverTemplate).not.toHaveBeenCalled();expect(screen.getByLabelText("当前设计")).toHaveTextContent('"font_size":88');
-  expect(screen.getByText("用当前配置更新模板")).toBeDisabled();
+  expect(screen.getByText("更新模板")).toBeDisabled();
   fireEvent.click(screen.getByText("仅标题样式"));await waitFor(()=>expect(api.applyCoverTemplate).toHaveBeenCalledWith(expect.any(String),1,template.template_id,"title",expect.objectContaining({title:design.title,frame_ms:1500})));
-  await waitFor(()=>expect(screen.getByText("用当前配置更新模板")).toBeEnabled());
+  await waitFor(()=>expect(screen.getByText("更新模板")).toBeEnabled());
   expect(screen.getByLabelText("当前设计")).toHaveTextContent('"title":"自己的封面文字"');
   fireEvent.click(screen.getByText("调整当前字号"));expect(api.writeCoverTemplate).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByText("用当前配置更新模板"));await waitFor(()=>expect(api.writeCoverTemplate).toHaveBeenCalledWith(template.name,expect.objectContaining({design:expect.objectContaining({font_size:66})}),template.template_id));
+  fireEvent.click(screen.getByText("更新模板"));await waitFor(()=>expect(api.writeCoverTemplate).toHaveBeenCalledWith(template.name,expect.objectContaining({design:expect.objectContaining({font_size:66})}),template.template_id));
 });
 it("另存、重命名、删除与提示词预设管理流程一致，删除保留当前设计",async()=>{
   const user=userEvent.setup();render(<Harness/>);await screen.findByRole("option",{name:"深色访谈"});
-  await user.click(screen.getByText("管理我的封面模板"));
+  await user.click(screen.getByText("管理模板"));
   await user.type(screen.getByLabelText("封面模板名称"),"新模板");await user.click(screen.getByText("另存为模板"));
   await screen.findByRole("option",{name:"新模板"});
   expect(screen.getByLabelText("当前设计")).toHaveTextContent('"template_id":"cover-template-new"');

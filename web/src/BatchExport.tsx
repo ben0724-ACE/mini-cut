@@ -1,3 +1,4 @@
+import { exportTaskStatus } from "./exportTaskStatus";
 import { BatchCoverTemplates } from "./BatchCoverTemplates";
 import { OutputSettingsControls } from "./OutputSettingsControls";
 import { exportSettingsRoute, type ExportOptions } from "./exportSettingsApi";
@@ -41,23 +42,23 @@ export function BatchExport({project,collection,outputs,selected,disabled,onSubm
   }catch(reason){setError(reason instanceof Error?reason.message:"提交导出失败");}finally{lock.current=false;setSending(false);}}
   return <section aria-label="批量导出"><ExportSections cover={<BatchCoverTemplates project={project} collection={collection} outputs={outputs} selected={selected} disabled={disabled||active||sending||recovering} onBusy={setTemplateApplying}/> }><h2>批量画面设置</h2>
     <fieldset className="batch-settings-source" disabled={active||sending||settingsBlocked}><legend>本批次使用的设置</legend>
-      <label><input type="radio" name={`batch-settings-${project}-${collection}`} checked={!uniform} onChange={()=>settings.change({...settings.draft,settings_source:"output"})}/>沿用各作品设置</label>
-      <label><input type="radio" name={`batch-settings-${project}-${collection}`} checked={uniform} onChange={()=>settings.change({...settings.draft,settings_source:"uniform"})}/>统一使用批量设置／预设</label>
+      <label className="radio-field"><input type="radio" name={`batch-settings-${project}-${collection}`} checked={!uniform} onChange={()=>settings.change({...settings.draft,settings_source:"output"})}/>沿用各作品设置</label>
+      <label className="radio-field"><input type="radio" name={`batch-settings-${project}-${collection}`} checked={uniform} onChange={()=>settings.change({...settings.draft,settings_source:"uniform"})}/>统一使用批量设置／预设</label>
     </fieldset>
-    <p className="helper-text">统一设置仅作用于本批次，不修改各作品的编辑设置。字幕文字、字号和位置沿用各作品已保存的版本。</p>
+    <p className="helper-text">仅作用于本批次；字幕内容与排版沿用各作品。</p>
     {uniform&&<><OutputSettingsControls draft={settings.draft} onChange={settings.change} disabled={active||sending||settingsBlocked} label="批量" batch/>
-    <details><summary>逐条画幅覆盖</summary>{outputs.filter(output=>selected.includes(output.output_id)).map(output=><div key={output.output_id}><label><input type="checkbox" disabled={active||sending||settingsBlocked} checked={!!overrides[output.output_id]} onChange={event=>setOverrides((()=>{const next={...overrides};if(event.target.checked)next[output.output_id]={aspect_ratio:options.aspect_ratio??"original",resolution:options.resolution??1080,fit:options.fit??"pad",crop_left:options.crop_left,crop_right:options.crop_right,crop_top:options.crop_top,crop_bottom:options.crop_bottom};else delete next[output.output_id];return next;})())} />单独设置 {output.title}</label>{overrides[output.output_id]&&<GeometrySettings label={output.title} value={overrides[output.output_id]} disabled={active||sending||settingsBlocked} onChange={geometry=>setOverrides({...overrides,[output.output_id]:geometry})} />}</div>)}</details>
+    <details><summary>逐条画幅覆盖</summary>{outputs.filter(output=>selected.includes(output.output_id)).map(output=><div key={output.output_id}><label className="checkbox-field"><input type="checkbox" disabled={active||sending||settingsBlocked} checked={!!overrides[output.output_id]} onChange={event=>setOverrides((()=>{const next={...overrides};if(event.target.checked)next[output.output_id]={aspect_ratio:options.aspect_ratio??"original",resolution:options.resolution??1080,fit:options.fit??"pad",crop_left:options.crop_left,crop_right:options.crop_right,crop_top:options.crop_top,crop_bottom:options.crop_bottom};else delete next[output.output_id];return next;})())} />单独设置 {output.title}</label>{overrides[output.output_id]&&<GeometrySettings label={output.title} value={overrides[output.output_id]} disabled={active||sending||settingsBlocked} onChange={geometry=>setOverrides({...overrides,[output.output_id]:geometry})} />}</div>)}</details>
     <button type="button" disabled={active||sending||settingsBlocked||Object.keys(overrides).length===0} onClick={()=>setOverrides({})}>清除全部逐条覆盖</button>
-    {Object.keys(overrides).length>0&&<p className="helper-text">已开启逐条覆盖的作品优先使用各自画幅，统一设置和预设不会覆盖它们。</p>}
+    {Object.keys(overrides).length>0&&<p className="helper-text">逐条画幅覆盖优先于统一设置。</p>}
     </>}
     <h3>本批次作品与实际设置</h3>{chosen.length===0&&<p>先在左侧选择加入批量的作品。</p>}
     {outputs.map(output=><BatchSettingsRow key={output.output_id} project={project} collection={collection} output={output} selected={selected.includes(output.output_id)} uniformOptions={uniform?effectiveOutputOptions(settings.draft,output.output_id):undefined} onReady={recordSettings} onPreview={onPreview} disabled={disabled||active||sending||recovering||settingsBlocked}/>)}
     </ExportSections>
     <ExportDraftStatus state={settings}/>
-    <button disabled={disabled||recovering||sending||active||templateApplying||settingsBlocked||outputsBlocked||selected.length===0} onClick={()=>void submit()}>导出已选作品</button><p className="helper-text">逐条导出，独立保存 · 刷新恢复进度</p><details><summary>导出说明</summary><p className="helper-text">导出不调用 AI。批次开始后，作品选择的变更仅用于下次导出。</p></details>
-    {resultEntries.length>0&&onSubmitted&&<button onClick={()=>onSubmitted(resultEntries)}>查看全部导出结果</button>}
+    <button className="primary-button" disabled={disabled||recovering||sending||active||templateApplying||settingsBlocked||outputsBlocked||selected.length===0} onClick={()=>void submit()}>{sending?"正在提交…":"导出已选作品"}</button><p className="helper-text">逐条导出，独立保存 · 刷新恢复进度</p><details><summary>导出说明</summary><p className="helper-text">导出不调用 AI。批次开始后，作品选择的变更仅用于下次导出。</p></details>
+    {resultEntries.length>0&&onSubmitted&&<button onClick={()=>onSubmitted(resultEntries)}>导出结果</button>}
     {error&&<p role="alert">{error}<button onClick={()=>{setError("");setQuery(previous=>previous+1);}}>恢复状态查询</button></p>}
-    <ul>{outputs.filter(output=>tasks[output.output_id]).map(output=>{const task=tasks[output.output_id];return <li key={output.output_id}>{output.title}：{task.status}{task.error&&` · ${task.error}`}{task.status==="succeeded"&&task.result&&<><a href={task.result.media_url} download>下载 {output.title}</a> · <a href={task.result.subtitle_url} download>字幕 {output.title}</a></>}{(task.status==="failed"||task.status==="cancelled")&&<button disabled={active||sending||disabled||templateApplying||settingsBlocked||!ready(output)} onClick={()=>void submit(output)}>重试 {output.title}</button>}</li>;})}</ul>
+    <ul>{outputs.filter(output=>tasks[output.output_id]).map(output=>{const task=tasks[output.output_id];return <li key={output.output_id}>{output.title}：{exportTaskStatus[task.status]}{task.error&&` · ${task.error}`}{task.status==="succeeded"&&task.result&&<><a href={task.result.media_url} download>下载 {output.title}</a> · <a href={task.result.subtitle_url} download>字幕 {output.title}</a></>}{(task.status==="failed"||task.status==="cancelled")&&<button disabled={active||sending||disabled||templateApplying||settingsBlocked||!ready(output)} onClick={()=>void submit(output)}>重试 {output.title}</button>}</li>;})}</ul>
   </section>;
 }
 

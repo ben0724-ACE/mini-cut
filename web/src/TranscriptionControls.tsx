@@ -38,7 +38,7 @@ export function TranscriptionControls({project, asset, onComplete, recover = rec
     <label>语言<select aria-label="语言" disabled={active || submitting} value={options.language} onChange={event => setOptions({...options, language: event.target.value})}><option value="zh">中文</option><option value="en">英文</option></select></label>
     <p className="helper-text">本机转录 · 未缓存模型需联网下载</p>
     <details className="helper-details"><summary>转录说明</summary><p className="helper-text">需安装所选引擎。设置仅用于下次转录；刷新后恢复任务与设置。</p></details>
-    <button disabled={loading || submitting || active || !!error} onClick={submit}>{loading ? "正在恢复任务…" : submitting ? "正在提交…" : "开始转录"}</button>
+    <button className="primary-button" disabled={loading || submitting || active || !!error} onClick={submit}>{loading ? "正在恢复任务…" : submitting ? "正在提交…" : "开始转录"}</button>
     {error && <p role="alert">{error}<button onClick={() => {setError(""); setPaused(false); setLoading(true); setRetry(value => value + 1);}}>重试查询</button></p>}
     {task?.status === "failed" && <p role="alert">转录失败：{task.error}</p>}
     {(task?.status==="failed"||task?.status==="cancelled")&&task.resumable&&<button disabled={submitting} onClick={async()=>{setSubmitting(true);setError("");try{const resumed=await resumeTask<TranscriptionTask>(project,task.task_id);setTask(resumed);if(resumed.configuration)setOptions(resumed.configuration);setPaused(false);}catch(reason){setError(reason instanceof Error?reason.message:"恢复失败");}finally{setSubmitting(false);}}}>继续未完成的转录</button>}

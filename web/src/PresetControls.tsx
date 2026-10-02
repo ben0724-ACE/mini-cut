@@ -59,23 +59,23 @@ export function PresetControls({draft:rawDraft,onChange,disabled,library}:{draft
         <button type="button" disabled={busy||library.loading} onClick={()=>apply("prompt")}>仅提示词</button>
         <button type="button" disabled={busy||library.loading} onClick={()=>apply("workflow")}>全部参数</button>
       </div>
-      <p className="helper-text">点击按钮直接应用所选预设。“仅提示词”填写剪辑提示词，保留当前参数；“全部参数”同时填写全部生成参数。</p>
+      <p className="helper-text">仅提示词保留当前参数；全部参数一并替换。</p>
     </div>}
     {library.loading&&<p role="status">正在读取自定义预设…</p>}
-    {library.loadError&&<p role="alert">{library.loadError}<button type="button" disabled={busy} onClick={library.refresh}>重试读取预设库</button></p>}
-    {draft.custom_preset_id&&!current&&!library.loading&&!library.loadError&&<p className="helper-text">此模板已删除或未找到。当前提示词和参数仍可编辑、生成或另存为新预设。</p>}
+    {library.loadError&&<p role="alert">{library.loadError}<button type="button" disabled={busy} onClick={library.refresh}>重试</button></p>}
+    {draft.custom_preset_id&&!current&&!library.loading&&!library.loadError&&<p className="helper-text">预设已删除或未找到，当前配置保留。</p>}
     {draft.custom_preset_id&&<p className="helper-text">基础选材方式：{builtins[draft.preset]??draft.preset}</p>}
-    <details className="preset-management"><summary>管理我的预设</summary>
-      <p className="helper-text">编辑表单只保存项目草稿。点击更新才修改全局模板；已有草稿、历史和作品不会随模板改变。</p>
+    <details className="preset-management"><summary>管理预设</summary>
+      <p className="helper-text">另存或更新会修改共享预设，不影响已有草稿和作品。</p>
       <label>预设名称<input aria-label="预设名称" value={name} maxLength={80} disabled={busy} onChange={event=>setName(event.target.value)} onKeyDown={event=>{if(event.key==="Enter")event.preventDefault();}} placeholder="例如：知识访谈 · 双语短片" /></label>
       <div className="preset-actions">
         <button type="button" disabled={!canManage||!name.trim()} onClick={()=>void saveAs()}>另存为预设</button>
-        <button type="button" disabled={!canManage||!applied} onClick={()=>void update()}>用当前配置更新预设</button>
+        <button type="button" disabled={!canManage||!applied} onClick={()=>void update()}>更新预设</button>
         <button type="button" disabled={!canManage||!current||!name.trim()||name.trim()===current.name} onClick={()=>void rename()}>重命名预设</button>
-        <button type="button" disabled={!canManage||!current} onClick={()=>setConfirmDelete(true)}>删除预设</button>
-        <button type="button" disabled={busy||library.loading} onClick={library.refresh}>重新读取预设库</button>
+        <button type="button" className="danger-button" disabled={!canManage||!current} onClick={()=>setConfirmDelete(true)}>删除预设</button>
+        <button type="button" disabled={busy||library.loading} onClick={library.refresh}>刷新预设</button>
       </div>
-      {confirmDelete&&current&&<div className="preset-delete-confirm"><p>删除“{current.name}”？已应用的草稿和生成历史仍然保留。</p><button type="button" disabled={!canManage} onClick={()=>void remove()}>确认删除预设</button><button type="button" disabled={busy} onClick={()=>setConfirmDelete(false)}>取消删除</button></div>}
+      {confirmDelete&&current&&<div className="preset-delete-confirm"><p>删除“{current.name}”？已应用的草稿和生成历史仍然保留。</p><button type="button" className="danger-button" disabled={!canManage} onClick={()=>void remove()}>确认删除预设</button><button type="button" disabled={busy} onClick={()=>setConfirmDelete(false)}>取消删除</button></div>}
     </details>
     {library.busy&&<p role="status">正在保存预设库变更…</p>}
     {library.error&&<p role="alert">{library.error}</p>}

@@ -1,3 +1,4 @@
+import { exportTaskStatus } from "./exportTaskStatus";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ExportSections } from "./ExportSections";
 import { startOutputExport, readOutputExport, recoverOutputExport, cancelOutputExport, type OutputExportTask } from "./api";
@@ -10,9 +11,11 @@ export function OutputExport({project,collection,output,revision,onAdjust,onSubm
   const options=settings.draft.options;
   const settingsBlocked=!settings.loaded||!!settings.loadError;
   const [task,setTask]=useState<OutputExportTask|null>(null); const [error,setError]=useState("");
+  const [notice,setNotice]=useState("");const [cancelling,setCancelling]=useState(false);
   const [recovering,setRecovering]=useState(true);const [query,setQuery]=useState(0);
   const [sending,setSending]=useState(false);const lock=useRef(false); const key=useRef<string|undefined>(undefined);
   const active=task?.status==="pending"||task?.status==="running";
+  useEffect(()=>{if(!active){setCancelling(false);setNotice("");}},[active]);
   useEffect(()=>{const controller=new AbortController();setRecovering(true);recoverOutputExport(project,collection,output,controller.signal).then(value=>{if(!controller.signal.aborted)setTask(value);}).catch(reason=>{if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"恢复导出失败");}).finally(()=>{if(!controller.signal.aborted)setRecovering(false);});return()=>controller.abort();},[project,collection,output,query]);
   useEffect(()=>{if(!active||!task||error)return;const controller=new AbortController();const timer=setTimeout(()=>{readOutputExport(project,task.task_id,controller.signal).then(value=>{if(!controller.signal.aborted)setTask(value);}).catch(reason=>{if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"读取导出状态失败");});},1000);return()=>{controller.abort();clearTimeout(timer);};},[active,task,project,error]);
   const requestSettings=JSON.stringify({options,revision,coverVersion});
@@ -20,16 +23,17 @@ export function OutputExport({project,collection,output,revision,onAdjust,onSubm
   async function submit(){if(disabled||lock.current||active||recovering||settingsBlocked||error)return;lock.current=true;setSending(true);setError("");key.current??=crypto.randomUUID();try{const submitted=await startOutputExport(project,collection,output,revision,{...options,cover_version:coverVersion},key.current);setTask(submitted);key.current=undefined;onSubmitted?.([{outputId:output,taskId:submitted.task_id}]);}catch(reason){setError(reason instanceof Error?reason.message:"导出失败");}finally{lock.current=false;setSending(false);}}
   return <section aria-label="单作品导出"><ExportSections cover={cover}><h2>最终画面设置</h2>
     {settings.loaded&&<OutputSettingsSummary options={options} presetName={settings.draft.preset_name}/>}
-    {onAdjust&&<><button type="button" onClick={()=>onAdjust("frame")}>返回编辑调整画面</button><button type="button" onClick={()=>onAdjust("subtitles")}>返回编辑调整字幕</button></>}
+    {onAdjust&&<div className="action-row"><button type="button" onClick={()=>onAdjust("frame")}>调整画面</button><button type="button" onClick={()=>onAdjust("subtitles")}>调整字幕</button></div>}
     </ExportSections>
     <ExportDraftStatus state={settings}/>
     {disabled&&<p className="helper-text">{disabledReason??"请先保存或放弃封面修改，等待封面读取完成后导出。"}</p>}
-    <button className="primary-button" disabled={disabled||active||sending||recovering||settingsBlocked||!!error} onClick={()=>void submit()}>导出当前作品</button>
-    {active&&<button onClick={()=>{setError("");void cancelOutputExport(project,task.task_id).then(()=>setError("已请求取消，等待后台停止")).catch(reason=>setError(reason instanceof Error?reason.message:"取消失败"));}}>取消导出</button>}
-    {task&&<p role="status">导出状态：{task.status}{task.result&&` · 版本 ${task.result.revision}`}</p>}
+    <button className="primary-button" disabled={disabled||active||sending||recovering||settingsBlocked||!!error} onClick={()=>void submit()}>{sending?"正在提交…":"导出当前作品"}</button>
+    {active&&<button disabled={cancelling} onClick={async()=>{setError("");setNotice("");setCancelling(true);try{await cancelOutputExport(project,task.task_id);setNotice("已请求取消，等待后台停止");}catch(reason){setCancelling(false);setError(reason instanceof Error?reason.message:"取消失败");}}}>{cancelling?"正在取消…":"取消导出"}</button>}
+    {active&&notice&&<p role="status">{notice}</p>}
+    {task&&<p role="status">导出状态：{exportTaskStatus[task.status]}{task.result&&` · 版本 ${task.result.revision}`}</p>}
     {(error||task?.error)&&<p role="alert">{error||task?.error}</p>}
     {error&&<button onClick={()=>{setError("");setQuery(value=>value+1);}}>恢复导出状态</button>}
-    {task&&onSubmitted&&<button onClick={()=>onSubmitted([{outputId:output,taskId:task.task_id}])}>查看导出结果页</button>}
+    {task&&onSubmitted&&<button onClick={()=>onSubmitted([{outputId:output,taskId:task.task_id}])}>导出结果</button>}
     {task?.status==="succeeded"&&task.result&&<p><a href={task.result.media_url} download>下载视频</a> · <a href={task.result.subtitle_url} download>下载字幕</a></p>}
   </section>;
 }

@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { OutputExport } from "./OutputExport";
 vi.mock("./api", () => ({recoverOutputExport: vi.fn().mockResolvedValue(null), startOutputExport: vi.fn().mockRejectedValue(new Error("导出失败")), readOutputExport: vi.fn(), cancelOutputExport: vi.fn()}));
@@ -38,7 +38,7 @@ it("恢复已有导出后可重新进入结果页",async()=>{
   vi.mocked(api.recoverOutputExport).mockResolvedValueOnce({task_id:"saved-export",status:"succeeded",result:{revision:1,output_id:"o",media_url:"/saved.mp4",subtitle_url:"/saved.srt",duration_ms:1000},error:null});
   const onSubmitted=vi.fn();
   render(<OutputExport project="p" collection="c" output="o" revision={1} onSubmitted={onSubmitted} />);
-  await userEvent.click(await screen.findByRole("button",{name:"查看导出结果页"}));
+  await userEvent.click(await screen.findByRole("button",{name:"导出结果"}));
   expect(onSubmitted).toHaveBeenCalledWith([{outputId:"o",taskId:"saved-export"}]);
 });
 it("恢复保存的画面设置后按实际配置提交，封面草稿阻止导出",async()=>{
@@ -54,6 +54,20 @@ it("恢复保存的画面设置后按实际配置提交，封面草稿阻止导�
 
 it("导出只核对设置，调整入口跳回对应编辑区",async()=>{
   const onAdjust=vi.fn();render(<OutputExport project="summary" collection="c" output="o" revision={1} onAdjust={onAdjust}/>);
-  await userEvent.click(screen.getByRole("button",{name:"返回编辑调整画面"}));expect(onAdjust).toHaveBeenLastCalledWith("frame");
-  await userEvent.click(screen.getByRole("button",{name:"返回编辑调整字幕"}));expect(onAdjust).toHaveBeenLastCalledWith("subtitles");expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button",{name:"调整画面"}));expect(onAdjust).toHaveBeenLastCalledWith("frame");
+  await userEvent.click(screen.getByRole("button",{name:"调整字幕"}));expect(onAdjust).toHaveBeenLastCalledWith("subtitles");expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+});
+
+it("取消请求显示普通状态提示，继续查询直到后台确认取消",async()=>{
+  const api=await import("./api");
+  vi.mocked(api.recoverOutputExport).mockResolvedValueOnce({task_id:"cancelling",status:"running",result:null,error:null});
+  vi.mocked(api.cancelOutputExport).mockResolvedValueOnce({task_id:"cancelling",status:"running",result:null,error:null});
+  vi.mocked(api.readOutputExport).mockResolvedValue({task_id:"cancelling",status:"cancelled",result:null,error:null});
+  render(<OutputExport project="cancel" collection="c" output="o" revision={1}/>);
+  await userEvent.click(await screen.findByRole("button",{name:"取消导出"}));
+  expect(await screen.findByText("已请求取消，等待后台停止")).toHaveAttribute("role","status");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.getByRole("button",{name:"正在取消…"})).toBeDisabled();
+  await waitFor(()=>expect(screen.getByText("导出状态：已取消")).toBeInTheDocument(),{timeout:2000});
+  expect(screen.queryByText("已请求取消，等待后台停止")).not.toBeInTheDocument();
 });

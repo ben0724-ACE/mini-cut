@@ -41,7 +41,7 @@ it("应用完整工作流程填入全部参数，切回内置预设保留其原�
   expect(screen.getByLabelText("数量")).toHaveValue(initial.count);
   expect(submit).not.toHaveBeenCalled();
   expect(screen.queryByRole("button",{name:"重新应用所选预设"})).not.toBeInTheDocument();
-  expect(screen.getByRole("button",{name:"用当前配置更新预设"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"更新预设"})).toBeDisabled();
   await userEvent.click(screen.getByRole("button",{name:"全部参数"}));
   expect(screen.getByLabelText("剪辑提示词")).toHaveValue("原始自定义提示词\n\n完整背景与限定");
   expect(screen.getByLabelText("数量")).toHaveValue(2);
@@ -81,7 +81,7 @@ it("仅应用提示词保留当前基础预设、时长、开场预告和翻译�
 it("另存并在另一个项目界面使用新预设，保存名称及配置",async()=>{
   const first=render(<Harness initial={{...defaultGenerationDraft(),instructions:"项目 A 的流程"}} />);
   await screen.findByRole("option",{name:"双语访谈"});
-  await userEvent.click(screen.getByText("管理我的预设"));
+  await userEvent.click(screen.getByText("管理预设"));
   await userEvent.type(screen.getByLabelText("预设名称"),"新工作流程");
   await userEvent.click(screen.getByRole("button",{name:"另存为预设"}));
   await screen.findByText("已保存“新工作流程”，所有项目均可使用");
@@ -104,7 +104,7 @@ it("重命名只改名字，明确更新才保存当前配置，删除后草稿�
   await screen.findByRole("option",{name:"双语访谈"});
   await userEvent.selectOptions(screen.getByLabelText("预设"),"custom:interview");
   await userEvent.click(screen.getByRole("button",{name:"全部参数"}));
-  await userEvent.click(screen.getByText("管理我的预设"));
+  await userEvent.click(screen.getByText("管理预设"));
   fireEvent.change(screen.getByLabelText("剪辑提示词"),{target:{value:"修改后的提示词"}});
   fireEvent.change(screen.getByLabelText("数量"),{target:{value:"4"}});
   fireEvent.change(screen.getByLabelText("预设名称"),{target:{value:"新名称"}});
@@ -113,7 +113,7 @@ it("重命名只改名字，明确更新才保存当前配置，删除后草稿�
   expect(renameGenerationPreset).toHaveBeenCalledWith("interview","新名称");
   expect(updateGenerationPreset).not.toHaveBeenCalled();
   expect(screen.getByLabelText("剪辑提示词")).toHaveValue("修改后的提示词");
-  await userEvent.click(screen.getByRole("button",{name:"用当前配置更新预设"}));
+  await userEvent.click(screen.getByRole("button",{name:"更新预设"}));
   await screen.findByText("已用当前提示词和参数更新“新名称”");
   expect(updateGenerationPreset).toHaveBeenCalledWith("interview","新名称",expect.objectContaining({custom_prompt:"修改后的提示词",count:4}));
   await userEvent.click(screen.getByRole("button",{name:/^删除预设$/}));
@@ -121,7 +121,7 @@ it("重命名只改名字，明确更新才保存当前配置，删除后草稿�
   await userEvent.click(screen.getByRole("button",{name:"确认删除预设"}));
   await screen.findByText("已删除“新名称”；当前草稿和历史配置仍保留");
   expect(screen.getByLabelText("剪辑提示词")).toHaveValue("修改后的提示词");
-  expect(screen.getByRole("button",{name:"用当前配置更新预设"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"更新预设"})).toBeDisabled();
   await userEvent.click(screen.getByRole("button",{name:"生成候选"}));
   expect(submit).toHaveBeenCalledWith(expect.objectContaining({editing_prompt:"修改后的提示词",count:4,custom_preset_name:"新名称"}));
 });
@@ -133,21 +133,21 @@ it("预设库读取或保存失败可重试，已有自定义草稿不被清空"
   expect(await screen.findByRole("alert")).toHaveTextContent("无法连接预设库");
   expect(screen.getByLabelText("剪辑提示词")).toHaveValue("已保存的项目文字");
   expect(screen.getByRole("button",{name:"生成候选"})).toBeEnabled();
-  await userEvent.click(screen.getByRole("button",{name:"重试读取预设库"}));
+  await userEvent.click(screen.getByRole("button",{name:"重试"}));
   await waitFor(()=>expect(screen.getByRole("button",{name:"仅提示词"})).toBeEnabled());
-  await userEvent.click(screen.getByText("管理我的预设"));
+  await userEvent.click(screen.getByText("管理预设"));
   vi.mocked(updateGenerationPreset).mockRejectedValueOnce(new Error("磁盘暂不可写"));
-  await userEvent.click(screen.getByRole("button",{name:"用当前配置更新预设"}));
+  await userEvent.click(screen.getByRole("button",{name:"更新预设"}));
   expect(await screen.findByRole("alert")).toHaveTextContent("磁盘暂不可写");
   expect(screen.getByLabelText("剪辑提示词")).toHaveValue("已保存的项目文字");
-  await userEvent.click(screen.getByRole("button",{name:"用当前配置更新预设"}));
+  await userEvent.click(screen.getByRole("button",{name:"更新预设"}));
   await screen.findByText("已用当前提示词和参数更新“双语访谈”");
 });
 
 it("不完整的工作流程不能误存为模板，说明需要修正的参数",async()=>{
   render(<Harness initial={{...defaultGenerationDraft(),count:0}} />);
   await screen.findByRole("option",{name:"双语访谈"});
-  await userEvent.click(screen.getByText("管理我的预设"));
+  await userEvent.click(screen.getByText("管理预设"));
   fireEvent.change(screen.getByLabelText("预设名称"),{target:{value:"待整理"}});
   await userEvent.click(screen.getByRole("button",{name:"另存为预设"}));
   expect(await screen.findByRole("alert")).toHaveTextContent("数量（1–10）");
@@ -158,7 +158,7 @@ it("在预设名称中按回车不会误触发 AI 生成",async()=>{
   const submit=vi.fn();
   render(<Harness submit={submit} />);
   await screen.findByRole("option",{name:"双语访谈"});
-  await userEvent.click(screen.getByText("管理我的预设"));
+  await userEvent.click(screen.getByText("管理预设"));
   await userEvent.type(screen.getByLabelText("预设名称"),"新名称{Enter}");
   expect(submit).not.toHaveBeenCalled();
   expect(createGenerationPreset).not.toHaveBeenCalled();
