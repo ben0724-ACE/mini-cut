@@ -78,6 +78,7 @@ def test_preview_uses_target_dimensions_and_reuses_only_matching_version_and_set
                 "subtitle_mode": request.subtitle_mode.value,
                 "audio_fade_ms": request.audio_fade_ms,
                 "denoiser_id": request.denoiser_id,
+                "subtitle_warnings": ["译文分页需人工复核。"],
             },
             request.export_id,
         )
@@ -85,6 +86,7 @@ def test_preview_uses_target_dimensions_and_reuses_only_matching_version_and_set
             output_path=output,
             subtitle_path=subtitle,
             timeline=SimpleNamespace(estimated_duration_ms=2000),
+            subtitle_warnings=("译文分页需人工复核。",),
         )
 
     def dimensions(path: Path) -> tuple[int, int]:
@@ -96,6 +98,7 @@ def test_preview_uses_target_dimensions_and_reuses_only_matching_version_and_set
     second = preview_output(tmp_path, "collection", "v", 1, CancellationToken())
     assert first["revision"] == second["revision"] == 1
     assert second["reused"] is True and len(calls) == 1
+    assert first["subtitle_warnings"] == second["subtitle_warnings"] == ["译文分页需人工复核。"]
     from minicut.export_settings import PreviewOptions
 
     options = PreviewOptions(
@@ -169,6 +172,7 @@ def test_export_returns_publication_metadata_and_cover_url(
             output_path=output,
             subtitle_path=subtitle,
             timeline=SimpleNamespace(estimated_duration_ms=2000),
+            subtitle_warnings=("译文分页需人工复核。",),
         )
 
     def cover(video: Path, destination: Path, token: CancellationToken) -> None:

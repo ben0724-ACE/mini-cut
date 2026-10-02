@@ -65,7 +65,7 @@ export function OutputSubtitleSettings({project,collection,plan,disabled,disable
   },[project,taskId,taskStorageKey,onUpdated]);
   return <section className="subtitle-settings" aria-label="本作品字幕设置">
     <h3>本作品字幕设置</h3>
-    <p className="helper-text">保存生成新版本；缺少译文时显示原文。</p>
+    <p className="helper-text">保存生成新版本；缺少译文时显示原文。烧录双语字幕各预留两行，首行位置固定；长句优先按停顿和句界分页，请在成片预览中核对。</p>
     <div className="subtitle-settings-grid">
       <label>字幕显示<select aria-label="全局字幕显示" value={settings.subtitle_mode??"bilingual"} disabled={controlsDisabled} onChange={e=>change({...settings,subtitle_mode:e.target.value as "bilingual"|"translated"|"source"})}><option value="bilingual">双语（原文＋译文）</option><option value="translated">仅译文</option><option value="source">仅原文</option></select></label>
       <label>原文字号（倍）<input aria-label="原文字号" type="number" min="0.7" max="1.5" step="0.1" value={settings.subtitle_source_scale} disabled={controlsDisabled} onChange={e=>change({...settings,subtitle_source_scale:Number(e.target.value)})} /></label>

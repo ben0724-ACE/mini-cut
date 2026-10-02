@@ -23,7 +23,7 @@ from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
 
 _DEFAULT_PROFILE = RenderProfile()
-RENDER_ENGINE_VERSION = 9
+RENDER_ENGINE_VERSION = 10
 
 
 def _extract_cover(
@@ -159,6 +159,7 @@ def export_output(
         + quote(str(result.output_path.relative_to(project / "exports")), safe="/"),
         "subtitle_url": base
         + quote(str(result.subtitle_path.relative_to(project / "exports")), safe="/"),
+        "subtitle_warnings": list(result.subtitle_warnings),
     }
     if cover_path is not None:
         response["cover_version"] = cover_version
@@ -254,6 +255,7 @@ def preview_output(
                 "width": metadata.width,
                 "height": metadata.height,
                 "preview_options": options.model_dump(),
+                "subtitle_warnings": saved.get("subtitle_warnings", []),
             }
             return _preview_subtitle_track(project, path, result, options)
     export_id = f"{prefix}-{uuid4().hex}"

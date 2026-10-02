@@ -10,7 +10,7 @@ vi.mock("./api",()=>({
     {output_id:"b",title:"作品 B",social_copy:null,reason:"",revision:1,duration_ms:1000,clips:[]},
   ]}),
   readOutputExport:vi.fn().mockImplementation((_project:string,task:string)=>Promise.resolve(task==="task-a"?{
-    task_id:task,status:"succeeded",resumable:true,error:null,result:{output_id:"a",revision:1,duration_ms:1000,title:"导出标题 A",social_copy:"导出时保存的简介",media_url:"/a.mp4",cover_url:"/a.jpg",subtitle_url:"/a.srt"},
+    task_id:task,status:"succeeded",resumable:true,error:null,result:{output_id:"a",revision:1,duration_ms:1000,title:"导出标题 A",social_copy:"导出时保存的简介",media_url:"/a.mp4",cover_url:"/a.jpg",subtitle_url:"/a.srt",subtitle_warnings:["字幕分页需人工复核。"]},
   }:{task_id:task,status:"failed",resumable:true,error:"渲染失败",result:null})),
   resumeTask:vi.fn().mockResolvedValue({task_id:"task-b-resumed",status:"pending",resumable:true,error:null,result:null}),
   cancelOutputExport:vi.fn(),
@@ -22,6 +22,7 @@ it("并列展示导出包，并允许失败任务按原设置恢复",async()=>{
   expect(await screen.findByRole("link",{name:"下载视频"})).toHaveAttribute("href","/a.mp4");
   expect(screen.getByRole("link",{name:"下载封面"})).toHaveAttribute("href","/a.jpg");
   expect(screen.getByText("导出时保存的简介")).toBeInTheDocument();
+  expect(screen.getByText("字幕分页需人工复核。")).toBeInTheDocument();
   expect(screen.getByText("旧项目未生成发布文案；不会自动调用 AI 补写。")).toBeInTheDocument();
   expect(screen.getByRole("button",{name:"返回编辑"})).toBeInTheDocument();
   expect(screen.queryByRole("link",{name:/返回项目/})).not.toBeInTheDocument();

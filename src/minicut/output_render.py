@@ -33,6 +33,7 @@ from minicut.semantic_segment import SemanticSegment
 from minicut.subtitle import SubtitleCue, SubtitleLayoutPolicy, render_srt
 from minicut.subtitle_ass import render_translated_ass
 from minicut.subtitle_font import SubtitleFont, resolve_subtitle_font
+from minicut.subtitle_layout import SubtitleGeometry
 from minicut.timeline import Timeline
 from minicut.timeline_validation import TimelineTrackRequirements
 from minicut.transcript import Transcript
@@ -63,6 +64,7 @@ class OutputRenderResult:
     record_path: Path
     timeline: Timeline
     context_issues: tuple[OutputContextIssue, ...]
+    subtitle_warnings: tuple[str, ...] = ()
 
 
 class RenderOutputUseCase:
@@ -133,6 +135,15 @@ class RenderOutputUseCase:
             collection.asset_id,
             request.transcript.words,
         )
+        font: SubtitleFont | None = None
+        try:
+            font = self._font_resolver()
+        except UserInputError:
+            if request.subtitle_mode is SubtitleMode.BURNED:
+                raise
+        geometry = SubtitleGeometry.for_output(
+            request.video_metadata.width, request.video_metadata.height, plan, font
+        )
         pages = build_output_pages(
             timeline,
             plan,
@@ -143,15 +154,19 @@ class RenderOutputUseCase:
                 else 18
             ),
             portrait=request.video_metadata.width < request.video_metadata.height,
+            geometry=geometry,
+        )
+        warning_times: dict[str, int] = {}
+        for page in pages:
+            for reason in page.review_reasons:
+                warning_times.setdefault(reason, page.start_ms)
+        subtitle_warnings = tuple(
+            f"{time / 1000:.1f} 秒附近：{reason}"
+            for reason, time in warning_times.items()
         )
         subtitle_text = render_srt(
             tuple(SubtitleCue(page.start_ms, page.end_ms, page.text) for page in pages),
             timeline.estimated_duration_ms,
-        )
-        font = (
-            self._font_resolver()
-            if request.subtitle_mode is SubtitleMode.BURNED
-            else None
         )
         destination_directory = (
             request.project_directory
@@ -220,12 +235,7 @@ class RenderOutputUseCase:
                     cancellation=request.cancellation,
                 )
                 staged_subtitle.write_text(subtitle_text, encoding="utf-8")
-                styled_subtitles = request.subtitle_mode is SubtitleMode.BURNED and (
-                    any(page.translation is not None for page in pages)
-                    or plan.subtitle_source_scale != 1.0
-                    or plan.subtitle_horizontal_percent != 50
-                    or plan.subtitle_bottom_percent != 10
-                )
+                styled_subtitles = request.subtitle_mode is SubtitleMode.BURNED
                 subtitle_input = staged_subtitle
                 if styled_subtitles:
                     subtitle_input = staged_video.with_suffix(".ass")
@@ -284,6 +294,7 @@ class RenderOutputUseCase:
                     "audio_fade_ms": request.audio_fade_ms,
                     "denoiser_id": request.denoiser_id,
                     "context_issues": [asdict(issue) for issue in issues],
+                    "subtitle_warnings": list(subtitle_warnings),
                 },
                 request.export_id,
             )
@@ -297,4 +308,5 @@ class RenderOutputUseCase:
             record_path.absolute(),
             timeline,
             issues,
+            subtitle_warnings,
         )

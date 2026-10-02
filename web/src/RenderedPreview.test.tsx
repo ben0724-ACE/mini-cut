@@ -41,3 +41,9 @@ it("按输出设置恢复或生成预览，配置变化不展示旧文件，软�
   vi.mocked(recoverOutputPreview).mockResolvedValueOnce({task_id:"new",status:"pending",error:null,result:null});view.rerender(<RenderedPreview project="p" collection="c" output="o" revision={1} title="Configured" sourceUrl="/source" options={{...options,aspect_ratio:"1:1",subtitle_mode:"burned"}}/>);
   expect(screen.queryByLabelText("成片预览 · Configured")).not.toBeInTheDocument();await waitFor(()=>expect(recoverOutputPreview).toHaveBeenLastCalledWith("p","c","o",1,expect.any(AbortSignal),expect.objectContaining({aspect_ratio:"1:1",subtitle_mode:"burned"})));
 });
+it("成片仍可播放，并显示需要对照原音复核的字幕提示",async()=>{
+  vi.mocked(recoverOutputPreview).mockResolvedValueOnce({task_id:"review",status:"succeeded",error:null,result:{output_id:"o",revision:1,media_url:"/review.mp4",subtitle_url:"/review.srt",duration_ms:4000,subtitle_warnings:["2.0 秒附近：译文分页缺少可靠的原文对应边界，请对照原音人工复核。"]}});
+  render(<RenderedPreview project="p" collection="c" output="o" revision={1} title="Review" sourceUrl="/source" />);
+  expect(await screen.findByLabelText("成片预览 · Review")).toHaveAttribute("src","/review.mp4");
+  expect(screen.getByText(/译文分页缺少可靠的原文对应边界/)).toBeInTheDocument();
+});

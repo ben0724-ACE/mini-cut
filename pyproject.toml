@@ -16,6 +16,7 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.116,<1",
     "httpx>=0.28.1,<0.29",
+    "jieba>=0.42.1,<0.43",
     "opencc-python-reimplemented>=0.1.7,<0.2",
     "pillow>=11.3,<13",
     "uvicorn>=0.35,<1",

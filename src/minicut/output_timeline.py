@@ -17,6 +17,7 @@ from minicut.subtitle import (
     build_readable_cues,
     map_retained_words,
 )
+from minicut.subtitle_layout import SubtitleGeometry
 from minicut.subtitle_pages import SubtitlePage, translated_pages
 from minicut.text_normalization import normalize_text
 from minicut.timeline import Clip, Timeline
@@ -201,6 +202,7 @@ def build_output_pages(
     policy: SubtitleLayoutPolicy = _DEFAULT_SUBTITLE_POLICY,
     *,
     portrait: bool = False,
+    geometry: SubtitleGeometry | None = None,
 ) -> tuple[SubtitlePage, ...]:
     by_instance = {item.instance_id: item for item in plan.items}
     source_width = max(
@@ -236,8 +238,28 @@ def build_output_pages(
                     source_scale=plan.subtitle_source_scale,
                     translation_scale=plan.subtitle_translation_scale,
                     horizontal_percent=plan.subtitle_horizontal_percent,
+                    geometry=geometry,
                 )
             )
+        elif geometry is not None:
+            words = tuple(word for word in mapped if word.clip_id == clip.clip_id)
+            original = item.display_text or normalize_text(
+                " ".join(word.text for word in words)
+            )
+            if original:
+                pages.extend(
+                    replace(page, translation=None, translation_language=None)
+                    for page in translated_pages(
+                        original,
+                        "",
+                        words if item.display_text is None else (),
+                        clip.output_range.start_ms,
+                        clip.output_range.end_ms,
+                        bilingual=True,
+                        translation_language="en",
+                        geometry=geometry,
+                    )
+                )
         elif item.display_text is not None:
             lines = wrap(item.display_text, width=source_policy.max_characters_per_line)
             text_pages = [

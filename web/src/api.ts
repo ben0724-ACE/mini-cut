@@ -105,6 +105,7 @@ export interface RenderDownload {
   cover_url?: string;
   cover_version?:number|null;
   cover_warnings?:string[];
+  subtitle_warnings?:string[];
   title?: string;
   social_copy?: string | null;
   duration_ms: number;
