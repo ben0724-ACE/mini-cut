@@ -10,7 +10,7 @@ export function readMode(project=""):WorkspaceMode {
 export function saveMode(mode:WorkspaceMode,project="") {
   try{localStorage.setItem("minicut:mode",mode);if(project)localStorage.setItem(`minicut:mode:${project}`,mode);}catch{/* The current view still switches if browser storage is unavailable. */}
 }
-export type WorkflowLayout=Pick<HighlightOutput,"subtitle_mode"|"subtitle_source_scale"|"subtitle_translation_scale"|"subtitle_horizontal_percent"|"subtitle_bottom_percent"|"subtitle_order"|"hook_transition_ms"|"hook_transition_kind">;
+export type WorkflowLayout=Pick<HighlightOutput,"subtitle_style"|"subtitle_mode"|"subtitle_source_scale"|"subtitle_translation_scale"|"subtitle_horizontal_percent"|"subtitle_bottom_percent"|"subtitle_order"|"hook_transition_ms"|"hook_transition_kind">;
 export interface WorkflowBody {
   name:string;generation:GenerationDraft;transcription:TranscriptionOptions;export_options:ExportOptions;
   layout:WorkflowLayout;cover_template_id:string|null;auto_export:boolean;

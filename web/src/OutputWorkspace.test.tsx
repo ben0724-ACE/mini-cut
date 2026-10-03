@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { OutputWorkspace } from "./OutputWorkspace";
-vi.mock("./api", async original => ({...await original<typeof import("./api")>(), getHighlights: vi.fn().mockResolvedValue({asset_id:"source",outputs:[{output_id:"video-1",title:"作品A",reason:"理由A",revision:1,clips:[]},{output_id:"video-2",title:"作品B",reason:"理由B",revision:2,clips:[]}]})}));
+vi.mock("./api", async original => ({...await original<typeof import("./api")>(), listSubtitleFonts:vi.fn().mockResolvedValue([]), getHighlights: vi.fn().mockResolvedValue({asset_id:"source",outputs:[{output_id:"video-1",title:"作品A",reason:"理由A",revision:1,clips:[]},{output_id:"video-2",title:"作品B",reason:"理由B",revision:2,clips:[]}]})}));
 vi.mock("./exportSettingsApi",async original=>{
   const actual=await original<typeof import("./exportSettingsApi")>();
   const drafts=new Map<string,import("./exportSettingsApi").ExportDraft>();
@@ -126,13 +126,13 @@ it("编辑阶段设置画幅同步到导出，修改后保留旧预览并显式�
   const {within}=await import("@testing-library/react");const api=await import("./api");const user=(await import("@testing-library/user-event")).default.setup();
   const data={asset_id:"a",collection_id:"c",source_duration_ms:2000,notes:[],brief:{preset:"podcast_highlights",count:1,min_ms:null,max_ms:null,hook_ms:null,instructions:"",max_source_overlap:1},outputs:[{output_id:"o",title:"同步测试",reason:"",revision:1,duration_ms:2000,clips:[]}]};
   vi.mocked(api.getHighlights).mockResolvedValue(data);vi.spyOn(api,"recoverOutputPreview").mockResolvedValue(null);const preview=vi.spyOn(api,"startOutputPreview").mockImplementation(async(_p,_c,_o,revision,_key,options)=>({task_id:"preview",status:"succeeded",error:null,result:{revision,output_id:"o",media_url:`/${options?.aspect_ratio}-${revision}.mp4`,subtitle_url:"/sub.srt",duration_ms:2000}}));
-  const save=vi.spyOn(api,"saveOutputSubtitleSettings").mockResolvedValue({...data,outputs:[{...data.outputs[0],revision:2,subtitle_source_scale:1.3}]});
+  const save=vi.spyOn(api,"saveOutputSubtitleSettings").mockResolvedValue({...data,outputs:[{...data.outputs[0],revision:2,subtitle_style:{...api.defaultSubtitleStyle(),source_size:72}}]});
   render(<OutputWorkspace project="workspace-sync" collection="c" output="o"/>);await screen.findByLabelText("快速预览 · 同步测试");const frame=within(screen.getByRole("tabpanel",{name:"画面设置"}));
   await waitFor(()=>expect(frame.getByLabelText("作品比例")).toBeEnabled());await user.selectOptions(frame.getByLabelText("作品比例"),"9:16");await user.click(screen.getByRole("tab",{name:"字幕设置"}));await user.selectOptions(screen.getByLabelText("字幕方式"),"burned");
   const exporting=within(screen.getByRole("region",{name:"单作品导出",hidden:true}));expect(exporting.getByText("9:16 · 1080×1920 · 烧录字幕")).toBeInTheDocument();expect(exporting.queryByRole("combobox")).not.toBeInTheDocument();expect(preview).not.toHaveBeenCalled();await user.click(screen.getByRole("button",{name:"生成成片预览"}));expect(await screen.findByLabelText("成片预览 · 同步测试")).toHaveAttribute("src","/9:16-1.mp4");
   await user.click(screen.getByRole("tab",{name:"画面设置"}));await user.selectOptions(frame.getByLabelText("作品比例"),"1:1");expect(screen.getByLabelText("成片预览 · 同步测试")).toHaveAttribute("src","/9:16-1.mp4");expect(preview).toHaveBeenCalledTimes(1);expect(screen.getByText(/设置或作品版本已变化/)).toBeInTheDocument();
   await user.click(screen.getByRole("button",{name:"更新成片预览"}));expect(await screen.findByLabelText("成片预览 · 同步测试")).toHaveAttribute("src","/1:1-1.mp4");
-  await user.click(screen.getByRole("tab",{name:"字幕设置"}));fireEvent.change(screen.getByLabelText("原文字号"),{target:{value:"1.3"}});expect(screen.getByRole("button",{name:"更新成片预览"})).toBeDisabled();await user.click(screen.getByRole("button",{name:"保存字幕设置"}));await waitFor(()=>expect(save).toHaveBeenCalled());await waitFor(()=>expect(screen.getByRole("button",{name:"更新成片预览"})).toBeEnabled());
+  await user.click(screen.getByRole("tab",{name:"字幕设置"}));fireEvent.change(screen.getByLabelText("原文字号"),{target:{value:"72"}});expect(screen.getByRole("button",{name:"更新成片预览"})).toBeDisabled();await user.click(screen.getByRole("button",{name:"保存字幕设置"}));await waitFor(()=>expect(save).toHaveBeenCalled());await waitFor(()=>expect(screen.getByRole("button",{name:"更新成片预览"})).toBeEnabled());
   expect(screen.getByLabelText("成片预览 · 同步测试")).toHaveAttribute("src","/1:1-1.mp4");expect(screen.queryByLabelText("快速预览 · 同步测试")).not.toBeInTheDocument();expect(preview).toHaveBeenCalledTimes(2);await user.click(screen.getByRole("button",{name:"更新成片预览"}));await waitFor(()=>expect(preview).toHaveBeenLastCalledWith("workspace-sync","c","o",2,expect.any(String),expect.objectContaining({aspect_ratio:"1:1",subtitle_mode:"burned"})));
 });
 it("只有明确请求批量预览才使用统一设置与逐条画幅覆盖",async()=>{
@@ -141,4 +141,19 @@ it("只有明确请求批量预览才使用统一设置与逐条画幅覆盖",as
   vi.mocked(settingsApi.getExportDraft).mockImplementation(async route=>({source:"saved",draft:route.includes("/outputs/")?settingsApi.defaultExportDraft():{...settingsApi.defaultExportDraft(),settings_source:"uniform",options:{...settingsApi.defaultExportOptions(),aspect_ratio:"9:16",subtitle_mode:"burned"},overrides:{o:{aspect_ratio:"1:1",resolution:720,fit:"crop",crop_left:10}}}}));
   vi.spyOn(api,"recoverOutputPreview").mockResolvedValue(null);const preview=vi.spyOn(api,"startOutputPreview").mockResolvedValue({task_id:"batch",status:"pending",error:null,result:null});const view=render(<OutputWorkspace project="workspace-batch" collection="c" output="o"/>);
   await waitFor(()=>expect(screen.getByRole("button",{name:"生成成片预览"})).toBeEnabled());expect(preview).not.toHaveBeenCalled();view.rerender(<OutputWorkspace project="workspace-batch" collection="c" output="o" batchPreviewRequest={{output:"o",id:"explicit"}}/>);await waitFor(()=>expect(preview).toHaveBeenLastCalledWith("workspace-batch","c","o",1,expect.any(String),expect.objectContaining({aspect_ratio:"1:1",resolution:720,fit:"crop",crop_left:10,subtitle_mode:"burned"})));
+});
+
+it("上层导出预设保存字幕新版本，后续独立编辑沿用作品设置",async()=>{
+  const api=await import("./api");const exports=await import("./exportSettingsApi");const {defaultSubtitleSettings}=await import("./SubtitleAppearanceControls");const layout=defaultSubtitleSettings();layout.subtitle_style={...layout.subtitle_style!,source_size:82,translation_size:46,text_color:"#ffcc00"};
+  const data={asset_id:"a",collection_id:"full",notes:[],brief:{} as import("./api").HighlightResult["brief"],outputs:[{output_id:"o",title:"预设作品",reason:"完整",revision:1,duration_ms:2000,clips:[]}]};
+  vi.mocked(api.getHighlights).mockResolvedValue(data);vi.mocked(exports.listExportPresets).mockResolvedValue([{preset_id:"full",name:"完整成片",options:{...exports.defaultExportOptions(),aspect_ratio:"9:16",subtitle_mode:"burned",subtitle_settings:layout},created_at:"",updated_at:""}]);
+  const save=vi.spyOn(api,"saveOutputSubtitleSettings").mockResolvedValue({...data,outputs:[{...data.outputs[0],revision:2,...layout}]});
+  const preview=vi.spyOn(api,"startOutputPreview");
+  render(<OutputWorkspace project="preset-project" collection="full" output="o"/>);await screen.findByRole("option",{name:"完整成片"});
+  expect(screen.getByRole("region",{name:"成片导出预设"}).querySelector('[role="tabpanel"]')).toBeNull();
+  fireEvent.click(screen.getByRole("tab",{name:"字幕设置"}));fireEvent.change(screen.getByLabelText("导出预设"),{target:{value:"full"}});await waitFor(()=>expect(screen.getByText("应用预设")).toBeEnabled());fireEvent.click(screen.getByText("应用预设"));
+  await waitFor(()=>expect(save).toHaveBeenCalledWith("preset-project","full","o",1,layout));await screen.findByText(/已应用.*包含完整字幕设置/);
+  expect(screen.getByLabelText("原文字号")).toHaveValue(82);expect(screen.getByLabelText("译文字号")).toHaveValue(46);
+  expect(exports.saveExportDraft).toHaveBeenCalledWith(expect.stringContaining("preset-project"),expect.objectContaining({options:expect.objectContaining({subtitle_settings:null,aspect_ratio:"9:16",subtitle_mode:"burned"})}));
+  expect(preview).not.toHaveBeenCalled();fireEvent.change(screen.getByLabelText("原文字号"),{target:{value:"84"}});await waitFor(()=>expect(screen.getByText("应用预设")).toBeDisabled());expect(screen.getByText("另存为预设")).toBeDisabled();
 });

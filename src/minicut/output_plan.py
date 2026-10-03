@@ -10,6 +10,7 @@ from minicut.semantic_segment import (
     SemanticSegment,
     validate_segment_context_dependencies,
 )
+from minicut.subtitle_style import SubtitleStyle
 
 
 def validate_output_id(value: object) -> None:
@@ -112,6 +113,7 @@ class OutputPlan:
     subtitle_horizontal_percent: int = 50
     subtitle_bottom_percent: int = 10
     subtitle_order: str = "source_first"
+    subtitle_style: SubtitleStyle | None = None
 
     def __post_init__(self) -> None:
         if self.subtitle_mode not in {None, "bilingual", "translated", "source"}:
@@ -215,6 +217,9 @@ class OutputPlan:
             cast(int, data.get("subtitle_horizontal_percent", 50)),
             cast(int, data.get("subtitle_bottom_percent", 10)),
             cast(str, data.get("subtitle_order", "source_first")),
+            SubtitleStyle.from_dict(cast(Mapping[str, object], data["subtitle_style"]))
+            if data.get("subtitle_style") is not None
+            else None,
         )
 
 

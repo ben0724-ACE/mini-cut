@@ -231,3 +231,84 @@ def test_batch_source_survives_restart_and_new_collections_default_to_outputs(
         ).settings_source
         == "output"
     )
+
+
+def test_complete_subtitle_presets_restore_across_projects_and_restart(
+    tmp_path: Path,
+) -> None:
+    from dataclasses import asdict
+
+    from minicut.subtitle_style import SubtitleStyle
+
+    setup_projects(tmp_path)
+    layout = {
+        "subtitle_mode": "translated",
+        "subtitle_order": "translation_first",
+        "subtitle_horizontal_percent": 55,
+        "subtitle_bottom_percent": 20,
+        "subtitle_source_scale": 1,
+        "subtitle_translation_scale": 1,
+        "subtitle_style": asdict(
+            SubtitleStyle(
+                source_font_id="heiti",
+                translation_font_id="songti",
+                source_size=88,
+                translation_size=60,
+                text_color="#ffcc00",
+                stroke_color="#123456",
+                stroke_width=6,
+                shadow_color="#334455",
+                shadow_width=3,
+                bold=False,
+                background_enabled=True,
+                background_color="#112233",
+                background_opacity=65,
+            )
+        ),
+    }
+
+    async def run() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(tmp_path)),
+            base_url="http://test",
+        ) as client:
+            saved = await client.post(
+                "/api/export-presets",
+                json={
+                    "name": "Full",
+                    "options": {"subtitle_mode": "burned", "subtitle_settings": layout},
+                },
+            )
+            assert saved.status_code == 201
+            preset = saved.json()
+            assert preset["options"]["subtitle_settings"] == layout
+            for project in ("one", "two"):
+                route = f"/api/projects/{project}/highlights/c/export-settings"
+                response = await client.put(
+                    route,
+                    json={"settings_source": "uniform", "options": preset["options"]},
+                )
+                assert response.status_code == 200
+                assert (await client.get(route)).json()["draft"]["options"][
+                    "subtitle_settings"
+                ] == layout
+            invalid = {
+                **layout,
+                "subtitle_style": {**layout["subtitle_style"], "source_size": 0},
+            }
+            assert (
+                await client.put(
+                    f"/api/export-presets/{preset['preset_id']}",
+                    json={"name": "Full", "options": {"subtitle_settings": invalid}},
+                )
+            ).status_code == 422
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(tmp_path)),
+            base_url="http://test",
+        ) as restarted:
+            assert (await restarted.get("/api/export-presets")).json() == [preset]
+            assert (
+                await restarted.get("/api/projects/two/highlights/c/export-settings")
+            ).json()["draft"]["options"]["subtitle_settings"] == layout
+
+    asyncio.run(run())

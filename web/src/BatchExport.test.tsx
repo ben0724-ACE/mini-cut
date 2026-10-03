@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BatchExport } from "./BatchExport";
 import { startOutputExport, startOutputExportBatch } from "./api";
-vi.mock("./api",()=>({recoverOutputExport:vi.fn().mockResolvedValue(null),readOutputExport:vi.fn(),startOutputExport:vi.fn().mockResolvedValue({task_id:"retry",status:"succeeded",result:{media_url:"/retry",subtitle_url:"/srt"},error:null}),startOutputExportBatch:vi.fn().mockResolvedValue([{task_id:"a",status:"succeeded",result:{media_url:"/good",subtitle_url:"/srt"},error:null},{task_id:"b",status:"failed",result:null,error:"坏片段"}])}));
+vi.mock("./api",async original=>({...await original<typeof import("./api")>(),listSubtitleFonts:vi.fn().mockResolvedValue([{id:"heiti",name:"黑体"},{id:"songti",name:"宋体"}]),recoverOutputExport:vi.fn().mockResolvedValue(null),readOutputExport:vi.fn(),startOutputExport:vi.fn().mockResolvedValue({task_id:"retry",status:"succeeded",result:{media_url:"/retry",subtitle_url:"/srt"},error:null}),startOutputExportBatch:vi.fn().mockResolvedValue([{task_id:"a",status:"succeeded",result:{media_url:"/good",subtitle_url:"/srt"},error:null},{task_id:"b",status:"failed",result:null,error:"坏片段"}])}));
 vi.mock("./exportSettingsApi",async original=>{const actual=await original<typeof import("./exportSettingsApi")>();return {...actual,getExportDraft:vi.fn().mockImplementation(async()=>({source:"default",draft:actual.defaultExportDraft()})),saveExportDraft:vi.fn().mockImplementation(async(_route,draft)=>({source:"saved",draft})),listExportPresets:vi.fn().mockResolvedValue([])};});
 beforeEach(()=>localStorage.clear());
 
@@ -67,4 +67,15 @@ it("默认沿用每条作品设置，统一配置列出差异且不会覆盖作�
   await userEvent.click(screen.getByLabelText("统一使用批量设置／预设"));expect(a.getByText("4:5 · 1080×1350 · 软字幕")).toBeInTheDocument();expect(b.getByText("16:9 · 1920×1080 · 软字幕")).toBeInTheDocument();expect(screen.getAllByText("统一配置：与作品设置不同")).toHaveLength(2);
   expect(vi.mocked(settingsApi.saveExportDraft).mock.calls.every(([route])=>!route.includes("/outputs/"))).toBe(true);
   await userEvent.click(screen.getByLabelText("沿用各作品设置"));expect(a.getByText("9:16 · 720×1280 · 烧录字幕")).toBeInTheDocument();expect(b.getByText("1:1 · 1080×1080 · 软字幕")).toBeInTheDocument();
+});
+
+it("批量完整预设传递独立字体与效果，关闭统一后沿用作品设置",async()=>{
+  const settingsApi=await import("./exportSettingsApi");const {defaultSubtitleSettings}=await import("./SubtitleAppearanceControls");const layout=defaultSubtitleSettings();layout.subtitle_style={...layout.subtitle_style!,source_font_id:"heiti",translation_font_id:"songti",source_size:82,text_color:"#ffcc00",background_enabled:true};
+  vi.mocked(settingsApi.getExportDraft).mockResolvedValue({source:"saved",draft:settingsApi.defaultExportDraft()});vi.mocked(settingsApi.listExportPresets).mockResolvedValue([{preset_id:"full",name:"完整字体",options:{...settingsApi.defaultExportOptions(),subtitle_mode:"burned",subtitle_settings:layout},created_at:"",updated_at:""}]);
+  vi.mocked(startOutputExportBatch).mockClear();render(<BatchExport project="full-batch" collection="full" outputs={[{output_id:"a",title:"A",revision:3}]} selected={["a"]} disabled={false}/>);
+  await userEvent.click(screen.getByLabelText("统一使用批量设置／预设"));await screen.findByRole("option",{name:"完整字体"});await userEvent.selectOptions(screen.getByLabelText("导出预设"),"full");await userEvent.click(screen.getByText("应用预设"));await userEvent.click(screen.getByText("批量字幕设置"));
+  expect(screen.getByLabelText("原文字体")).toHaveValue("heiti");expect(screen.getByLabelText("译文字体")).toHaveValue("songti");expect(screen.getByLabelText("原文字号")).toHaveValue(82);expect(screen.getByLabelText("字幕背景框")).toBeChecked();
+  await waitFor(()=>expect(screen.getByText("导出已选作品")).toBeEnabled());await userEvent.click(screen.getByText("导出已选作品"));expect(startOutputExportBatch).toHaveBeenLastCalledWith("full-batch","full",[{output_id:"a",title:"A",revision:3}],expect.objectContaining({subtitle_settings:layout}),expect.any(String),{},{a:expect.objectContaining({subtitle_settings:layout})});
+  expect(settingsApi.saveExportDraft).not.toHaveBeenCalledWith(expect.stringContaining("full-batch/highlights/full/outputs/"),expect.anything());
+  await userEvent.click(screen.getByLabelText("沿用各作品设置"));await waitFor(()=>expect(screen.getByText("导出已选作品")).toBeEnabled());await userEvent.click(screen.getByText("导出已选作品"));expect(startOutputExportBatch).toHaveBeenLastCalledWith("full-batch","full",expect.anything(),expect.anything(),expect.any(String),{},{a:expect.not.objectContaining({subtitle_settings:layout})});
 });

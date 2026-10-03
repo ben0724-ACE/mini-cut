@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { previewManualSplit, applyManualSplit, splitOutputSentences, saveOutputRanges, getHighlights, editOutputItem, reorderOutput, getOutputVersions, type HighlightResult, type HighlightClip } from "./api";
+import { saveOutputSubtitleSettings, previewManualSplit, applyManualSplit, splitOutputSentences, saveOutputRanges, getHighlights, editOutputItem, reorderOutput, getOutputVersions, type HighlightResult, type HighlightClip } from "./api";
 import { QuickPreview, type Audition } from "./QuickPreview";
 import { registerDraftGuard } from "./draftNavigation";
 import { RenderedPreview } from "./RenderedPreview";
@@ -11,10 +11,12 @@ import { CoverEditor } from "./CoverEditor";
 import { OutputExport } from "./OutputExport";
 import { Workbench, type WorkbenchTab } from "./Workbench";
 import { outputBoundaryWarnings } from "./GenerationDetails";
-import {exportSettingsRoute,type ExportOptions} from "./exportSettingsApi";
+import {exportSettingsRoute,type ExportDraft,type ExportOptions} from "./exportSettingsApi";
 import {useExportDraft} from "./useExportDraft";
 import {effectiveOutputOptions,outputSettingsLabel} from "./OutputSettingsSummary";
 import {OutputSettingsControls} from "./OutputSettingsControls";
+import {ExportPresetControls} from "./ExportPresetControls";
+import {subtitleSettingsFromPlan} from "./SubtitleAppearanceControls";
 import {ExportDraftStatus} from "./useExportDraft";
 interface Panels {preview:ReactNode;edit:ReactNode;exportPanel:ReactNode}
 type EditSection = "frame" | "subtitles" | "sentences" | "hook";
@@ -127,8 +129,18 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
       </>}
     />;
   }
+  async function applyPreset(next:ExportDraft){
+    await singleSettings.flush();
+    const subtitles=next.options.subtitle_settings;
+    if(subtitles&&JSON.stringify(subtitles)!==JSON.stringify(subtitleSettingsFromPlan(currentPlan))){
+      await update(()=>saveOutputSubtitleSettings(project,collection,output,currentPlan.revision,subtitles));
+    }
+    singleSettings.change({...next,options:{...next.options,subtitle_settings:null}});
+    try{await singleSettings.flush();}catch{throw new Error("字幕设置已应用；画面和音频设置尚未同步，请点击重试保存导出设置。");}
+  }
   const edit=<>
     {navigation&&createPortal(<div className="draft-dialog" role="dialog" aria-label="未保存修改"><p>范围尚未保存，是否保存后切换？</p><button disabled={busy||!valid} onClick={()=>void saveDraft().then(ok=>{if(ok){const go=navigation;setNavigation(null);go();}})}>保存并切换</button><button onClick={()=>{const go=navigation;discard();setNavigation(null);go();}}>放弃并切换</button><button onClick={()=>setNavigation(null)}>继续编辑</button></div>,document.body)}
+    <section className="output-preset-section" aria-label="成片导出预设"><h3>导出预设</h3><ExportPresetControls draft={singleSettings.draft} onChange={singleSettings.change} saveOptions={{...singleSettings.draft.options,subtitle_settings:subtitleSettingsFromPlan(currentPlan)}} onApply={applyPreset} disabled={busy||historical||dirty||unsavedSubtitles||!singleSettings.loaded||!!singleSettings.loadError||singleSettings.saving||!!singleSettings.saveError} disabledReason={dirty||unsavedSubtitles?"先保存或放弃当前修改，再保存或应用预设。":historical?"历史版本只读，请切回当前版本后应用预设。":undefined}/><ExportDraftStatus state={singleSettings}/></section>
     <div className="edit-section-tabs" role="tablist" aria-label="编辑区域">
       {editSections.map(({id,label},index)=><button
         type="button" role="tab" key={id}

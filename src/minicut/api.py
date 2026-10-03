@@ -60,7 +60,7 @@ from minicut.cover_api import cover_router
 from minicut.cover_design import CoverDesign, CoverStore
 from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError, UserInputError
-from minicut.export_settings import PreviewOptions
+from minicut.export_settings import ExportSubtitleSettings, PreviewOptions
 from minicut.export_settings_api import export_settings_router
 from minicut.generation_presets import (
     GenerationPresetBody,
@@ -90,6 +90,8 @@ from minicut.output_repository import OutputCollectionRepository
 from minicut.project import ProjectRepository
 from minicut.project_deletion import ProjectDeletionGuard
 from minicut.render_profile import RenderProfile
+from minicut.subtitle_font import available_subtitle_fonts
+from minicut.subtitle_style import SubtitleStyle
 from minicut.transcription_task import CancellationToken, TranscriptionCancelled
 from minicut.workflows import workflow_router
 
@@ -264,12 +266,27 @@ class OutputOrderBody(BaseModel):
 
 class OutputSubtitleSettingsBody(BaseModel):
     base_revision: int = Field(ge=1, strict=True)
-    subtitle_mode: str = Field(pattern=r"^(bilingual|translated|source)$")
+    subtitle_mode: str | None = Field(default=None, pattern=r"^(bilingual|translated|source)$")
     subtitle_source_scale: float = Field(ge=0.7, le=1.5)
     subtitle_translation_scale: float = Field(ge=0.7, le=1.5)
     subtitle_horizontal_percent: int = Field(ge=20, le=80, strict=True)
     subtitle_bottom_percent: int = Field(ge=5, le=40, strict=True)
     subtitle_order: str = Field(pattern=r"^(source_first|translation_first)$")
+    subtitle_style: SubtitleStyle | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_shared_subtitle_font(cls, value: object) -> object:
+        if isinstance(value, dict):
+            data = cast(dict[str, object], value)
+            style = data.get("subtitle_style")
+            if isinstance(style, dict) and "font_id" in style:
+                normalized = dict(cast(dict[str, object], style))
+                shared = normalized.pop("font_id")
+                normalized.setdefault("source_font_id", shared)
+                normalized.setdefault("translation_font_id", shared)
+                return {**data, "subtitle_style": normalized}
+        return cast(object, value)
 
 
 class OutputTranslationBody(BaseModel):
@@ -292,6 +309,16 @@ class OutputPreviewBody(PreviewOptions):
 
 
 class OutputPreviewQuery(PreviewOptions):
+    @model_validator(mode="before")
+    @classmethod
+    def parse_subtitle_query(cls, value: object) -> object:
+        if isinstance(value, dict):
+            data = cast(dict[str, object], value)
+            raw = data.get("subtitle_settings")
+            if isinstance(raw, str):
+                return {**data, "subtitle_settings": json.loads(raw) if raw else None}
+        return cast(object, value)
+
     revision: int = Field(ge=1)
 
     @model_validator(mode="before")
@@ -312,6 +339,7 @@ class OutputPreviewQuery(PreviewOptions):
 
 
 class OutputExportBody(BaseModel):
+    subtitle_settings: ExportSubtitleSettings | None = None
     cover_version: int | None = Field(default=None, ge=0)
     cover_snapshot: CoverDesign | None = None
     collection_id: SafeFileName
@@ -1046,6 +1074,7 @@ def create_app(
                     False,
                     body.cover_snapshot,
                     body.cover_version,
+                    body.subtitle_settings,
                 )
             finally:
                 export_tokens.pop((project_id, idempotency_key), None)
@@ -1723,6 +1752,7 @@ def create_app(
                     collection_id,
                     output_id,
                     **body.model_dump(),
+                    replace_subtitle_style="subtitle_style" in body.model_fields_set,
                 )
         except RevisionConflict as error:
             raise HTTPException(409, str(error)) from error
@@ -2105,6 +2135,13 @@ def create_app(
             _resolve_project_resource(project_directory, resource_path),
             requested_range,
         )
+
+    @api.get("/api/subtitle-fonts")
+    def get_subtitle_fonts() -> list[dict[str, str]]:  # pyright: ignore[reportUnusedFunction]
+        return [
+            {"id": key, "name": name}
+            for key, (name, _) in available_subtitle_fonts().items()
+        ]
 
     api.include_router(cover_router(root))
     api.include_router(export_settings_router(root))

@@ -1,6 +1,7 @@
 import type {GeometryOptions} from "./GeometrySettings";
+import type {SubtitleSettings} from "./api";
 
-export interface ExportOptions extends GeometryOptions {subtitle_mode:"soft"|"burned";audio_fade_ms:number;denoiser_id:"none"|"afftdn"}
+export interface ExportOptions extends GeometryOptions {subtitle_mode:"soft"|"burned";audio_fade_ms:number;denoiser_id:"none"|"afftdn";subtitle_settings?:SubtitleSettings|null}
 export interface ExportDraft {settings_source?:"output"|"uniform";options:ExportOptions;overrides:Record<string,GeometryOptions>;preset_id:string|null;preset_name:string|null}
 export interface ExportPreset {preset_id:string;name:string;options:ExportOptions;created_at:string;updated_at:string}
 export interface ExportDraftResponse {source:"saved"|"project"|"default";draft:ExportDraft}

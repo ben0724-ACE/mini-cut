@@ -1,8 +1,9 @@
 """Deterministic single-work rendering; deliberately has no LLM dependency."""
 
 import json
+import shutil
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
@@ -10,6 +11,7 @@ from typing import cast
 from minicut.application import TimelineRenderer
 from minicut.audio_denoise import build_denoiser_registry, resolve_denoiser
 from minicut.errors import ProcessingError, UserInputError
+from minicut.export_settings import ExportSubtitleSettings
 from minicut.media import StreamType
 from minicut.output_plan import OutputPlan, validate_output_id
 from minicut.output_repository import OutputCollectionRepository
@@ -32,7 +34,11 @@ from minicut.renderer import FfmpegRenderer
 from minicut.semantic_segment import SemanticSegment
 from minicut.subtitle import SubtitleCue, SubtitleLayoutPolicy, render_srt
 from minicut.subtitle_ass import render_translated_ass
-from minicut.subtitle_font import SubtitleFont, resolve_subtitle_font
+from minicut.subtitle_font import (
+    SubtitleFont,
+    resolve_selected_subtitle_font,
+    resolve_subtitle_font,
+)
 from minicut.subtitle_layout import SubtitleGeometry
 from minicut.timeline import Timeline
 from minicut.timeline_validation import TimelineTrackRequirements
@@ -55,6 +61,7 @@ class OutputRenderRequest:
     audio_fade_ms: int = 0
     denoiser_id: str = "none"
     plan_revision: int | None = None
+    subtitle_settings: ExportSubtitleSettings | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +123,8 @@ class RenderOutputUseCase:
                 or plan.revision != request.plan_revision
             ):
                 raise UserInputError("Requested output version does not match")
+        if request.subtitle_settings is not None:
+            plan = replace(plan, **request.subtitle_settings.plan_changes())
         manifest = ProjectRepository(request.project_directory).read()
         assets = tuple(
             asset for asset in manifest.assets if asset.asset_id == collection.asset_id
@@ -136,13 +145,29 @@ class RenderOutputUseCase:
             request.transcript.words,
         )
         font: SubtitleFont | None = None
+        translation_font: SubtitleFont | None = None
         try:
-            font = self._font_resolver()
+            font = (
+                resolve_selected_subtitle_font(plan.subtitle_style.source_font_id)
+                if plan.subtitle_style and plan.subtitle_style.source_font_id
+                else self._font_resolver()
+            )
+            translation_font = (
+                resolve_selected_subtitle_font(plan.subtitle_style.translation_font_id)
+                if plan.subtitle_style and plan.subtitle_style.translation_font_id
+                else self._font_resolver()
+                if plan.subtitle_style
+                else font
+            )
         except UserInputError:
             if request.subtitle_mode is SubtitleMode.BURNED:
                 raise
         geometry = SubtitleGeometry.for_output(
-            request.video_metadata.width, request.video_metadata.height, plan, font
+            request.video_metadata.width,
+            request.video_metadata.height,
+            plan,
+            font,
+            translation_font,
         )
         pages = build_output_pages(
             timeline,
@@ -237,6 +262,7 @@ class RenderOutputUseCase:
                 staged_subtitle.write_text(subtitle_text, encoding="utf-8")
                 styled_subtitles = request.subtitle_mode is SubtitleMode.BURNED
                 subtitle_input = staged_subtitle
+                fonts_directory: str | None = None
                 if styled_subtitles:
                     subtitle_input = staged_video.with_suffix(".ass")
                     assert font is not None
@@ -247,9 +273,22 @@ class RenderOutputUseCase:
                             request.video_metadata.height,
                             font,
                             plan,
+                            translation_font=translation_font,
                         ),
                         encoding="utf-8",
                     )
+                    if plan.subtitle_style:
+                        fonts_path = Path(staging) / "fonts"
+                        fonts_path.mkdir()
+                        selected_paths = {font.path}
+                        if translation_font:
+                            selected_paths.add(translation_font.path)
+                        for index, selected_path in enumerate(sorted(selected_paths)):
+                            shutil.copyfile(
+                                selected_path,
+                                fonts_path / f"font-{index}{selected_path.suffix}",
+                            )
+                        fonts_directory = str(fonts_path)
                 command = self._builder.build_subtitle_output(
                     str(staged_video),
                     str(subtitle_input),
@@ -258,6 +297,7 @@ class RenderOutputUseCase:
                     subtitle_font=font,
                     video_metadata=request.video_metadata,
                     styled_subtitles=styled_subtitles,
+                    subtitle_fonts_directory=fonts_directory,
                 )
                 self._renderer.render_to_path(
                     command,
@@ -290,6 +330,9 @@ class RenderOutputUseCase:
                     "subtitle_path": str(subtitle.absolute()),
                     "subtitle_mode": request.subtitle_mode.value,
                     "subtitle_font": None if font is None else font.to_record(),
+                    "subtitle_translation_font": translation_font.to_record()
+                    if translation_font
+                    else None,
                     "video_metadata": asdict(request.video_metadata),
                     "audio_fade_ms": request.audio_fade_ms,
                     "denoiser_id": request.denoiser_id,

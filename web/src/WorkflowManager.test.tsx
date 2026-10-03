@@ -35,3 +35,11 @@ it("弹窗关闭后恢复焦点，重新打开保留尚未保存的工作流名�
   await user.click(trigger);expect(screen.getByRole("dialog",{name:"管理我的工作流"})).toBeInTheDocument();
   expect(screen.getByLabelText("工作流名称")).toHaveValue("未保存的工作流");expect(api.listGenerationPresets).toHaveBeenCalledTimes(1);
 });
+
+it("工作流导出预设带入原文译文字体和共用效果",async()=>{
+  const {defaultSubtitleSettings}=await import("./SubtitleAppearanceControls");const layout=defaultSubtitleSettings();layout.subtitle_style={...layout.subtitle_style!,source_font_id:"heiti",translation_font_id:"songti",background_enabled:true};
+  vi.mocked(exportApi.listExportPresets).mockResolvedValue([{preset_id:"full",name:"完整成片",options:{...defaultExportOptions(),subtitle_settings:layout},created_at:"",updated_at:""}]);
+  vi.mocked(workflowApi.writeWorkflow).mockImplementation(async body=>({...body,workflow_id:"w",created_at:"",updated_at:""}));const user=userEvent.setup();render(<WorkflowManager project="p"/>);
+  await user.click(screen.getByRole("button",{name:"管理我的工作流"}));await waitFor(()=>expect(screen.getByLabelText("工作流名称")).toBeEnabled());await user.type(screen.getByLabelText("工作流名称"),"完整样式");await user.selectOptions(screen.getByLabelText("工作流导出预设"),"full");await user.click(screen.getByText("另存为工作流"));
+  await waitFor(()=>expect(workflowApi.writeWorkflow).toHaveBeenCalledWith(expect.objectContaining({layout:expect.objectContaining(layout),export_options:expect.objectContaining({subtitle_settings:layout})}),undefined));
+});

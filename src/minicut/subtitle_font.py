@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from PIL import ImageFont
+
 from minicut.errors import UserInputError
 
 
@@ -13,6 +15,7 @@ from minicut.errors import UserInputError
 class SubtitleFont:
     family: str
     path: Path
+    index: int = 0
 
     def __post_init__(self) -> None:
         if not self.family.strip() or any(
@@ -24,6 +27,40 @@ class SubtitleFont:
 
     def to_record(self) -> dict[str, str]:
         return {"family": self.family, "path": str(self.path.absolute())}
+
+
+def available_subtitle_fonts() -> dict[str, tuple[str, SubtitleFont]]:
+    """Use the same installed fonts as covers, with their real family names."""
+    # Import locally because cover design also uses the default font resolver.
+    from minicut.cover_design import cover_fonts
+
+    fonts: dict[str, tuple[str, SubtitleFont]] = {}
+    for key, (name, path) in cover_fonts().items():
+        # Heiti's medium face is selected by the shared bold switch.
+        if key == "heiti_medium":
+            continue
+        if not os.access(path, os.R_OK):
+            continue
+        try:
+            index = 1 if key == "heiti" else 6 if key == "songti" else 0
+            face = ImageFont.truetype(str(path), 32, index=index)
+            family = face.getname()[0]
+            if key == "configured":
+                configured = resolve_subtitle_font()
+                family = configured.family
+            if not family:
+                continue
+            fonts[key] = (name, SubtitleFont(family, path, index))
+        except (OSError, ValueError, UserInputError):
+            continue
+    return fonts
+
+
+def resolve_selected_subtitle_font(font_id: str) -> SubtitleFont:
+    entry = available_subtitle_fonts().get(font_id)
+    if entry is None:
+        raise UserInputError("字幕字体不可用，请选择本机可用的字体")
+    return entry[1]
 
 
 def resolve_subtitle_font(

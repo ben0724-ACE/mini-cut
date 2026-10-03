@@ -1,14 +1,18 @@
 """Export one existing output without invoking the language model."""
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
 
 from minicut.cover_design import CoverDesign, render_cover, validate_design
 from minicut.errors import UserInputError
-from minicut.export_settings import ExportOptions, PreviewOptions
+from minicut.export_settings import (
+    ExportOptions,
+    ExportSubtitleSettings,
+    PreviewOptions,
+)
 from minicut.highlight_service import source_segments
 from minicut.output_plan import OutputPlan
 from minicut.output_render import OutputRenderRequest, RenderOutputUseCase
@@ -23,7 +27,7 @@ from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
 
 _DEFAULT_PROFILE = RenderProfile()
-RENDER_ENGINE_VERSION = 10
+RENDER_ENGINE_VERSION = 11
 
 
 def _extract_cover(
@@ -68,6 +72,7 @@ def export_output(
     preview: bool = False,
     cover_design: CoverDesign | None = None,
     cover_version: int | None = None,
+    subtitle_settings: ExportSubtitleSettings | None = None,
 ) -> dict[str, object]:
     repository = OutputCollectionRepository(project, collection)
     try:
@@ -128,6 +133,7 @@ def export_output(
             denoiser_id=denoiser_id,
             video_metadata=metadata,
             plan_revision=revision,
+            subtitle_settings=subtitle_settings,
         )
     )
     cover_path: Path | None = None
@@ -160,6 +166,9 @@ def export_output(
         "subtitle_url": base
         + quote(str(result.subtitle_path.relative_to(project / "exports")), safe="/"),
         "subtitle_warnings": list(result.subtitle_warnings),
+        "subtitle_settings": subtitle_settings.model_dump()
+        if subtitle_settings
+        else None,
     }
     if cover_path is not None:
         response["cover_version"] = cover_version
@@ -202,6 +211,8 @@ def preview_output(
             raise ValueError("Preview version does not match")
     except (OSError, ValueError, KeyError, TypeError, StopIteration) as error:
         raise UserInputError("Requested preview version is unavailable") from error
+    if options.subtitle_settings is not None:
+        plan = replace(plan, **options.subtitle_settings.plan_changes())
     cancellation.raise_if_cancelled()
     asset = next(
         asset
@@ -272,6 +283,7 @@ def preview_output(
             cancellation,
             profile,
             preview=True,
+            subtitle_settings=options.subtitle_settings,
         ),
         "reused": False,
         "preview_options": options.model_dump(),

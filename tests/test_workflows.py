@@ -375,3 +375,68 @@ def test_restart_between_saved_stages_keeps_completed_selection(tmp_path, monkey
             assert len(transcription.calls) == len(calls) == 1
 
     asyncio.run(run())
+
+
+def test_full_export_preset_applies_style_to_saved_workflow_output(tmp_path):
+    from dataclasses import asdict
+
+    from minicut.export_settings import ExportSettings
+    from minicut.subtitle_style import SubtitleStyle
+    from minicut.workflows import configure_outputs
+
+    directory = project(tmp_path)
+    Transcriber().execute(
+        SimpleNamespace(
+            project_directory=directory,
+            asset_id="asset",
+            provider="whisper",
+            model="tiny",
+            language="en",
+        )
+    )
+    result = generator([])(
+        directory,
+        "asset",
+        "collection",
+        SimpleNamespace(to_dict=lambda: WorkflowBody.model_validate(definition()).brief()),
+    )
+    subtitles = {
+        "subtitle_mode": "source",
+        "subtitle_bottom_percent": 25,
+        "subtitle_style": asdict(
+            SubtitleStyle(
+                source_size=90,
+                translation_size=50,
+                text_color="#ffcc00",
+                background_enabled=True,
+            )
+        ),
+    }
+    body = WorkflowBody.model_validate(
+        definition(
+            export_options={"subtitle_mode": "burned", "subtitle_settings": subtitles}
+        )
+    )
+    updated = configure_outputs(directory, result, body.model_dump())
+    plan = (
+        OutputCollectionRepository(directory, "collection")
+        .read(source_segments(directory, "asset", "collection"))
+        .plans[0]
+    )
+    assert updated["outputs"][0]["revision"] == plan.revision == 2
+    assert plan.subtitle_style == SubtitleStyle.from_dict(subtitles["subtitle_style"])
+    assert plan.subtitle_mode == "source" and plan.subtitle_bottom_percent == 25
+    assert (
+        ExportSettings(directory).read("single", "collection", "o")["draft"]["options"][
+            "subtitle_settings"
+        ]
+        is None
+    )
+    configure_outputs(directory, updated, body.model_dump())
+    assert (
+        OutputCollectionRepository(directory, "collection")
+        .read(source_segments(directory, "asset", "collection"))
+        .plans[0]
+        .revision
+        == 2
+    )

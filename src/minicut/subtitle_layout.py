@@ -8,6 +8,7 @@ from PIL import ImageFont
 
 from minicut.output_plan import OutputPlan
 from minicut.subtitle_font import SubtitleFont
+from minicut.subtitle_style import SubtitleStyle
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +25,9 @@ class SubtitleGeometry:
     side: int
     translation_first: bool
     font: SubtitleFont | None = None
+    effect_padding: int = 0
+    bold: bool = True
+    translation_font: SubtitleFont | None = None
 
     @classmethod
     def for_output(
@@ -32,6 +36,7 @@ class SubtitleGeometry:
         height: int,
         plan: OutputPlan | None = None,
         font: SubtitleFont | None = None,
+        translation_font: SubtitleFont | None = None,
     ) -> "SubtitleGeometry":
         if width <= 0 or height <= 0:
             raise ValueError("subtitle dimensions must be positive")
@@ -40,13 +45,31 @@ class SubtitleGeometry:
         large = max(16, round(height * (0.041 if portrait else 0.055)))
         source_scale = plan.subtitle_source_scale if plan else 1
         translation_scale = plan.subtitle_translation_scale if plan else 1
+        style = plan.subtitle_style if plan else None
+        scale = SubtitleStyle.scale(width, height)
+        source_size = max(1, round(style.source_size * scale)) if style else None
+        translated_size = (
+            max(1, round(style.translation_size * scale)) if style else None
+        )
+        padding = (
+            round(
+                (
+                    style.stroke_width
+                    + style.shadow_width
+                    + (4 if style.background_enabled else 0)
+                )
+                * scale
+            )
+            if style
+            else 0
+        )
         return cls(
             width,
             height,
-            round(small * source_scale),
-            round(large * source_scale),
-            round(small * translation_scale),
-            round(large * translation_scale),
+            source_size or round(small * source_scale),
+            source_size or round(large * source_scale),
+            translated_size or round(small * translation_scale),
+            translated_size or round(large * translation_scale),
             round(width * (plan.subtitle_horizontal_percent if plan else 50) / 100),
             round(
                 height
@@ -61,13 +84,20 @@ class SubtitleGeometry:
             round(width * 0.07),
             plan is not None and plan.subtitle_order == "translation_first",
             font,
+            padding,
+            style.bold if style else True,
+            translation_font or font,
         )
 
     @property
     def available_width(self) -> int:
         return max(
             1,
-            2 * min(self.center_x - self.side, self.width - self.side - self.center_x),
+            2
+            * (
+                min(self.center_x - self.side, self.width - self.side - self.center_x)
+                - self.effect_padding
+            ),
         )
 
     def sizes(self, translation_language: str | None) -> tuple[int, int]:
@@ -75,18 +105,18 @@ class SubtitleGeometry:
             return self.source_small, self.translation_large
         return self.source_large, self.translation_small
 
-    def measure(self, size: int) -> Callable[[str], float]:
-        if self.font is not None:
-            face = ImageFont.truetype(str(self.font.path), size)
+    def measure(self, size: int, *, translated: bool = False) -> Callable[[str], float]:
+        font = self.translation_font if translated else self.font
+        if font is not None:
+            face = ImageFont.truetype(str(font.path), size, index=font.index)
 
             # libass may select a bold face; leave room for that and glyph outlines.
             @lru_cache(maxsize=2048)
             def measured_width(text: str) -> float:
-                return float(face.getlength(text)) * 1.08
+                return float(face.getlength(text)) * (1.08 if self.bold else 1.02)
 
             return measured_width
         return lambda text: sum(size if ord(c) > 0x2FF else size * 0.6 for c in text)
 
-    @staticmethod
-    def row_height(size: int) -> int:
-        return round(size * 1.25)
+    def row_height(self, size: int) -> int:
+        return round(size * 1.25) + 2 * self.effect_padding

@@ -208,6 +208,7 @@ class RenderCommandBuilder:
         subtitle_font: SubtitleFont | None = None,
         video_metadata: VideoOutputMetadata | None = None,
         styled_subtitles: bool = False,
+        subtitle_fonts_directory: str | None = None,
     ) -> tuple[str, ...]:
         """Attach a selectable track or render subtitle text into video frames."""
         input_url = _local_file_url(input_path, label="subtitle video input")
@@ -240,7 +241,7 @@ class RenderCommandBuilder:
                 raise ValueError("Burned subtitles require an explicit CJK font")
             subtitle_filter = (
                 f"subtitles=filename={_subtitle_filter_path(subtitle_path)}"
-                f":fontsdir={_subtitle_filter_path(str(subtitle_font.path.parent))}"
+                f":fontsdir={_subtitle_filter_path(subtitle_fonts_directory or str(subtitle_font.path.parent))}"
                 + (
                     ""
                     if styled_subtitles

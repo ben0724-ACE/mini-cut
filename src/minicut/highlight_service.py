@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 from contextlib import AbstractContextManager
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import cast
 
@@ -27,6 +27,8 @@ from minicut.semantic_segmentation import (
     mark_segment_candidates,
 )
 from minicut.sentence_boundaries import sentence_segments
+from minicut.subtitle_font import resolve_selected_subtitle_font
+from minicut.subtitle_style import SubtitleStyle
 from minicut.text_normalization import normalize_text, normalize_transcript_words
 from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
@@ -209,6 +211,9 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
                 row["revision"] = plan.revision
                 row["hook_transition_ms"] = plan.hook_transition_ms
                 row["hook_transition_kind"] = plan.hook_transition_kind
+                row["subtitle_style"] = (
+                    asdict(plan.subtitle_style) if plan.subtitle_style else None
+                )
                 row.update(
                     {
                         key: getattr(plan, key)
@@ -369,12 +374,14 @@ def save_output_subtitle_settings(
     output_id: str,
     base_revision: int,
     *,
-    subtitle_mode: str,
+    subtitle_mode: str | None,
     subtitle_source_scale: float,
     subtitle_translation_scale: float,
     subtitle_horizontal_percent: int,
     subtitle_bottom_percent: int,
     subtitle_order: str,
+    subtitle_style: dict[str, object] | None = None,
+    replace_subtitle_style: bool = False,
 ) -> dict[str, object]:
     result = read_highlights(project, collection_id)
     segments = source_segments(project, cast(str, result["asset_id"]), collection_id)
@@ -385,6 +392,11 @@ def save_output_subtitle_settings(
         raise UserInputError("Output does not exist")
     if plan.revision != base_revision:
         raise RevisionConflict("作品已有新版本，请刷新后重试")
+    style = SubtitleStyle.from_dict(subtitle_style) if subtitle_style else None
+    if style:
+        for font_id in (style.source_font_id, style.translation_font_id):
+            if font_id:
+                resolve_selected_subtitle_font(font_id)
     updated = replace(
         plan,
         revision=plan.revision + 1,
@@ -394,6 +406,7 @@ def save_output_subtitle_settings(
         subtitle_horizontal_percent=subtitle_horizontal_percent,
         subtitle_bottom_percent=subtitle_bottom_percent,
         subtitle_order=subtitle_order,
+        subtitle_style=style if style or replace_subtitle_style else plan.subtitle_style,
     )
     repository.write(
         replace(
@@ -592,6 +605,9 @@ def output_versions(
     return [
         {
             "revision": plan.revision,
+            "subtitle_style": asdict(plan.subtitle_style)
+            if plan.subtitle_style
+            else None,
             "hook_transition_ms": plan.hook_transition_ms,
             "hook_transition_kind": plan.hook_transition_kind,
             **{

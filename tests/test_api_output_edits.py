@@ -1,5 +1,6 @@
 import asyncio
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import httpx
@@ -16,6 +17,7 @@ from minicut.output_plan import (
 )
 from minicut.output_repository import OutputCollectionRepository
 from minicut.project import ProjectManifest, ProjectRepository
+from minicut.subtitle_style import SubtitleStyle
 from minicut.transcript import Transcript, TranscriptSource, Word
 
 
@@ -212,6 +214,53 @@ def test_edit_preserves_source_and_other_output_and_rejects_empty_body(
             assert (
                 await client.put(output + "/subtitle-settings", json=settings)
             ).status_code == 409
+            assert row["subtitle_style"] is None  # Legacy requests retain old layout.
+            settings["base_revision"] = row["revision"]
+            new_style = asdict(
+                SubtitleStyle(
+                    source_size=72,
+                    translation_size=54,
+                    text_color="#ffff00",
+                    stroke_width=6,
+                    shadow_width=3,
+                    background_enabled=True,
+                    background_opacity=65,
+                )
+            )
+            settings["subtitle_style"] = new_style
+            styled = await client.put(output + "/subtitle-settings", json=settings)
+            assert styled.status_code == 200
+            row = styled.json()["outputs"][0]
+            assert row["subtitle_style"] == new_style
+            versions = (await client.get(output + "/versions")).json()
+            assert versions[-1]["subtitle_style"] == new_style
+            assert versions[-2]["subtitle_style"] is None
+            assert repository.read(segments).plans[0].subtitle_style is not None
+            before_invalid = repository.path.read_bytes()
+            settings["base_revision"] = row["revision"]
+            for patch in (
+                {"source_size": 201},
+                {"source_size": 48.5},
+                {"stroke_width": -1},
+                {"background_opacity": 101},
+                {"text_color": "invalid"},
+                {"source_font_id": "missing"},
+                {"translation_font_id": "missing"},
+            ):
+                settings["subtitle_style"] = {**new_style, **patch}
+                rejected = await client.put(
+                    output + "/subtitle-settings", json=settings
+                )
+                assert rejected.status_code in {400, 422}
+                assert repository.path.read_bytes() == before_invalid
+            settings["subtitle_style"] = {"font_id": "missing"}
+            assert (
+                await client.put(output + "/subtitle-settings", json=settings)
+            ).status_code == 400
+            assert repository.path.read_bytes() == before_invalid
+            fonts = await client.get("/api/subtitle-fonts")
+            assert fonts.status_code == 200
+            assert all(set(font) == {"id", "name"} for font in fonts.json())
             text_save = await client.patch(
                 base + "i-0",
                 json={

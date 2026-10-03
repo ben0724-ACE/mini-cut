@@ -15,6 +15,7 @@ from minicut.generation_presets import (
     PresetRenameBody,
 )
 from minicut.render_profile import RenderProfile
+from minicut.subtitle_style import SubtitleStyle
 
 SafeId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
 
@@ -35,10 +36,29 @@ class ExportGeometry(BaseModel):
         return self
 
 
+class ExportSubtitleSettings(BaseModel):
+    """Reusable appearance only; never subtitle text or source timings."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    subtitle_mode: Literal["source", "bilingual", "translated"] | None = None
+    subtitle_source_scale: float = Field(default=1, ge=0.7, le=1.5)
+    subtitle_translation_scale: float = Field(default=1, ge=0.7, le=1.5)
+    subtitle_horizontal_percent: int = Field(default=50, ge=20, le=80, strict=True)
+    subtitle_bottom_percent: int = Field(default=10, ge=5, le=40, strict=True)
+    subtitle_order: Literal["source_first", "translation_first"] = "source_first"
+    subtitle_style: SubtitleStyle | None = None
+
+    def plan_changes(self) -> dict[str, object]:
+        values = self.model_dump()
+        values["subtitle_style"] = self.subtitle_style
+        return values
+
+
 class ExportOptions(ExportGeometry):
     subtitle_mode: Literal["soft", "burned"] = "soft"
     audio_fade_ms: int = Field(default=0, ge=0, le=500, strict=True)
     denoiser_id: Literal["none", "afftdn"] = "none"
+    subtitle_settings: ExportSubtitleSettings | None = None
 
 
 class PreviewOptions(ExportOptions):

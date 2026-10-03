@@ -298,7 +298,7 @@ def translated_pages(
     if geometry is not None:
         source_size, translation_size = geometry.sizes(translation_language)
         source_measure = geometry.measure(source_size)
-        translation_measure = geometry.measure(translation_size)
+        translation_measure = geometry.measure(translation_size, translated=True)
         source_limit = translation_limit = geometry.available_width
     source = " ".join(source.split())
     translation = " ".join(translation.split())

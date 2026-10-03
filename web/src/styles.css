@@ -260,6 +260,8 @@ hr { border:0;border-top:1px solid #343d4c;margin:24px 0; }
 .draft-toolbar button { margin-top:0; }
 .subtitle-settings { margin:0 0 16px; padding:16px; border:1px solid var(--line); border-radius:12px; background:#20242c; }
 .subtitle-settings h3 { margin:0 0 6px; font-size:16px; }
+.subtitle-effects { border:1px solid #303743;border-radius:8px;padding:12px;margin:12px 0;min-width:0; }
+.subtitle-effects legend { padding:0 6px;font-weight:600; }
 .subtitle-settings-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr));gap:10px 14px;margin:12px 0; }
 .subtitle-settings-grid label, .subtitle-translation-action label { display:flex; flex-direction:column; gap:5px; }
 .subtitle-settings-grid input, .subtitle-settings-grid select, .subtitle-translation-action select { width:100%; }
@@ -449,3 +451,6 @@ button.danger-button:hover:not(:disabled) { border-color:#c58288;background:#4b3
 @media(max-width:1100px){.minimal-launch {grid-template-columns:minmax(220px,1.1fr) minmax(190px,1fr) auto;gap:8px 10px}.minimal-result-layout {grid-template-columns:250px minmax(0,1fr)}}
 @media(max-width:760px),(max-height:620px){.minimal-launch {grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.minimal-workspace .minimal-run {grid-column:1/-1}.minimal-launch-meta {flex-wrap:wrap;gap:4px}.minimal-result-layout {min-height:420px}.minimal-media .player {max-height:55dvh}.minimal-candidates {max-height:520px}}
 @media(max-width:650px){.minimal-launch,.minimal-result-layout {grid-template-columns:1fr}.minimal-launch-meta>span:first-child {white-space:normal}.minimal-candidates {max-height:280px}.minimal-preview {min-height:320px}.minimal-results-actions {gap:6px}.minimal-results-heading {flex-wrap:wrap}.workflow-management fieldset,.workflow-transcription {grid-template-columns:1fr}.workspace-dialog-backdrop {padding:10px}.workspace-dialog {max-height:calc(100dvh - 20px)}}
+
+.output-preset-section { padding: 12px; margin-bottom: 16px; border: 1px solid var(--line); border-radius: 10px; }
+.batch-subtitle-settings { margin-top: 12px; }

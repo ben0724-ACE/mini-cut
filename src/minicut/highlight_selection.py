@@ -17,6 +17,7 @@ from minicut.semantic_segment import (
     validate_segment_context_dependencies,
 )
 from minicut.sentence_boundaries import complete_range
+from minicut.subtitle_style import SubtitleStyle
 
 
 def _union(ranges: tuple[tuple[int, int], ...]) -> tuple[tuple[int, int], ...]:
@@ -210,6 +211,7 @@ def select_highlights(
                 candidate.title,
                 items,
                 social_copy=suggestion.social_copy,
+                subtitle_style=SubtitleStyle(),
             )
         )
         durations.append(duration)

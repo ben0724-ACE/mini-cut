@@ -5,6 +5,13 @@ from minicut.output_plan import OutputPlan
 from minicut.subtitle_font import SubtitleFont
 from minicut.subtitle_layout import SubtitleGeometry
 from minicut.subtitle_pages import SubtitlePage
+from minicut.subtitle_style import SubtitleStyle
+
+
+def _ass_color(color: str, opacity: int = 100) -> str:
+    red, green, blue = color[1:3], color[3:5], color[5:7]
+    alpha = round(255 * (100 - opacity) / 100)
+    return f"&H{alpha:02X}{blue}{green}{red}".upper()
 
 
 def _ass_time(milliseconds: int) -> str:
@@ -30,12 +37,34 @@ def render_translated_ass(
     height: int,
     font: SubtitleFont,
     plan: OutputPlan | None = None,
+    *,
+    translation_font: SubtitleFont | None = None,
 ) -> str:
     """Keep each language's first row fixed throughout the saved output."""
     layout = SubtitleGeometry.for_output(
-        width, height, plan, font if font.path.is_file() else None
+        width,
+        height,
+        plan,
+        font if font.path.is_file() else None,
+        translation_font
+        if translation_font and translation_font.path.is_file()
+        else None,
     )
-    outline = max(1, round(height * 0.004))
+    saved_style = plan.subtitle_style if plan else None
+    scale = SubtitleStyle.scale(width, height)
+    outline = (
+        saved_style.stroke_width * scale
+        if saved_style
+        else max(1, round(height * 0.004))
+    )
+    shadow = saved_style.shadow_width * scale if saved_style else 0
+    bold = -1 if saved_style is None or saved_style.bold else 0
+    outline_color = (
+        _ass_color(saved_style.stroke_color) if saved_style else "&H00000000"
+    )
+    shadow_color = (
+        _ass_color(saved_style.shadow_color, 50) if saved_style else "&H80000000"
+    )
     side, bottom, gap = layout.side, layout.bottom, layout.gap
     center_x = layout.center_x
     sizes = {
@@ -86,11 +115,11 @@ def render_translated_ass(
             if bilingual
             else height - bottom - source_height
         )
-    if (bilingual and min(source_y, translated_y) < 0) or (
+    if (bilingual and min(source_y, translated_y) < layout.effect_padding) or (
         not bilingual
         and (
-            (any(p.translation for p in pages) and translated_y < 0)
-            or (any(p.source for p in pages) and source_y < 0)
+            (any(p.translation for p in pages) and translated_y < layout.effect_padding)
+            or (any(p.source for p in pages) and source_y < layout.effect_padding)
         )
     ):
         raise UserInputError(
@@ -113,8 +142,13 @@ def render_translated_ass(
         ("TranslationSmall", layout.translation_small, "&H00F4F4F4"),
         ("TranslationLarge", layout.translation_large, "&H00FFFFFF"),
     ):
+        if saved_style:
+            color = _ass_color(saved_style.text_color)
+        style_font = (
+            translation_font or font if name.startswith("Translation") else font
+        )
         header.append(
-            f"Style: {name},{font.family},{size},{color},&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,{outline},0,2,{side},{side},{bottom},1"
+            f"Style: {name},{style_font.family},{size},{color},&H00FFFFFF,{outline_color},{shadow_color},{bold},0,0,0,100,100,0,0,1,{outline:g},{shadow:g},2,{side},{side},{bottom},1"
         )
     header.extend(
         (
@@ -125,15 +159,32 @@ def render_translated_ass(
     )
 
     def event(text: str, style: str, start: str, end: str, y: int) -> None:
-        measure = layout.measure(sizes[style])
+        measure = layout.measure(
+            sizes[style], translated=style.startswith("Translation")
+        )
         for row, line in enumerate(text.splitlines()):
             if measure(line) > layout.available_width:
                 raise UserInputError(
                     "字幕含过宽的不可拆分词，无法完整显示；请调整文字、字号或横向位置后重新生成预览。"
                 )
+            top = y + row * layout.row_height(sizes[style])
+            if saved_style and saved_style.background_enabled and line.strip():
+                padding = layout.effect_padding
+                half_width = measure(line) / 2 + padding
+                box_height = layout.row_height(sizes[style])
+                box_color = _ass_color(
+                    saved_style.background_color, saved_style.background_opacity
+                )
+                header.append(
+                    f"Dialogue: 0,{start},{end},{style},,0,0,0,,"
+                    f"{{\\an7\\pos({center_x - half_width:g},{top - padding})"
+                    f"\\bord0\\shad0\\1c&H{box_color[4:]}&\\1a{box_color[:4]}&\\p1}}"
+                    f"m 0 0 l {2 * half_width:g} 0 {2 * half_width:g} {box_height}"
+                    f" 0 {box_height}{{\\p0}}"
+                )
             header.append(
-                f"Dialogue: 0,{start},{end},{style},,0,0,0,,"
-                f"{{\\an8\\pos({center_x},{y + row * layout.row_height(sizes[style])})}}{_ass_text(line)}"
+                f"Dialogue: {1 if saved_style else 0},{start},{end},{style},,0,0,0,,"
+                f"{{\\an8\\pos({center_x},{top})}}{_ass_text(line)}"
             )
 
     for page in pages:

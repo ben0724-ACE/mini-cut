@@ -23,7 +23,12 @@ from minicut.cover_design import (
 )
 from minicut.cover_templates import CoverTemplateLibrary
 from minicut.errors import MiniCutError
-from minicut.export_settings import ExportDraft, ExportOptions, ExportSettings
+from minicut.export_settings import (
+    ExportDraft,
+    ExportOptions,
+    ExportSettings,
+    ExportSubtitleSettings,
+)
 from minicut.generation_presets import GenerationPresetBody, PresetRenameBody
 from minicut.generation_settings import GenerationDraft, GenerationSettings
 from minicut.highlight_service import read_highlights, source_segments
@@ -41,14 +46,7 @@ class WorkflowTranscription(BaseModel):
     language: Literal["zh", "en"] = "zh"
 
 
-class WorkflowLayout(BaseModel):
-    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    subtitle_mode: Literal["source", "bilingual", "translated"] | None = None
-    subtitle_source_scale: float = Field(default=1, ge=0.7, le=1.5)
-    subtitle_translation_scale: float = Field(default=1, ge=0.7, le=1.5)
-    subtitle_horizontal_percent: int = Field(default=50, ge=20, le=80, strict=True)
-    subtitle_bottom_percent: int = Field(default=10, ge=5, le=40, strict=True)
-    subtitle_order: Literal["source_first", "translation_first"] = "source_first"
+class WorkflowLayout(ExportSubtitleSettings):
     hook_transition_ms: int = Field(default=300, ge=0, le=1000, strict=True)
     hook_transition_kind: Literal["fade", "tv_static"] = "fade"
 
@@ -221,9 +219,13 @@ def configure_outputs(project: Path, result: dict, definition: dict) -> dict:
     segments = source_segments(project, result["asset_id"], collection_id)
     repository = OutputCollectionRepository(project, collection_id)
     collection = repository.read(segments)
-    layout = WorkflowLayout.model_validate(definition["layout"]).model_dump(
-        exclude_none=True
-    )
+    saved_layout = WorkflowLayout.model_validate(definition["layout"])
+    layout = saved_layout.model_dump(exclude_none=True)
+    if saved_layout.subtitle_style is not None:
+        layout["subtitle_style"] = saved_layout.subtitle_style
+    options = ExportOptions.model_validate(definition["export_options"])
+    if options.subtitle_settings is not None:
+        layout.update(options.subtitle_settings.plan_changes())
     changed = False
     plans = []
     for plan in collection.plans:
@@ -242,7 +244,7 @@ def configure_outputs(project: Path, result: dict, definition: dict) -> dict:
                 collection_id,
                 plan.output_id,
                 ExportDraft(
-                    options=ExportOptions.model_validate(definition["export_options"])
+                    options=options.model_copy(update={"subtitle_settings": None})
                 ),
             )
         if definition.get("cover_style"):

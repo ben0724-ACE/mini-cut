@@ -1,8 +1,9 @@
 """Real previews retain the exact output geometry, subtitle layout and audio."""
 
 import asyncio
+import json
 import subprocess
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -17,6 +18,7 @@ from minicut.output_repository import OutputCollectionRepository
 from minicut.probe import probe_media
 from minicut.render_profile import source_dimensions
 from minicut.subtitle import parse_srt
+from minicut.subtitle_style import SubtitleStyle
 from tests.test_cover_design import cover_project as cover_project
 
 
@@ -48,8 +50,9 @@ def audio(path: Path) -> bytes:
 
 
 @pytest.mark.parametrize("subtitle_mode", ["burned", "soft"])
+@pytest.mark.parametrize("complete_preset", [False, True])
 def test_preview_matches_export_pixels_subtitle_timing_and_audio(
-    cover_project: Path, subtitle_mode: str
+    cover_project: Path, subtitle_mode: str, complete_preset: bool
 ) -> None:
     project = cover_project
     segments = source_segments(project, "asset", "collection")
@@ -103,6 +106,31 @@ def test_preview_matches_export_pixels_subtitle_timing_and_audio(
                 "audio_fade_ms": 100,
                 "denoiser_id": "afftdn",
             }
+            if complete_preset:
+                options["subtitle_settings"] = {
+                    "subtitle_mode": "bilingual",
+                    "subtitle_source_scale": 1,
+                    "subtitle_translation_scale": 1,
+                    "subtitle_horizontal_percent": 55,
+                    "subtitle_bottom_percent": 22,
+                    "subtitle_order": "source_first",
+                    "subtitle_style": asdict(
+                        SubtitleStyle(
+                            source_size=80,
+                            translation_size=40,
+                            text_color="#ffff00",
+                            stroke_width=3,
+                            shadow_width=2,
+                            background_enabled=True,
+                            background_opacity=50,
+                        )
+                    ),
+                }
+                saved = await client.post(
+                    "/api/export-presets", json={"name": "Full", "options": options}
+                )
+                assert saved.status_code == 201
+                options = saved.json()["options"]
             body = {
                 "collection_id": "collection",
                 "output_id": "o",
@@ -149,6 +177,20 @@ def test_preview_matches_export_pixels_subtitle_timing_and_audio(
                 local(preview["subtitle_url"]).read_text()
                 == local(exported["subtitle_url"]).read_text()
             )
+            assert repository.read(segments).plans[0] == plan
+            if complete_preset:
+                record = next(
+                    repository.render_record_path("o", 1).parent.glob(
+                        f"{export_video.parent.name}/*.json"
+                    )
+                )
+                rendered_plan = json.loads(record.read_text())["plan"]
+                assert (
+                    rendered_plan["subtitle_style"]
+                    == options["subtitle_settings"]["subtitle_style"]
+                )
+                assert rendered_plan["subtitle_bottom_percent"] == 22
+                assert exported["subtitle_settings"] == options["subtitle_settings"]
             assert preview["duration_ms"] == exported["duration_ms"] == 2600
             assert not preview_video.with_name("v0001-cover.jpg").exists()
             if subtitle_mode == "soft":
@@ -192,13 +234,26 @@ def test_preview_matches_export_pixels_subtitle_timing_and_audio(
             assert (
                 await client.get(
                     "/api/projects/demo/highlights/collection/outputs/o/preview-task",
-                    params={"revision": 1, **options},
+                    params={
+                        "revision": 1,
+                        **options,
+                        "subtitle_settings": json.dumps(
+                            options.get("subtitle_settings")
+                        ),
+                    },
                 )
             ).json()["task_id"] == "reuse"
             assert (
                 await client.get(
                     "/api/projects/demo/highlights/collection/outputs/o/preview-task",
-                    params={"revision": 1, **options, "crop_left": 11},
+                    params={
+                        "revision": 1,
+                        **options,
+                        "crop_left": 11,
+                        "subtitle_settings": json.dumps(
+                            options.get("subtitle_settings")
+                        ),
+                    },
                 )
             ).json() is None
 
