@@ -452,5 +452,5 @@ button.danger-button:hover:not(:disabled) { border-color:#c58288;background:#4b3
 @media(max-width:760px),(max-height:620px){.minimal-launch {grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.minimal-workspace .minimal-run {grid-column:1/-1}.minimal-launch-meta {flex-wrap:wrap;gap:4px}.minimal-result-layout {min-height:420px}.minimal-media .player {max-height:55dvh}.minimal-candidates {max-height:520px}}
 @media(max-width:650px){.minimal-launch,.minimal-result-layout {grid-template-columns:1fr}.minimal-launch-meta>span:first-child {white-space:normal}.minimal-candidates {max-height:280px}.minimal-preview {min-height:320px}.minimal-results-actions {gap:6px}.minimal-results-heading {flex-wrap:wrap}.workflow-management fieldset,.workflow-transcription {grid-template-columns:1fr}.workspace-dialog-backdrop {padding:10px}.workspace-dialog {max-height:calc(100dvh - 20px)}}
 
-.output-preset-section { padding: 12px; margin-bottom: 16px; border: 1px solid var(--line); border-radius: 10px; }
+.output-preset-section, .generation-preset-section { padding: 12px; margin-bottom: 16px; border: 1px solid var(--line); border-radius: 10px; }
 .batch-subtitle-settings { margin-top: 12px; }
