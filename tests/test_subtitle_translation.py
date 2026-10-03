@@ -215,13 +215,13 @@ def test_bilingual_sentence_stays_together_when_languages_wrap_differently() -> 
     timeline = compile_output_timeline(plan, (segment,), "a")
     pages = build_output_pages(timeline, plan, ())
     cues = build_output_cues(timeline, plan, ())
-    assert len(cues) == 2
-    assert [(cue.start_ms, cue.end_ms) for cue in cues] == [
-        (0, 4020),
-        (4020, 8040),
-    ]
+    # Each language has its own two-line budget. A complete sentence that fits
+    # keeps the original cue timing rather than splitting just for line count.
+    assert len(cues) == len(pages) == 1
+    assert [(cue.start_ms, cue.end_ms) for cue in cues] == [(0, 8040)]
     assert all(page.source and page.translation for page in pages)
-    assert all(len(cue.text.splitlines()) <= 2 for cue in cues)
+    assert all(len(page.source.splitlines()) <= 2 for page in pages)
+    assert all(len((page.translation or "").splitlines()) <= 2 for page in pages)
     assert " ".join(page.source.replace("\n", " ") for page in pages) == segment.text
     assert "".join(page.translation or "" for page in pages) == (
         "嗯，现在已经很明显了，AI 可能会非常危险。"

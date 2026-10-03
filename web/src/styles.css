@@ -377,3 +377,75 @@ button.danger-button:hover:not(:disabled) { border-color:#c58288;background:#4b3
   .cover-fields, .clip-boundaries { grid-template-columns:1fr; }
   .draft-dialog { inset:20% 12px auto; }
 }
+
+/* Minimal mode shares project data while keeping routine controls in one view. */
+.workspace-mode-switch {display:flex;gap:4px;flex-wrap:wrap;margin-left:auto;align-items:center}
+.workspace-mode-switch button[aria-pressed="true"] {background:#709dff;color:#fff}
+.mode-choice {margin:18px 0;padding:14px;border:1px solid #303743;border-radius:10px}
+.mode-choice input[type="radio"] {width:auto}
+.mode-choice legend,.workflow-management legend {color:#c6d3e6;font-size:13px}
+.import-bar .workflow-manager-trigger {margin:0 0 0 auto;font-size:12px;padding:6px 10px}
+.minimal-workspace {display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0}
+.minimal-workspace button {margin:0;font-size:12px;min-height:32px}
+.minimal-launch {display:grid;grid-template-columns:minmax(260px,1.3fr) minmax(220px,1fr) auto;gap:8px 16px;align-items:end;padding:12px 14px;border:1px solid #303743;border-radius:10px;background:#1c2026;flex:none}
+.minimal-source-field,.minimal-workflow-field {min-width:0}
+.minimal-field-label {display:block;color:#aebbd0;font-size:12px;margin:0 0 5px}
+.minimal-field-controls {display:flex;align-items:center;gap:8px;min-width:0}
+.minimal-field-controls select,.minimal-file-name {flex:1;min-width:0}
+.minimal-field-controls button {flex-shrink:0;white-space:nowrap}
+.minimal-field-controls select {height:34px;background:#13171c;color:inherit;border:1px solid #354052;border-radius:7px;padding:5px 8px;font:inherit;font-size:12px}
+.minimal-file-name {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.minimal-workspace .minimal-run {min-height:34px;white-space:nowrap;padding:6px 16px}
+.minimal-launch-meta {grid-column:1/-1;display:flex;justify-content:space-between;gap:16px;color:#939dab;font-size:11px;line-height:1.5;min-width:0}
+.minimal-launch-meta>span:first-child {overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.minimal-launch-meta>span:last-child {flex-shrink:0}
+.minimal-progress {display:flex;align-items:center;gap:12px;flex:none;font-size:12px;min-width:0}
+.minimal-progress-text {flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.minimal-notice {flex:none;margin:0;font-size:12px;max-height:72px;overflow:auto}.minimal-notice button {margin-left:12px}
+.minimal-results {display:flex;flex-direction:column;gap:10px;flex:1;min-height:0;min-width:0}
+.minimal-results-heading {display:flex;justify-content:space-between;align-items:center;gap:12px;flex:none}
+.minimal-results-heading h2 {font-size:14px;margin:0}.minimal-results-heading h2 span {margin-left:6px}
+.minimal-results-actions {display:flex;align-items:center;gap:8px}
+.minimal-result-layout {display:grid;grid-template-columns:290px minmax(0,1fr);gap:12px;flex:1;min-height:0;min-width:0}
+.minimal-candidates {display:flex;flex-direction:column;gap:8px;min-height:0;overflow-y:auto;padding:1px 4px 1px 1px;scrollbar-width:thin;scrollbar-color:#485772 transparent;overscroll-behavior:contain}
+.minimal-candidate {flex:none;padding:10px;border:1px solid #303743;border-radius:9px;background:#1c2026}
+.minimal-candidate.is-current {border-color:#709dff;background:#222b3b}
+.minimal-candidate .candidate-title {display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:13px;line-height:1.5;min-height:0;border-radius:0}
+.minimal-candidate>p {margin:4px 0;font-size:11px}
+.minimal-candidate-actions {display:flex;align-items:center;justify-content:space-between;gap:20px;padding-top:4px}
+.minimal-candidate-actions label.checkbox-field {display:inline-flex;flex-direction:row;align-items:center;gap:8px;margin:0;line-height:1;font-size:12px;cursor:pointer;white-space:nowrap}
+.minimal-candidate-actions input[type="checkbox"] {display:block;flex:none;width:16px;height:16px;margin:0;padding:0}
+.minimal-candidate-actions button {margin:0;padding:4px 12px;min-height:30px}
+.minimal-preview {display:flex;flex-direction:column;min-height:0;min-width:0;padding:14px;border:1px solid #303743;border-radius:10px;background:#191e27;overflow:auto}
+.minimal-preview h3 {display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:14px;line-height:1.5;margin:0 0 10px;flex:none}
+.minimal-media {flex:1;min-height:120px;min-width:0}
+.minimal-media .quick-preview {display:flex;flex-direction:column;height:100%;min-height:0;gap:8px}
+.minimal-media .player {flex:1;min-height:0;height:100%;width:100%;object-fit:contain;max-height:none;margin:0;border-radius:8px}
+.minimal-media button {align-self:flex-start;flex:none}
+.minimal-preview .minimal-preview-hint {font-size:11px;margin:6px 0 0;flex:none}
+.minimal-reason {flex:none;margin:0}.minimal-reason summary {font-size:12px;color:#aebbd0;padding:6px 0 0}.minimal-reason p {margin:6px 0 0}
+.minimal-empty {flex:1;min-height:180px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#939dab;border:1px dashed #303743;border-radius:10px}.minimal-empty h2 {font-size:18px;color:#c6d3e6}.minimal-empty p {font-size:13px;text-align:center;padding:0 16px}
+.workspace-dialog-backdrop {position:fixed;inset:0;z-index:60;background:#0009;backdrop-filter:blur(5px);display:grid;place-items:center;padding:20px}
+.workspace-dialog-backdrop[hidden] {display:none}
+.workspace-dialog {display:flex;flex-direction:column;width:min(780px,100%);max-height:calc(100dvh - 40px);min-height:0;background:#1c222d;border:1px solid #3c4657;border-radius:14px;box-shadow:0 24px 80px #0008;overflow:hidden}
+.workspace-dialog-heading {display:flex;justify-content:space-between;align-items:center;gap:16px;padding:14px 20px;border-bottom:1px solid #303743;flex:none}.workspace-dialog-heading h2 {font-size:16px;margin:0}.workspace-dialog-heading button {margin:0}
+.workspace-dialog-body {padding:16px 20px;overflow:auto;min-height:0;scrollbar-width:thin;scrollbar-color:#485772 transparent;overscroll-behavior:contain}
+.workflow-management {margin:0}.workflow-management>div>p:first-child {margin-top:0}
+.workflow-management fieldset {display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;border:0;padding:0;margin:0}
+.workflow-management label:not(.checkbox-field) {display:grid;gap:5px;font-size:12px;margin:0}
+.workflow-management select,.workflow-management input:not([type="checkbox"]) {width:100%;min-height:34px;background:#13171c;color:inherit;border:1px solid #354052;border-radius:7px;padding:6px 8px;font:inherit}
+.workflow-management fieldset>button,.workflow-transcription,.workflow-management .workflow-summary,.workflow-management .preset-actions {grid-column:1/-1}
+.workflow-management fieldset>button {justify-self:start;margin:0}.workflow-transcription {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.workflow-summary {padding:10px 12px;border-radius:8px;background:#252b35;font-size:12px;line-height:1.7;margin:0}.workflow-management .preset-actions {margin:0}.workflow-management .preset-actions button {margin:0}
+@media(min-width:761px) and (min-height:621px){
+  .app-frame:has(.minimal-workspace) {height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+  .app-frame:has(.minimal-workspace)>.app-header {flex:none}
+  .app-body:has(.minimal-workspace) {display:flex;flex-direction:column;flex:1;min-height:0}
+  .app-body:has(.minimal-workspace)>nav {flex:none}
+  .app-content:has(.minimal-workspace) {display:flex;flex-direction:column;flex:1;min-height:0;padding-bottom:12px;overflow:hidden}
+  .app-content>section:has(.minimal-workspace) {display:flex;flex-direction:column;flex:1;min-height:0}
+  .app-content>section:has(.minimal-workspace)>.workspace-heading {flex:none;margin-bottom:10px}
+  .minimal-workspace {flex:1;min-height:0}
+}
+@media(max-width:1100px){.minimal-launch {grid-template-columns:minmax(220px,1.1fr) minmax(190px,1fr) auto;gap:8px 10px}.minimal-result-layout {grid-template-columns:250px minmax(0,1fr)}}
+@media(max-width:760px),(max-height:620px){.minimal-launch {grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.minimal-workspace .minimal-run {grid-column:1/-1}.minimal-launch-meta {flex-wrap:wrap;gap:4px}.minimal-result-layout {min-height:420px}.minimal-media .player {max-height:55dvh}.minimal-candidates {max-height:520px}}
+@media(max-width:650px){.minimal-launch,.minimal-result-layout {grid-template-columns:1fr}.minimal-launch-meta>span:first-child {white-space:normal}.minimal-candidates {max-height:280px}.minimal-preview {min-height:320px}.minimal-results-actions {gap:6px}.minimal-results-heading {flex-wrap:wrap}.workflow-management fieldset,.workflow-transcription {grid-template-columns:1fr}.workspace-dialog-backdrop {padding:10px}.workspace-dialog {max-height:calc(100dvh - 20px)}}

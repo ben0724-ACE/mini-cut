@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { deleteProject } from "./api";
 import type { ProjectDetail, ProjectSummary } from "./api";
+import {readMode,saveMode,type WorkspaceMode} from "./workflowApi";
 
 interface Props {
   loadProjects: (signal?: AbortSignal) => Promise<ProjectSummary[]>;
@@ -18,6 +19,7 @@ export function ProjectHome({ loadProjects, createProject, onSelect }: Props) {
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const [createError, setCreateError] = useState("");
+  const [mode,setMode]=useState<WorkspaceMode>(()=>readMode());
   const createButton = useRef<HTMLButtonElement>(null);
   function closeDialog() { setCreating(false); createButton.current?.focus(); }
   function dialogKey(event: KeyboardEvent<HTMLElement>) {
@@ -41,7 +43,7 @@ export function ProjectHome({ loadProjects, createProject, onSelect }: Props) {
     event.preventDefault();
     if (!name.trim() || saving) return;
     setSaving(true); setCreateError("");
-    try { const project = await createProject(name.trim()); onSelect(project.project_id); }
+    try { const project = await createProject(name.trim()); saveMode(mode,project.project_id); onSelect(project.project_id); }
     catch (reason: unknown) { setCreateError(reason instanceof Error ? reason.message : "创建失败"); }
     finally { setSaving(false); }
   }
@@ -57,6 +59,6 @@ export function ProjectHome({ loadProjects, createProject, onSelect }: Props) {
       catch (reason) { setDeleteError(reason instanceof Error ? reason.message : "删除失败"); }
       finally { setDeleting(null); }
     }}>{deleting === project.project_id ? "正在删除…" : "删除项目"}</button></article>)}</div>}
-    {creating && <div className="dialog-backdrop"><section onKeyDown={dialogKey} role="dialog" aria-modal="true" aria-labelledby="create-project-title" className="create-dialog"><h2 id="create-project-title">新建项目</h2><form onSubmit={submit}><label htmlFor="project-name">项目名称</label><input id="project-name" autoFocus maxLength={120} value={name} onChange={event => setName(event.target.value)} disabled={saving} required />{createError && <p role="alert">{createError}</p>}<div className="dialog-actions"><button type="button" disabled={saving} onClick={closeDialog}>取消</button><button className="primary-button" disabled={saving || !name.trim()}>{saving ? "正在创建…" : "创建并进入"}</button></div></form></section></div>}
+    {creating && <div className="dialog-backdrop"><section onKeyDown={dialogKey} role="dialog" aria-modal="true" aria-labelledby="create-project-title" className="create-dialog"><h2 id="create-project-title">新建项目</h2><form onSubmit={submit}><label htmlFor="project-name">项目名称</label><input id="project-name" autoFocus maxLength={120} value={name} onChange={event => setName(event.target.value)} disabled={saving} required /><fieldset disabled={saving} className="mode-choice"><legend>工作模式</legend><label className="checkbox-field"><input type="radio" name="workspace-mode" checked={mode==="minimal"} onChange={()=>setMode("minimal")} />极简模式</label><label className="checkbox-field"><input type="radio" name="workspace-mode" checked={mode==="full"} onChange={()=>setMode("full")} />完整模式</label><p className="helper-text">极简模式沿用已保存的工作流；进入项目后可随时切换。</p></fieldset>{createError && <p role="alert">{createError}</p>}<div className="dialog-actions"><button type="button" disabled={saving} onClick={closeDialog}>取消</button><button className="primary-button" disabled={saving || !name.trim()}>{saving ? "正在创建…" : "创建并进入"}</button></div></form></section></div>}
   </section>;
 }

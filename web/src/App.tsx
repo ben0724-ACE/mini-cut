@@ -19,6 +19,8 @@ import { AssetLibrary } from "./AssetLibrary";
 import { OutputWorkspace } from "./OutputWorkspace";
 import { ExportResults } from "./ExportResults";
 import { navigateToExportResults } from "./exportNavigation";
+import { MinimalWorkspace } from "./MinimalWorkspace";
+import {readMode,saveMode,type WorkspaceMode} from "./workflowApi";
 
 export function App() {
   const [search, setSearch] = useState(window.location.search);
@@ -29,6 +31,8 @@ export function App() {
   }, []);
   const parameters = new URLSearchParams(search);
   const projectId = parameters.get("project") ?? "";
+  const [mode,setMode]=useState<WorkspaceMode>(()=>readMode(projectId));
+  useEffect(()=>setMode(readMode(projectId)),[projectId]);
   const assetId = parameters.get("asset") ?? "";
   const collectionId = parameters.get("collection") ?? "";
   const outputId = parameters.get("output") ?? "";
@@ -42,17 +46,29 @@ export function App() {
     setSearch(window.location.search);
     });
   }
+  function switchMode(next:WorkspaceMode,collection="",output="") {
+    navigateWithDraft(()=>{
+      saveMode(next,projectId);setMode(next);
+      const query=new URLSearchParams({project:projectId});
+      if(collection)query.set("collection",collection);
+      if(output)query.set("output",output);
+      window.history.pushState({},"",`${window.location.pathname}?${query}`);
+      setSearch(window.location.search);
+    });
+  }
   return <div className="app-frame">
     <a className="skip-link" href="#main-content">跳转到主要内容</a>
     <header className="app-header"><strong className="brand"><span aria-hidden="true" className="brand-mark">M</span>MiniCut</strong><span>本地剪辑工作台</span><span className="local-badge">本地优先</span></header>
     <div className="app-body">
       <nav aria-label="项目导航"><button onClick={() => navigate()}>我的项目</button>
         {projectId && <button onClick={() => navigate(projectId)}>当前项目</button>}
+        {projectId && <div className="workspace-mode-switch" aria-label="工作模式"><button aria-pressed={mode==="minimal"} onClick={()=>switchMode("minimal")}>极简模式</button><button aria-pressed={mode==="full"} onClick={()=>switchMode("full")}>完整模式</button></div>}
       </nav>
       <main id="main-content" tabIndex={-1} className="app-content">
         {!projectId ? <ProjectHome loadProjects={listProjects} createProject={createProject} onSelect={(id) => navigate(id)} />
           : parameters.get("view")==="exports"&&collectionId&&exportEntries.length ? <ExportResults project={projectId} collection={collectionId} entries={exportEntries} />
           : collectionId && outputId ? <OutputWorkspace key={`${projectId}:${collectionId}:${outputId}`} project={projectId} collection={collectionId} output={outputId} onExportSubmitted={entries=>navigateToExportResults(projectId,collectionId,entries)} />
+          : mode==="minimal" ? <ProjectWorkspace key={`${projectId}:minimal`} projectId={projectId} onOpen={(asset)=>navigate(projectId,asset)} minimal onRefine={(collection,output)=>switchMode("full",collection,output)} />
           : !assetId ? <ProjectWorkspace key={projectId} projectId={projectId} onOpen={(asset) => navigate(projectId, asset)} />
           : <Review key={`${projectId}:${assetId}`} projectId={projectId} assetId={assetId} />}
       </main>
@@ -60,7 +76,7 @@ export function App() {
   </div>;
 }
 
-function ProjectWorkspace({ projectId, onOpen }: { projectId: string; onOpen: (asset: string) => void }) {
+function ProjectWorkspace({ projectId, onOpen, minimal=false, onRefine }: { projectId: string; onOpen: (asset: string) => void;minimal?:boolean;onRefine?:(collection:string,output:string)=>void }) {
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -75,7 +91,7 @@ function ProjectWorkspace({ projectId, onOpen }: { projectId: string; onOpen: (a
   if (error) return <p role="alert">{error}</p>;
   if (!project) return <p role="status">正在读取项目…</p>;
   return <section><header className="workspace-heading"><h1>{project.name ?? project.project_id}</h1></header>
-    <AssetLibrary projectId={projectId} onOpen={onOpen} />
+    {minimal ? <MinimalWorkspace project={projectId} onRefine={onRefine!}/> : <AssetLibrary projectId={projectId} onOpen={onOpen} />}
   </section>;
 }
 

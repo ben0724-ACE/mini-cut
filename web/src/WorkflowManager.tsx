@@ -1,0 +1,52 @@
+import {useEffect,useRef,useState} from "react";
+import {getGenerationDraft,getHighlights,recoverHighlights,recoverTranscription,type GenerationPreset} from "./api";
+import {listGenerationPresets} from "./api";
+import {defaultGenerationDraft,applyGenerationPreset,normalizeGenerationDraft} from "./generationDraft";
+import {defaultExportOptions,exportSettingsRoute,getExportDraft,listExportPresets,type ExportPreset} from "./exportSettingsApi";
+import {listCoverTemplates,loadCover,coverRoute,type CoverTemplate} from "./coverApi";
+import {deleteWorkflow,listWorkflows,renameWorkflow,workflowsChanged,writeWorkflow,type Workflow,type WorkflowBody} from "./workflowApi";
+import {WorkspaceDialog} from "./WorkspaceDialog";
+
+const defaultBody=():WorkflowBody=>({name:"",generation:defaultGenerationDraft(),transcription:{provider:"mlx",model:"large-v3-turbo",language:"zh"},export_options:defaultExportOptions(),layout:{},cover_template_id:null,auto_export:false});
+type ManagerProps={project:string;asset?:string;onSaved?:(workflow:Workflow)=>void;triggerLabel?:string};
+export function WorkflowManager(props:ManagerProps){
+  const [opened,setOpened]=useState(false);const [loaded,setLoaded]=useState(false);
+  return <><button type="button" className="workflow-manager-trigger" aria-label="管理我的工作流" onClick={()=>{setLoaded(true);setOpened(true);}}>{props.triggerLabel??"管理我的工作流"}</button>
+    <WorkspaceDialog open={opened} title="管理我的工作流" onClose={()=>setOpened(false)}>{loaded&&<div className="workflow-management"><WorkflowManagerForm {...props}/></div>}</WorkspaceDialog></>;
+}
+function WorkflowManagerForm({project,asset,onSaved}:ManagerProps){
+  const [workflows,setWorkflows]=useState<Workflow[]>([]);
+  const [generations,setGenerations]=useState<GenerationPreset[]>([]);const [exports,setExports]=useState<ExportPreset[]>([]);const [covers,setCovers]=useState<CoverTemplate[]>([]);
+  const [body,setBody]=useState<WorkflowBody>(defaultBody);const [selection,setSelection]=useState("");const [generationId,setGenerationId]=useState("");const [exportId,setExportId]=useState("");
+  const [busy,setBusy]=useState(false);const [loading,setLoading]=useState(true);const [error,setError]=useState("");const [notice,setNotice]=useState("");const [retry,setRetry]=useState(0);const lock=useRef(false);
+  useEffect(()=>{const controller=new AbortController();setLoading(true);setError("");Promise.all([listWorkflows(controller.signal),listGenerationPresets(controller.signal),listExportPresets(controller.signal),listCoverTemplates(controller.signal)]).then(([w,g,e,c])=>{if(!controller.signal.aborted){setWorkflows(w);setGenerations(g);setExports(e);setCovers(c);setLoading(false);}}).catch(reason=>{if(!controller.signal.aborted){setError(reason instanceof Error?reason.message:"无法读取预设库");setLoading(false);}});return()=>controller.abort();},[retry]);
+  async function action(operation:()=>Promise<void>){if(lock.current)return;lock.current=true;setBusy(true);setError("");setNotice("");try{await operation();}catch(reason){setError(reason instanceof Error?reason.message:"工作流操作失败");}finally{setBusy(false);lock.current=false;}}
+  function select(id:string){setSelection(id);setGenerationId("");setExportId("");const current=workflows.find(w=>w.workflow_id===id);setBody(current?{name:current.name,generation:current.generation,transcription:current.transcription,export_options:current.export_options,layout:current.layout,cover_template_id:current.cover_template_id,auto_export:current.auto_export}:defaultBody());setNotice("");}
+  async function save(update:boolean){const saved=await writeWorkflow(body,update?selection:undefined);setWorkflows(current=>[...current.filter(w=>w.workflow_id!==saved.workflow_id),saved]);setSelection(saved.workflow_id);setBody(saved);setNotice("工作流已保存，可跨项目使用");window.dispatchEvent(new Event(workflowsChanged));onSaved?.(saved);}
+  async function loadCurrent(){if(!asset)return;const [draft,transcription,task]=await Promise.all([getGenerationDraft(project,asset),recoverTranscription(project,asset),recoverHighlights(project,asset)]);
+    if(!draft.draft)throw new Error("当前素材尚无已保存的生成配置，请先在完整模式配置生成参数");
+    let outputOptions=defaultExportOptions();let layout:WorkflowBody["layout"]={};let coverId:string|null=null;
+    if(task?.status==="succeeded"&&task.result){const result=await getHighlights(project,task.result.collection_id);const output=result.outputs[0];if(output){outputOptions=(await getExportDraft(exportSettingsRoute(project,result.collection_id,output.output_id))).draft.options;
+      layout={subtitle_mode:output.subtitle_mode,subtitle_source_scale:output.subtitle_source_scale,subtitle_translation_scale:output.subtitle_translation_scale,subtitle_horizontal_percent:output.subtitle_horizontal_percent,subtitle_bottom_percent:output.subtitle_bottom_percent,subtitle_order:output.subtitle_order,hook_transition_ms:output.hook_transition_ms,hook_transition_kind:output.hook_transition_kind};
+      const cover=await loadCover(coverRoute(project,result.collection_id,output.output_id),output.revision);coverId=cover.design.template_id??null;
+    }}
+    setBody(current=>({...current,generation:normalizeGenerationDraft(draft.draft!),transcription:transcription?.configuration??current.transcription,export_options:outputOptions,layout,cover_template_id:coverId}));setGenerationId("");setExportId("");setNotice("已载入当前素材保存的生成配置及第一条作品的成片设置；填写名称后保存。封面复用已保存的模板。");
+  }
+  const blocked=busy||loading;
+  return <div><p className="helper-text">组合已有预设，保存后日常只需选视频并运行。修改工作流不会改变已生成作品。</p>
+    {loading&&<p role="status">正在读取预设库…</p>}
+    <fieldset disabled={blocked}><legend>工作流配置</legend>
+      <label>已有工作流<select aria-label="已有工作流" value={selection} onChange={event=>select(event.target.value)}><option value="">新工作流</option>{workflows.map(w=><option key={w.workflow_id} value={w.workflow_id}>{w.name}</option>)}</select></label>
+      <label>工作流名称<input aria-label="工作流名称" maxLength={80} value={body.name} onChange={event=>setBody({...body,name:event.target.value})} placeholder="例如：AI 播客截选"/></label>
+      {asset&&<button type="button" onClick={()=>void action(loadCurrent)}>载入当前素材已保存配置</button>}
+      <label>生成预设<select aria-label="工作流生成预设" value={generationId} onChange={event=>{const id=event.target.value;setGenerationId(id);const preset=generations.find(p=>p.preset_id===id);if(preset)setBody({...body,generation:applyGenerationPreset(body.generation,preset,"workflow")});}}><option value="">当前配置（选择预设可替换）</option>{generations.map(p=><option key={p.preset_id} value={p.preset_id}>{p.name}</option>)}</select></label>
+      <label>导出预设<select aria-label="工作流导出预设" value={exportId} onChange={event=>{setExportId(event.target.value);const preset=exports.find(p=>p.preset_id===event.target.value);if(preset)setBody({...body,export_options:preset.options});}}><option value="">当前配置（选择预设可替换）</option>{exports.map(p=><option key={p.preset_id} value={p.preset_id}>{p.name}</option>)}</select></label>
+      <label>封面模板<select aria-label="工作流封面模板" value={body.cover_template_id??""} onChange={event=>setBody({...body,cover_template_id:event.target.value||null})}><option value="">成片第一帧</option>{covers.map(c=><option key={c.template_id} value={c.template_id}>{c.name}</option>)}{body.cover_template_id&&!covers.some(c=>c.template_id===body.cover_template_id)&&<option value={body.cover_template_id}>原模板（保留工作流副本）</option>}</select></label>
+      <div className="workflow-transcription"><label>转录引擎<select aria-label="工作流转录引擎" value={body.transcription.provider} onChange={event=>setBody({...body,transcription:{...body.transcription,provider:event.target.value as "mlx"|"whisper"}})}><option value="mlx">MLX（Apple 芯片）</option><option value="whisper">PyTorch Whisper</option></select></label>
+      <label>转录模型<select aria-label="工作流转录模型" value={body.transcription.model} onChange={event=>setBody({...body,transcription:{...body.transcription,model:event.target.value}})}>{["tiny","base","small","medium","large","large-v2","large-v3","large-v3-turbo"].map(m=><option key={m}>{m}</option>)}</select></label>
+      <label>源语言<select aria-label="工作流源语言" value={body.transcription.language} onChange={event=>setBody({...body,transcription:{...body.transcription,language:event.target.value}})}><option value="zh">中文</option><option value="en">英文</option></select></label></div>
+      <label>完成方式<select aria-label="工作流完成方式" value={body.auto_export?"export":"review"} onChange={event=>setBody({...body,auto_export:event.target.value==="export"})}><option value="review">生成后审阅</option><option value="export">自动导出全部结果</option></select></label>
+      <p className="workflow-summary">当前配置：{body.generation.count} 条候选 · {body.generation.limit_duration?`${body.generation.min_seconds}–${body.generation.max_seconds} 秒`:"不限时"} · {body.export_options.aspect_ratio==="original"?"原始比例":body.export_options.aspect_ratio} · {body.export_options.resolution} · {body.export_options.subtitle_mode==="soft"?"软字幕":"烧录字幕"}</p><div className="preset-actions"><button type="button" disabled={!body.name.trim()} onClick={()=>void action(()=>save(false))}>另存为工作流</button><button type="button" disabled={!selection||!body.name.trim()} onClick={()=>void action(()=>save(true))}>更新工作流</button><button type="button" disabled={!selection||!body.name.trim()} onClick={()=>void action(async()=>{const saved=await renameWorkflow(selection,body.name);setWorkflows(current=>current.map(w=>w.workflow_id===selection?saved:w));window.dispatchEvent(new Event(workflowsChanged));setNotice("工作流已重命名");})}>重命名工作流</button><button type="button" className="danger-button" disabled={!selection} onClick={()=>{if(window.confirm("删除这个工作流？已有作品和运行记录将保留。"))void action(async()=>{await deleteWorkflow(selection);setWorkflows(current=>current.filter(w=>w.workflow_id!==selection));select("");window.dispatchEvent(new Event(workflowsChanged));setNotice("工作流已删除");});}}>删除工作流</button></div>
+    </fieldset>{busy&&<p role="status">正在保存或载入…</p>}{error&&<p role="alert">{error}<button type="button" onClick={()=>setRetry(value=>value+1)}>重新读取预设库</button></p>}{notice&&<p role="status">{notice}</p>}
+  </div>;
+}

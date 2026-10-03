@@ -15,7 +15,7 @@ it("只对选中的作品显式应用，逐条显示部分成功并通知当前�
   expect(screen.getByRole("alert")).toHaveTextContent("作品版本已变更");
   expect(listener).toHaveBeenCalledOnce();const event=listener.mock.calls[0][0] as CustomEvent;
   expect(event.detail).toEqual({project:"p",collection:"c",outputs:["a"]});
-  expect(props.onBusy).toHaveBeenLastCalledWith(false);window.removeEventListener(api.coversSaved,listener);
+  await waitFor(()=>expect(props.onBusy).toHaveBeenLastCalledWith(false));window.removeEventListener(api.coversSaved,listener);
 });
 it("当前封面有未保存修改时不能批量应用",async()=>{
   render(<BatchCoverTemplates {...props} disabled/>);fireEvent.click(screen.getByText("批量应用封面模板"));await screen.findByRole("option",{name:"共享模板"});

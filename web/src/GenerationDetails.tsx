@@ -126,11 +126,11 @@ export function generationDetails(result: HighlightResult) {
   };
 }
 
-export function GenerationDetails({assetName, result}: {assetName: string; result: HighlightResult}) {
+export function GenerationDetails({assetName, result, expanded=false}: {assetName: string; result: HighlightResult;expanded?:boolean}) {
   const {bounds, missingOpeningPreviews, boundaryWarnings, openingPreviewTraces, openingPreviewNotes, explanations} = generationDetails(result);
   const target = result.brief.count;
   const generatedOpeningPreviews = openingPreviewTraces.length - missingOpeningPreviews;
-  return <details className="generation-details"><summary>生成详情</summary>
+  const content=<>
     <p>源素材：{assetName}</p>
     <p>已生成 {result.outputs.length} / {target} 条候选{result.outputs.length < target ? "；未用不完整片段凑数" : ""}。</p>
     {result.outputs.length > 0 && <ul>{result.outputs.map(output => {
@@ -150,5 +150,6 @@ export function GenerationDetails({assetName, result}: {assetName: string; resul
     </section>}
     {boundaryWarnings.length > 0 && <section><h3>需要检查</h3><ul>{boundaryWarnings.map(note => <li key={note}>{note}</li>)}</ul></section>}
     {explanations.length > 0 && <section><h3>选材说明</h3><ul>{explanations.map(note => <li key={note}>{note}</li>)}</ul></section>}
-  </details>;
+  </>;
+  return expanded ? <section className="generation-details">{content}</section> : <details className="generation-details"><summary>生成详情</summary>{content}</details>;
 }

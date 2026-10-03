@@ -111,6 +111,16 @@ class CoverTemplateLibrary:
             raise TemplateNotFound("封面模板已删除或未找到")
         return self._entry(row)
 
+    def background(self, image_id: str) -> bytes:
+        """Copy a template-owned image into another durable local configuration."""
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT image FROM backgrounds WHERE image_id=?", (image_id,)
+            ).fetchone()
+        if row is None:
+            raise UserInputError("模板背景不可用，请重新保存模板")
+        return row[0]
+
     def save(
         self,
         name: str,

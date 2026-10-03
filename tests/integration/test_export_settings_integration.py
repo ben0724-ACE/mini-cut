@@ -94,7 +94,7 @@ def test_preset_and_batch_override_export_video_subtitles_and_original_audio(
                 ],
                 text=True,
             )
-            assert "设计封面" in subtitles
+            assert "设计封面" in subtitles.replace("\n", "")
             assert (await client.get(result["cover_url"])).status_code == 200
             assert (await client.get(result["subtitle_url"])).status_code == 200
 

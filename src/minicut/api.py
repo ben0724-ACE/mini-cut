@@ -91,6 +91,7 @@ from minicut.project import ProjectRepository
 from minicut.project_deletion import ProjectDeletionGuard
 from minicut.render_profile import RenderProfile
 from minicut.transcription_task import CancellationToken, TranscriptionCancelled
+from minicut.workflows import workflow_router
 
 ProjectId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
 SafeFileName = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
@@ -2107,6 +2108,114 @@ def create_app(
 
     api.include_router(cover_router(root))
     api.include_router(export_settings_router(root))
+
+    def workflow_child(
+        project_id: str,
+        kind: str,
+        data: dict,
+        key: str,
+        started: Callable[[list[str]], None],
+    ) -> dict:
+        """Run existing task adapters without holding the workflow's compute slot."""
+        background = BackgroundTasks()
+
+        def existing_or_submit(
+            identity: str, submit: Callable[[], TaskResponse]
+        ) -> TaskResponse:
+            job_path = _job_path(root / project_id, identity)
+            if not job_path.exists():
+                return submit()
+            job = _read_job(job_path)
+            # Follow the existing recovery chain, including repeated failures.
+            while isinstance(job.get("resumed_task_id"), str):
+                job = _read_job(
+                    _job_path(root / project_id, cast(str, job["resumed_task_id"]))
+                )
+            if job.get("status") in {"failed", "cancelled"}:
+                return resume_task(project_id, cast(str, job["task_id"]), background)
+            if job.get("status") in {"pending", "running"}:
+                raise HTTPException(409, "上一阶段仍在执行，请稍后继续")
+            return _task_response(job)
+
+        if kind == "transcribe":
+            responses = [
+                existing_or_submit(
+                    key,
+                    lambda: submit_transcription(
+                        project_id,
+                        TranscribeTaskBody.model_validate(data),
+                        background,
+                        key,
+                    ),
+                )
+            ]
+        elif kind == "highlights":
+            responses = [
+                existing_or_submit(
+                    key,
+                    lambda: submit_highlights(
+                        project_id,
+                        HighlightTaskBody.model_validate(data),
+                        background,
+                        key,
+                    ),
+                )
+            ]
+        else:
+            # Use the same bounded FFmpeg worker pool as ordinary batch exports.
+            runners: list[Callable[[], None]] = []
+            responses = []
+            for output in cast(list[dict], data["outputs"]):
+                body = OutputExportBody.model_validate(output)
+                identity = f"{key}-{body.output_id}"
+                response = existing_or_submit(
+                    identity,
+                    lambda body=body, identity=identity: enqueue_output_export(
+                        project_id, body, background, identity, runners
+                    ),
+                )
+                responses.append(response)
+            # Recovery adapters schedule individual runners; include those in
+            # the same pool rather than executing retries sequentially.
+            runners.extend(scheduled.func for scheduled in background.tasks)
+            background.tasks.clear()
+            background.add_task(run_export_batch, runners)
+        started([response.task_id for response in responses])
+        # All adapters above schedule synchronous local task runners.
+        for scheduled in background.tasks:
+            scheduled.func(*scheduled.args, **scheduled.kwargs)
+        completed = [
+            _read_job(_job_path(root / project_id, response.task_id))
+            for response in responses
+        ]
+        failed = next((job for job in completed if job["status"] != "succeeded"), None)
+        if failed:
+            if failed["status"] == "cancelled":
+                raise TranscriptionCancelled()
+            raise ValueError(str(failed.get("error") or "工作流阶段执行失败"))
+        if kind == "export":
+            return {
+                "entries": [
+                    {"outputId": job["result"]["output_id"], "taskId": job["task_id"]}
+                    for job in completed
+                ]
+            }
+        return cast(dict, completed[0]["result"])
+
+    def cancel_workflow_child(project_id: str, task_id: str) -> None:
+        if _read_job(_job_path(root / project_id, task_id)).get("status") in {
+            "pending",
+            "running",
+        }:
+            export_tokens.setdefault(
+                (project_id, task_id), CancellationToken()
+            ).cancel()
+
+    api.include_router(
+        workflow_router(
+            root, _read_job, _write_job, workflow_child, cancel_workflow_child
+        )
+    )
     return api
 
 
