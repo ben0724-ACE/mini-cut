@@ -9,7 +9,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal, Protocol
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
@@ -32,9 +32,25 @@ from minicut.export_settings import (
 from minicut.generation_presets import GenerationPresetBody, PresetRenameBody
 from minicut.generation_settings import GenerationDraft, GenerationSettings
 from minicut.highlight_service import read_highlights, source_segments
+from minicut.output_plan import OutputPlan
 from minicut.output_repository import OutputCollectionRepository
 from minicut.project import ProjectRepository
 from minicut.transcription_task import TranscriptionCancelled
+
+# SQLite and task journals contain heterogeneous JSON; models below validate
+# user-facing configuration before it enters the workflow.
+JsonObject = dict[str, Any]
+
+
+class JobWriter(Protocol):
+    def __call__(
+        self, path: Path, payload: JsonObject, *, create: bool = False
+    ) -> None: ...
+
+
+WorkflowChild = Callable[
+    [str, str, JsonObject, str, Callable[[list[str]], None]], JsonObject
+]
 
 SafeId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
 
@@ -90,7 +106,7 @@ class WorkflowBody(PresetRenameBody):
 
 
 class WorkflowLibrary:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path) -> None:
         self.root = root
         self.path = root / ".minicut/workflows.sqlite3"
 
@@ -103,7 +119,7 @@ class WorkflowLibrary:
         return db
 
     @staticmethod
-    def entry(row: tuple) -> dict:
+    def entry(row: tuple[str, str, str, str, str]) -> JsonObject:
         return {
             "workflow_id": row[0],
             **json.loads(row[2]),
@@ -112,7 +128,7 @@ class WorkflowLibrary:
             "updated_at": row[4],
         }
 
-    def list(self) -> list[dict]:
+    def list(self) -> list[JsonObject]:
         if not self.path.exists():
             return []
         with self.connect() as db:
@@ -124,14 +140,14 @@ class WorkflowLibrary:
             ]
 
     @staticmethod
-    def public(entry: dict) -> dict:
+    def public(entry: JsonObject) -> JsonObject:
         return {
             key: value
             for key, value in entry.items()
             if key not in {"cover_png", "cover_style"}
         }
 
-    def get(self, identity: str) -> dict:
+    def get(self, identity: str) -> JsonObject:
         if self.path.exists():
             with self.connect() as db:
                 row = db.execute(
@@ -141,7 +157,7 @@ class WorkflowLibrary:
                 return self.entry(row)
         raise HTTPException(404, "工作流已删除或不存在")
 
-    def save(self, body: WorkflowBody, identity: str | None = None) -> dict:
+    def save(self, body: WorkflowBody, identity: str | None = None) -> JsonObject:
         previous = self.get(identity) if identity else None
         definition = body.model_dump(mode="json")
         definition.update(cover_style=None, cover_png=None, cover_template_name=None)
@@ -193,7 +209,7 @@ class WorkflowLibrary:
             raise HTTPException(409, "已有同名工作流，请换一个名称") from error
         return self.public(self.get(identity))
 
-    def rename(self, identity: str, name: str) -> dict:
+    def rename(self, identity: str, name: str) -> JsonObject:
         self.get(identity)
         try:
             with self.connect() as db:
@@ -211,7 +227,9 @@ class WorkflowLibrary:
             db.execute("DELETE FROM workflows WHERE workflow_id=?", (identity,))
 
 
-def configure_outputs(project: Path, result: dict, definition: dict) -> dict:
+def configure_outputs(
+    project: Path, result: JsonObject, definition: JsonObject
+) -> JsonObject:
     """Apply saved settings once, using ordinary output revisions and owned covers."""
     collection_id = result["collection_id"]
     if not result["outputs"]:
@@ -227,7 +245,7 @@ def configure_outputs(project: Path, result: dict, definition: dict) -> dict:
     if options.subtitle_settings is not None:
         layout.update(options.subtitle_settings.plan_changes())
     changed = False
-    plans = []
+    plans: list[OutputPlan] = []
     for plan in collection.plans:
         if any(getattr(plan, key) != value for key, value in layout.items()):
             plan = replace(plan, revision=plan.revision + 1, **layout)
@@ -280,10 +298,10 @@ class WorkflowRunBody(BaseModel):
 
 def workflow_router(
     root: Path,
-    read_job: Callable,
-    write_job: Callable,
-    child_task: Callable,
-    cancel_child: Callable,
+    read_job: Callable[[Path], JsonObject],
+    write_job: JobWriter,
+    child_task: WorkflowChild,
+    cancel_child: Callable[[str, str], None],
 ) -> APIRouter:
     router = APIRouter()
     library = WorkflowLibrary(root)
@@ -300,35 +318,44 @@ def workflow_router(
             raise HTTPException(404, str(error)) from error
         return root / project
 
-    def response(job: dict) -> dict:
+    def response(job: JsonObject) -> JsonObject:
         return {key: value for key, value in job.items() if key != "request"} | {
             "asset_id": job["request"]["asset_id"],
             "workflow_name": job["request"]["definition"]["name"],
         }
 
-    def jobs(project: str) -> list[dict]:
+    def jobs(project: str) -> list[JsonObject]:
         return [
             read_job(item) for item in (root / project / ".minicut/jobs").glob("*.json")
         ]
 
     @router.get("/api/workflows")
-    def list_workflows() -> list[dict]:
+    def list_workflows(  # pyright: ignore[reportUnusedFunction]
+    ) -> list[JsonObject]:
         return library.list()
 
     @router.post("/api/workflows", status_code=201)
-    def create_workflow(body: WorkflowBody) -> dict:
+    def create_workflow(  # pyright: ignore[reportUnusedFunction]
+        body: WorkflowBody,
+    ) -> JsonObject:
         return library.save(body)
 
     @router.put("/api/workflows/{identity}")
-    def update_workflow(identity: SafeId, body: WorkflowBody) -> dict:
+    def update_workflow(  # pyright: ignore[reportUnusedFunction]
+        identity: SafeId, body: WorkflowBody
+    ) -> JsonObject:
         return library.save(body, identity)
 
     @router.patch("/api/workflows/{identity}")
-    def rename_workflow(identity: SafeId, body: PresetRenameBody) -> dict:
+    def rename_workflow(  # pyright: ignore[reportUnusedFunction]
+        identity: SafeId, body: PresetRenameBody
+    ) -> JsonObject:
         return library.rename(identity, body.name)
 
     @router.delete("/api/workflows/{identity}")
-    def delete_workflow(identity: SafeId) -> dict:
+    def delete_workflow(  # pyright: ignore[reportUnusedFunction]
+        identity: SafeId,
+    ) -> JsonObject:
         library.delete(identity)
         return {"deleted": True}
 
@@ -352,7 +379,7 @@ def workflow_router(
             if read_job(path(project, identity)).get("cancel_requested"):
                 raise TranscriptionCancelled()
 
-        def child(kind: str, data: dict, suffix: str) -> dict:
+        def child(kind: str, data: JsonObject, suffix: str) -> JsonObject:
             check_cancel()
             save(phase=kind)
 
@@ -425,7 +452,9 @@ def workflow_router(
                 active.discard((project, identity))
 
     @router.get("/api/projects/{project}/workflow-run")
-    def latest_run(project: SafeId) -> dict | None:
+    def latest_run(  # pyright: ignore[reportUnusedFunction]
+        project: SafeId,
+    ) -> JsonObject | None:
         project_path(project)
         runs = [item for item in jobs(project) if item.get("kind") == "workflow"]
         return (
@@ -433,12 +462,12 @@ def workflow_router(
         )
 
     @router.post("/api/projects/{project}/workflow-runs", status_code=202)
-    def start_run(
+    def start_run(  # pyright: ignore[reportUnusedFunction]
         project: SafeId,
         body: WorkflowRunBody,
         background: BackgroundTasks,
         key: Annotated[SafeId, Header(alias="Idempotency-Key")],
-    ) -> dict:
+    ) -> JsonObject:
         directory = project_path(project)
         if not any(
             item.asset_id == body.asset_id
@@ -465,7 +494,7 @@ def workflow_router(
                 for item in jobs(project)
             ):
                 raise HTTPException(409, "项目已有正在执行的任务，请等待完成或取消")
-            job = {
+            job: JsonObject = {
                 "task_id": identity,
                 "kind": "workflow",
                 "status": "pending",
@@ -490,9 +519,9 @@ def workflow_router(
     @router.post(
         "/api/projects/{project}/workflow-runs/{identity}/resume", status_code=202
     )
-    def resume_run(
+    def resume_run(  # pyright: ignore[reportUnusedFunction]
         project: SafeId, identity: SafeId, background: BackgroundTasks
-    ) -> dict:
+    ) -> JsonObject:
         project_path(project)
         with lock:
             job = read_job(path(project, identity))
@@ -513,7 +542,9 @@ def workflow_router(
             return response(job)
 
     @router.post("/api/projects/{project}/workflow-runs/{identity}/cancel")
-    def cancel_run(project: SafeId, identity: SafeId) -> dict:
+    def cancel_run(  # pyright: ignore[reportUnusedFunction]
+        project: SafeId, identity: SafeId
+    ) -> JsonObject:
         project_path(project)
         with lock:
             job = read_job(path(project, identity))

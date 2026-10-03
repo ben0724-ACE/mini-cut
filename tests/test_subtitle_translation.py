@@ -3,6 +3,7 @@ import json
 from dataclasses import replace
 from pathlib import Path
 from threading import Lock
+from typing import cast
 
 import pytest
 
@@ -176,12 +177,15 @@ def test_post_generation_translation_saves_one_version_without_paid_provider(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"transcript": transcript.to_dict()}))
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-only")
+
+    def translator_provider(api_key: str, **configuration: object) -> Translator:
+        return Translator()
+
     monkeypatch.setattr(
-        "minicut.highlight_service.DeepSeekProvider",
-        lambda *args, **kwargs: Translator(),
+        "minicut.highlight_service.DeepSeekProvider", translator_provider
     )
     result = translate_output_subtitles(tmp_path, "c", "v", 1, "zh", Lock())
-    assert result["outputs"][0]["revision"] == 2
+    assert cast(list[dict[str, object]], result["outputs"])[0]["revision"] == 2
     saved = repository.read(segments).plans[0]
     assert [item.translation_text for item in saved.items] == ["您好", "你好"]
     with pytest.raises(UserInputError, match="新版本"):

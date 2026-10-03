@@ -5,6 +5,7 @@ import json
 import subprocess
 from dataclasses import asdict, replace
 from pathlib import Path
+from typing import cast
 from urllib.parse import unquote
 
 import httpx
@@ -96,7 +97,7 @@ def test_preview_matches_export_pixels_subtitle_timing_and_audio(
             transport=httpx.ASGITransport(app=create_app(project.parent)),
             base_url="http://test",
         ) as client:
-            options = {
+            options: dict[str, object] = {
                 "aspect_ratio": "9:16",
                 "resolution": 720,
                 "fit": "crop",
@@ -187,7 +188,9 @@ def test_preview_matches_export_pixels_subtitle_timing_and_audio(
                 rendered_plan = json.loads(record.read_text())["plan"]
                 assert (
                     rendered_plan["subtitle_style"]
-                    == options["subtitle_settings"]["subtitle_style"]
+                    == cast(dict[str, object], options["subtitle_settings"])[
+                        "subtitle_style"
+                    ]
                 )
                 assert rendered_plan["subtitle_bottom_percent"] == 22
                 assert exported["subtitle_settings"] == options["subtitle_settings"]
@@ -236,7 +239,11 @@ def test_preview_matches_export_pixels_subtitle_timing_and_audio(
                     "/api/projects/demo/highlights/collection/outputs/o/preview-task",
                     params={
                         "revision": 1,
-                        **options,
+                        **{
+                            key: str(value)
+                            for key, value in options.items()
+                            if key != "subtitle_settings"
+                        },
                         "subtitle_settings": json.dumps(
                             options.get("subtitle_settings")
                         ),
@@ -248,7 +255,11 @@ def test_preview_matches_export_pixels_subtitle_timing_and_audio(
                     "/api/projects/demo/highlights/collection/outputs/o/preview-task",
                     params={
                         "revision": 1,
-                        **options,
+                        **{
+                            key: str(value)
+                            for key, value in options.items()
+                            if key != "subtitle_settings"
+                        },
                         "crop_left": 11,
                         "subtitle_settings": json.dumps(
                             options.get("subtitle_settings")

@@ -1,6 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -241,7 +242,7 @@ def test_complete_subtitle_presets_restore_across_projects_and_restart(
     from minicut.subtitle_style import SubtitleStyle
 
     setup_projects(tmp_path)
-    layout = {
+    layout: dict[str, object] = {
         "subtitle_mode": "translated",
         "subtitle_order": "translation_first",
         "subtitle_horizontal_percent": 55,
@@ -294,7 +295,10 @@ def test_complete_subtitle_presets_restore_across_projects_and_restart(
                 ] == layout
             invalid = {
                 **layout,
-                "subtitle_style": {**layout["subtitle_style"], "source_size": 0},
+                "subtitle_style": {
+                    **cast(dict[str, object], layout["subtitle_style"]),
+                    "source_size": 0,
+                },
             }
             assert (
                 await client.put(

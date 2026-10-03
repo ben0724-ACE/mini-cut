@@ -5,15 +5,17 @@ import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Any
 from urllib.parse import unquote
 
 import httpx
 import pytest
 
 from minicut.api import create_app
+from minicut.application import TranscribeRequest, TranscribeResult
 from minicut.cover_design import CoverDesign, CoverStore, design_directory
 from minicut.cover_templates import CoverTemplateLibrary
+from minicut.highlight_brief import HighlightBrief
 from minicut.highlight_service import read_highlights, source_segments
 from minicut.media import StreamType
 from minicut.output_repository import OutputCollectionRepository
@@ -25,20 +27,22 @@ from tests.test_workflows import definition
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg required")
 def test_automatic_export_and_recovery_do_not_repeat_selection(
-    cover_project: Path, monkeypatch
-):
+    cover_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import minicut.api as api_module
 
     project = cover_project
-    calls = []
+    calls: list[HighlightBrief] = []
 
     class CachedTranscriber:
-        def execute(self, request):
-            return SimpleNamespace(
+        def execute(self, request: TranscribeRequest) -> TranscribeResult:
+            return TranscribeResult(
                 transcript_id="t", asset_id="asset", word_count=1, reused=True
             )
 
-    def generate(directory, asset, collection, brief):
+    def generate(
+        directory: Path, asset: str, collection: str, brief: HighlightBrief
+    ) -> dict[str, object]:
         calls.append(brief)
         segments = source_segments(directory, asset)
         source = OutputCollectionRepository(directory, "collection").read(segments)
@@ -56,9 +60,9 @@ def test_automatic_export_and_recovery_do_not_repeat_selection(
         return read_highlights(directory, collection)
 
     real_export = api_module.export_output
-    attempts = []
+    attempts: list[bool] = []
 
-    def flaky_export(*args, **kwargs):
+    def flaky_export(*args: Any, **kwargs: Any) -> dict[str, object]:
         attempts.append(True)
         if len(attempts) == 1:
             raise ValueError("模拟一次导出失败")
@@ -66,7 +70,7 @@ def test_automatic_export_and_recovery_do_not_repeat_selection(
 
     monkeypatch.setattr(api_module, "export_output", flaky_export)
 
-    async def run():
+    async def run() -> None:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(
                 app=create_app(
@@ -142,7 +146,9 @@ def test_automatic_export_and_recovery_do_not_repeat_selection(
     asyncio.run(run())
 
 
-def test_workflow_owns_cover_background_after_template_deletion(cover_project: Path):
+def test_workflow_owns_cover_background_after_template_deletion(
+    cover_project: Path,
+) -> None:
     from PIL import Image
 
     from minicut.workflows import WorkflowBody, WorkflowLibrary, configure_outputs
@@ -174,10 +180,14 @@ def test_workflow_owns_cover_background_after_template_deletion(cover_project: P
     )
     result = read_highlights(project, "collection")
     configure_outputs(project, result, library.get(saved["workflow_id"]))
-    version, design = CoverStore(project, "collection", "o").read()
+    stored = CoverStore(project, "collection", "o").read()
+    assert stored is not None
+    version, design = stored
     assert version == 1
     assert design.title == "设计封面"
     owned_image = directory / f"{design.background_image}.png"
     assert Image.open(owned_image).getpixel((0, 0)) == (0, 128, 0)
     configure_outputs(project, result, library.get(saved["workflow_id"]))
-    assert CoverStore(project, "collection", "o").read()[0] == 1
+    stored = CoverStore(project, "collection", "o").read()
+    assert stored is not None
+    assert stored[0] == 1

@@ -93,7 +93,7 @@ from minicut.render_profile import RenderProfile
 from minicut.subtitle_font import available_subtitle_fonts
 from minicut.subtitle_style import SubtitleStyle
 from minicut.transcription_task import CancellationToken, TranscriptionCancelled
-from minicut.workflows import workflow_router
+from minicut.workflows import JsonObject, workflow_router
 
 ProjectId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
 SafeFileName = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
@@ -266,7 +266,9 @@ class OutputOrderBody(BaseModel):
 
 class OutputSubtitleSettingsBody(BaseModel):
     base_revision: int = Field(ge=1, strict=True)
-    subtitle_mode: str | None = Field(default=None, pattern=r"^(bilingual|translated|source)$")
+    subtitle_mode: str | None = Field(
+        default=None, pattern=r"^(bilingual|translated|source)$"
+    )
     subtitle_source_scale: float = Field(ge=0.7, le=1.5)
     subtitle_translation_scale: float = Field(ge=0.7, le=1.5)
     subtitle_horizontal_percent: int = Field(ge=20, le=80, strict=True)
@@ -2149,10 +2151,10 @@ def create_app(
     def workflow_child(
         project_id: str,
         kind: str,
-        data: dict,
+        data: JsonObject,
         key: str,
         started: Callable[[list[str]], None],
-    ) -> dict:
+    ) -> JsonObject:
         """Run existing task adapters without holding the workflow's compute slot."""
         background = BackgroundTasks()
 
@@ -2201,8 +2203,8 @@ def create_app(
         else:
             # Use the same bounded FFmpeg worker pool as ordinary batch exports.
             runners: list[Callable[[], None]] = []
-            responses = []
-            for output in cast(list[dict], data["outputs"]):
+            responses: list[TaskResponse] = []
+            for output in cast(list[JsonObject], data["outputs"]):
                 body = OutputExportBody.model_validate(output)
                 identity = f"{key}-{body.output_id}"
                 response = existing_or_submit(
@@ -2233,11 +2235,14 @@ def create_app(
         if kind == "export":
             return {
                 "entries": [
-                    {"outputId": job["result"]["output_id"], "taskId": job["task_id"]}
+                    {
+                        "outputId": cast(JsonObject, job["result"])["output_id"],
+                        "taskId": job["task_id"],
+                    }
                     for job in completed
                 ]
             }
-        return cast(dict, completed[0]["result"])
+        return cast(JsonObject, completed[0]["result"])
 
     def cancel_workflow_child(project_id: str, task_id: str) -> None:
         if _read_job(_job_path(root / project_id, task_id)).get("status") in {
