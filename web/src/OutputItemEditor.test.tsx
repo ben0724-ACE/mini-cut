@@ -1,7 +1,19 @@
 import { expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { OutputItemEditor } from "./OutputItemEditor";
+import { useState, type ComponentProps } from "react";
+import { OutputItemEditor as Editor, type OutputTextDraft } from "./OutputItemEditor";
+
+// Standalone editor tests model the workspace's ownership of drafts and saved clips.
+function OutputItemEditor(props:Omit<ComponentProps<typeof Editor>,"textDraft"|"onTextDraftChange">){
+  const [clip,setClip]=useState(props.clip);
+  const [textDraft,setTextDraft]=useState<OutputTextDraft>({});
+  return <Editor {...props} clip={clip} textDraft={textDraft} onTextDraftChange={setTextDraft} onSave={async changes=>{
+    await props.onSave(changes);
+    setClip(previous=>({...previous,...(changes.display_text!==undefined?{text:changes.display_text}:{}),...(changes.translation_text!==undefined?{translation_text:changes.translation_text}:{}),...(changes.deleted!==undefined?{deleted:changes.deleted}:{})}));
+    if(changes.display_text!==undefined||changes.translation_text!==undefined)setTextDraft({});
+  }}/>;
+}
 
 it("保存失败保留修改文字，不假报成功；跳转使用原时间", async () => {
   const jump=vi.fn(); const save=vi.fn().mockRejectedValue(new Error("磁盘不可写"));

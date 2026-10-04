@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { OutputWorkspace } from "./OutputWorkspace";
 vi.mock("./api", async original => ({...await original<typeof import("./api")>(), listSubtitleFonts:vi.fn().mockResolvedValue([]), getHighlights: vi.fn().mockResolvedValue({asset_id:"source",outputs:[{output_id:"video-1",title:"作品A",reason:"理由A",revision:1,clips:[]},{output_id:"video-2",title:"作品B",reason:"理由B",revision:2,clips:[]}]})}));
 vi.mock("./exportSettingsApi",async original=>{
@@ -11,6 +11,28 @@ vi.mock("./exportSettingsApi",async original=>{
     listExportPresets:vi.fn().mockResolvedValue([]),
   };
 });
+
+function subtitleFixture() {
+  const clips = [
+    {instance_id:"first",segment_id:"a",role:"body" as const,text:"First",translation_text:"第一句",translation_language:"zh" as const,start_ms:0,end_ms:2000},
+    {instance_id:"second",segment_id:"b",role:"body" as const,text:"Second",translation_text:"第二句",translation_language:"zh" as const,start_ms:2000,end_ms:4000},
+  ];
+  return {asset_id:"a",collection_id:"c",source_duration_ms:10000,notes:[],brief:{preset:"podcast_highlights",count:1,min_ms:null,max_ms:null,hook_ms:null,instructions:"",max_source_overlap:1},outputs:[{output_id:"o",title:"字幕草稿",reason:"完整",revision:1,duration_ms:4000,clips}]};
+}
+
+async function openSubtitleDrafts() {
+  await screen.findByLabelText("编辑字幕 second");
+  fireEvent.click(screen.getByRole("tab",{name:"逐句编辑"}));
+  for (const id of ["first", "second"]) {
+    fireEvent.click(screen.getByLabelText(`编辑字幕 ${id}`));
+    fireEvent.change(screen.getByLabelText(`字幕 ${id}`),{target:{value:`Unsaved ${id} draft`}});
+    fireEvent.change(screen.getByLabelText(`译文 ${id}`),{target:{value:`未保存的${id}译文`}});
+  }
+}
+
+function subtitleCard(id:string) {
+  return within(screen.getByLabelText(`编辑字幕 ${id}`).closest("li")!);
+}
 
 it("独立作品入口只显示指定计划，不串其他作品", async () => {
   const view = render(<OutputWorkspace project="demo" collection="one" output="video-1" />);
@@ -156,4 +178,195 @@ it("上层导出预设保存字幕新版本，后续独立编辑沿用作品设�
   expect(screen.getByLabelText("原文字号")).toHaveValue(82);expect(screen.getByLabelText("译文字号")).toHaveValue(46);
   expect(exports.saveExportDraft).toHaveBeenCalledWith(expect.stringContaining("preset-project"),expect.objectContaining({options:expect.objectContaining({subtitle_settings:null,aspect_ratio:"9:16",subtitle_mode:"burned"})}));
   expect(preview).not.toHaveBeenCalled();fireEvent.change(screen.getByLabelText("原文字号"),{target:{value:"84"}});await waitFor(()=>expect(screen.getByText("应用预设")).toBeDisabled());expect(screen.getByText("另存为预设")).toBeDisabled();
+});
+
+it("保存一句只清理该句草稿，其他原文和译文仍可继续保存",async()=>{
+  const api=await import("./api");
+  const data=subtitleFixture();
+  vi.mocked(api.getHighlights).mockResolvedValue(data);
+  const firstSaved={...data,outputs:[{...data.outputs[0],revision:2,clips:data.outputs[0].clips.map(clip=>clip.instance_id==="first"?{...clip,text:"Unsaved first draft",translation_text:"未保存的first译文"}:clip)}]};
+  const allSaved={...firstSaved,outputs:[{...firstSaved.outputs[0],revision:3,clips:firstSaved.outputs[0].clips.map(clip=>clip.instance_id==="second"?{...clip,text:"Unsaved second draft",translation_text:"未保存的second译文"}:clip)}]};
+  const save=vi.spyOn(api,"editOutputItem").mockResolvedValueOnce(firstSaved).mockResolvedValueOnce(allSaved);
+  const onDirty=vi.fn();
+  render(<OutputWorkspace project="subtitle-save" collection="c" output="o" onDirty={onDirty}/>);
+  await openSubtitleDrafts();
+  fireEvent.click(subtitleCard("first").getByRole("button",{name:"保存字幕"}));
+  await waitFor(()=>expect(subtitleCard("first").getByRole("button",{name:"保存字幕"})).toBeDisabled());
+  expect(screen.getByLabelText("字幕 second")).toHaveValue("Unsaved second draft");
+  expect(screen.getByLabelText("译文 second")).toHaveValue("未保存的second译文");
+  expect(subtitleCard("second").getByRole("button",{name:"保存字幕"})).toBeEnabled();
+  expect(screen.getByRole("tab",{name:/逐句编辑/})).toHaveTextContent("未保存");
+  expect(onDirty).toHaveBeenLastCalledWith(true);
+  expect(screen.getByRole("button",{name:"生成成片预览"})).toBeDisabled();
+  fireEvent.click(subtitleCard("second").getByRole("button",{name:"保存字幕"}));
+  await waitFor(()=>expect(save).toHaveBeenLastCalledWith("subtitle-save","c","o","second",{display_text:"Unsaved second draft",translation_text:"未保存的second译文"}));
+  await waitFor(()=>expect(onDirty).toHaveBeenLastCalledWith(false));
+  expect(subtitleCard("second").getByRole("button",{name:"保存字幕"})).toBeDisabled();
+});
+
+it("保存失败保留所有字幕草稿，成功后使用服务端保存的文字",async()=>{
+  const api=await import("./api");
+  const data=subtitleFixture();
+  vi.mocked(api.getHighlights).mockResolvedValue(data);
+  const updated={...data,outputs:[{...data.outputs[0],revision:2,clips:data.outputs[0].clips.map(clip=>clip.instance_id==="first"?{...clip,text:"Canonical first",translation_text:"已保存译文"}:clip)}]};
+  const save=vi.spyOn(api,"editOutputItem").mockRejectedValueOnce(new Error("磁盘不可写")).mockResolvedValueOnce(updated);
+  render(<OutputWorkspace project="subtitle-failure" collection="c" output="o"/>);
+  await openSubtitleDrafts();
+  fireEvent.click(subtitleCard("first").getByRole("button",{name:"保存字幕"}));
+  expect(await subtitleCard("first").findByRole("alert")).toHaveTextContent("磁盘不可写");
+  for(const id of ["first","second"]){
+    expect(screen.getByLabelText(`字幕 ${id}`)).toHaveValue(`Unsaved ${id} draft`);
+    expect(screen.getByLabelText(`译文 ${id}`)).toHaveValue(`未保存的${id}译文`);
+  }
+  fireEvent.click(subtitleCard("first").getByRole("button",{name:"保存字幕"}));
+  await waitFor(()=>expect(screen.getByLabelText("字幕 first")).toHaveValue("Canonical first"));
+  expect(screen.getByLabelText("译文 first")).toHaveValue("已保存译文");
+  expect(screen.getByLabelText("字幕 second")).toHaveValue("Unsaved second draft");
+  expect(save).toHaveBeenCalledTimes(2);
+});
+
+it("保存范围只重置受影响句子的草稿，并同步重新提取的字幕",async()=>{
+  const api=await import("./api");
+  const data=subtitleFixture();
+  vi.mocked(api.getHighlights).mockResolvedValue(data);
+  const updated={...data,outputs:[{...data.outputs[0],revision:2,clips:data.outputs[0].clips.map(clip=>clip.instance_id==="first"?{...clip,start_ms:500,text:"Re-extracted first",translation_text:undefined}:clip)}]};
+  const save=vi.spyOn(api,"saveOutputRanges").mockRejectedValueOnce(new Error("版本冲突")).mockResolvedValueOnce(updated);
+  render(<OutputWorkspace project="subtitle-range" collection="c" output="o"/>);
+  await openSubtitleDrafts();
+  fireEvent.change(screen.getByLabelText("开始 first"),{target:{value:"0.5"}});
+  fireEvent.click(screen.getByRole("button",{name:"保存修改"}));
+  expect(await screen.findByRole("alert")).toHaveTextContent("版本冲突");
+  expect(screen.getByLabelText("字幕 first")).toHaveValue("Unsaved first draft");
+  expect(screen.getByLabelText("译文 first")).toHaveValue("未保存的first译文");
+  fireEvent.click(screen.getByRole("button",{name:"保存修改"}));
+  await waitFor(()=>expect(screen.getByLabelText("字幕 first")).toHaveValue("Re-extracted first"));
+  expect(screen.getByLabelText("译文 first")).toHaveValue("");
+  expect(subtitleCard("first").getByRole("button",{name:"保存字幕"})).toBeDisabled();
+  expect(screen.getByLabelText("字幕 second")).toHaveValue("Unsaved second draft");
+  expect(screen.getByLabelText("译文 second")).toHaveValue("未保存的second译文");
+  expect(save).toHaveBeenLastCalledWith("subtitle-range","c","o",1,[{instance_id:"first",source_start_ms:500,source_end_ms:2000}]);
+});
+
+it.each(["手动", "自动"])("%s分句清理被替换句子的草稿，保留其他句子",async mode=>{
+  const api=await import("./api");
+  const data=subtitleFixture();
+  vi.mocked(api.getHighlights).mockResolvedValue(data);
+  const parts=[{text:"First",start_ms:0,end_ms:1000},{text:"part",start_ms:1000,end_ms:2000}];
+  const clips=[...parts.map((part,index)=>({...data.outputs[0].clips[0],...part,instance_id:`first-split-${index}`,translation_text:undefined})),data.outputs[0].clips[1]];
+  const updated={...data,outputs:[{...data.outputs[0],revision:2,clips}]};
+  const split=vi.spyOn(api,mode==="手动"?"applyManualSplit":"splitOutputSentences").mockResolvedValue(updated);
+  vi.spyOn(api,"previewManualSplit").mockResolvedValue({ranges:parts});
+  vi.spyOn(window,"confirm").mockReturnValue(true);
+  const onDirty=vi.fn();
+  render(<OutputWorkspace project="subtitle-split" collection="c" output="o" onDirty={onDirty}/>);
+  await openSubtitleDrafts();
+  if(mode==="手动"){
+    fireEvent.change(screen.getByLabelText("字幕 first"),{target:{value:"First\npart"}});
+    fireEvent.click(subtitleCard("first").getByRole("button",{name:"预览分句时间"}));
+    fireEvent.click(await subtitleCard("first").findByRole("button",{name:"确认分句"}));
+  }else{
+    fireEvent.click(screen.getByRole("button",{name:"按句拆分片段"}));
+  }
+  await screen.findByLabelText("编辑字幕 first-split-0");
+  expect(split).toHaveBeenCalledOnce();
+  expect(screen.queryByLabelText("字幕 first")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("字幕 first-split-0")).toHaveValue("First");
+  expect(screen.getByLabelText("译文 first-split-0")).toHaveValue("");
+  expect(screen.getByLabelText("字幕 second")).toHaveValue("Unsaved second draft");
+  expect(screen.getByLabelText("译文 second")).toHaveValue("未保存的second译文");
+  // Reverting the surviving drafts must leave no orphaned draft for the removed ID.
+  fireEvent.change(screen.getByLabelText("字幕 second"),{target:{value:"Second"}});
+  fireEvent.change(screen.getByLabelText("译文 second"),{target:{value:"第二句"}});
+  await waitFor(()=>expect(onDirty).toHaveBeenLastCalledWith(false));
+});
+
+it("历史版本只显示已保存字幕，切回当前版本恢复草稿",async()=>{
+  const api=await import("./api");
+  const data=subtitleFixture();
+  data.outputs[0].revision=2;
+  vi.mocked(api.getHighlights).mockResolvedValue(data);
+  vi.spyOn(api,"getOutputVersions").mockResolvedValue([
+    {...data.outputs[0],revision:1,clips:data.outputs[0].clips.map(clip=>({...clip,text:`Historical ${clip.instance_id}`,translation_text:"历史译文"}))},
+    data.outputs[0],
+  ]);
+  render(<OutputWorkspace project="subtitle-history" collection="c" output="o"/>);
+  await openSubtitleDrafts();
+  fireEvent.click(screen.getByText("版本记录"));
+  fireEvent.click(screen.getByRole("button",{name:"查看版本"}));
+  fireEvent.change(await screen.findByLabelText("预览版本"),{target:{value:"1"}});
+  expect(screen.getByLabelText("字幕 first")).toHaveValue("Historical first");
+  expect(screen.getByLabelText("译文 second")).toHaveValue("历史译文");
+  expect(screen.getByLabelText("字幕 second")).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("预览版本"),{target:{value:"2"}});
+  expect(screen.getByLabelText("字幕 first")).toHaveValue("Unsaved first draft");
+  expect(screen.getByLabelText("译文 second")).toHaveValue("未保存的second译文");
+  expect(screen.getByLabelText("字幕 second")).toBeEnabled();
+});
+
+it("作品切换时相同 instance_id 的字幕草稿互不覆盖",async()=>{
+  const api=await import("./api");
+  const data=subtitleFixture();
+  const other={...data.outputs[0],output_id:"other",title:"其他作品",clips:data.outputs[0].clips.map(clip=>({...clip,text:`Other ${clip.instance_id}`,translation_text:"其他译文"}))};
+  vi.mocked(api.getHighlights).mockResolvedValue({...data,outputs:[data.outputs[0],other]});
+  const view=render(<OutputWorkspace project="subtitle-scope" collection="c" output="o"/>);
+  await openSubtitleDrafts();
+  view.rerender(<OutputWorkspace project="subtitle-scope" collection="c" output="other"/>);
+  expect(screen.getByLabelText("字幕 first")).toHaveValue("Other first");
+  expect(screen.getByLabelText("译文 second")).toHaveValue("其他译文");
+  fireEvent.change(screen.getByLabelText("字幕 first"),{target:{value:"Other draft"}});
+  view.rerender(<OutputWorkspace project="subtitle-scope" collection="c" output="o"/>);
+  expect(screen.getByLabelText("字幕 first")).toHaveValue("Unsaved first draft");
+  expect(screen.getByLabelText("译文 second")).toHaveValue("未保存的second译文");
+  view.rerender(<OutputWorkspace project="subtitle-scope" collection="c" output="other"/>);
+  expect(screen.getByLabelText("字幕 first")).toHaveValue("Other draft");
+});
+
+it.each(["删除", "排序", "字幕设置"])("%s创建新版本时保留逐句原文和译文草稿",async action=>{
+  const api=await import("./api");
+  const data=subtitleFixture();
+  vi.mocked(api.getHighlights).mockResolvedValue(data);
+  const clips=action==="删除"?data.outputs[0].clips.map(clip=>clip.instance_id==="first"?{...clip,deleted:true}:clip):action==="排序"?[...data.outputs[0].clips].reverse():data.outputs[0].clips;
+  const updated={...data,outputs:[{...data.outputs[0],revision:2,clips,subtitle_style:{...api.defaultSubtitleStyle(),source_size:72}}]};
+  const save=action==="删除"?vi.spyOn(api,"editOutputItem").mockResolvedValue(updated):action==="排序"?vi.spyOn(api,"reorderOutput").mockResolvedValue(updated):vi.spyOn(api,"saveOutputSubtitleSettings").mockResolvedValue(updated);
+  render(<OutputWorkspace project="subtitle-revision" collection="c" output="o"/>);
+  await openSubtitleDrafts();
+  if(action==="字幕设置"){
+    fireEvent.click(screen.getByRole("tab",{name:"字幕设置"}));
+    fireEvent.change(screen.getByLabelText("原文字号"),{target:{value:"72"}});
+    fireEvent.click(screen.getByRole("button",{name:"保存字幕设置"}));
+    await screen.findByText(/^v2 ·/);
+    expect(screen.getByLabelText("原文字号")).toHaveValue(72);
+    fireEvent.click(screen.getByRole("tab",{name:/逐句编辑/}));
+  }else{
+    fireEvent.click(subtitleCard("first").getByRole("button",{name:action==="删除"?"删除片段":"下移"}));
+    await screen.findByText(/^v2 ·/);
+  }
+  expect(save).toHaveBeenCalledOnce();
+  for(const id of ["first","second"]){
+    expect(screen.getByLabelText(`字幕 ${id}`)).toHaveValue(`Unsaved ${id} draft`);
+    expect(screen.getByLabelText(`译文 ${id}`)).toHaveValue(`未保存的${id}译文`);
+  }
+});
+
+it("取消开场预告导致编辑器换区域时保留该实例的字幕草稿",async()=>{
+  const api=await import("./api");
+  const data:import("./api").HighlightResult=subtitleFixture();
+  data.outputs[0].clips[0].role="hook";
+  vi.mocked(api.getHighlights).mockResolvedValue(data);
+  const updated={...data,outputs:[{...data.outputs[0],revision:2,clips:data.outputs[0].clips.map(clip=>({...clip,role:"body" as const}))}]};
+  const save=vi.spyOn(api,"reorderOutput").mockResolvedValue(updated);
+  render(<OutputWorkspace project="subtitle-role" collection="c" output="o"/>);
+  await screen.findByLabelText("编辑字幕 first");
+  fireEvent.click(screen.getByRole("tab",{name:"开场预告"}));
+  fireEvent.click(screen.getByLabelText("编辑字幕 first"));
+  fireEvent.change(screen.getByLabelText("字幕 first"),{target:{value:"Hook draft"}});
+  fireEvent.change(screen.getByLabelText("译文 first"),{target:{value:"预告译文草稿"}});
+  fireEvent.click(subtitleCard("first").getByRole("button",{name:"取消开场预告"}));
+  await screen.findByText("当前没有开场预告。");
+  fireEvent.click(screen.getByRole("tab",{name:/逐句编辑/}));
+  expect(save).toHaveBeenCalledOnce();
+  expect(screen.getByLabelText("字幕 first")).toHaveValue("Hook draft");
+  expect(screen.getByLabelText("译文 first")).toHaveValue("预告译文草稿");
+  fireEvent.click(screen.getByLabelText("编辑字幕 first"));
+  expect(subtitleCard("first").getByRole("button",{name:"保存字幕"})).toBeEnabled();
 });

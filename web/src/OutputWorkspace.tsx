@@ -1,11 +1,11 @@
 import {CleanupReview} from "./CleanupReview";
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { saveOutputSubtitleSettings, previewManualSplit, applyManualSplit, splitOutputSentences, saveOutputRanges, getHighlights, editOutputItem, reorderOutput, getOutputVersions, type HighlightResult, type HighlightClip } from "./api";
 import { QuickPreview, type Audition } from "./QuickPreview";
 import { registerDraftGuard } from "./draftNavigation";
 import { RenderedPreview } from "./RenderedPreview";
-import { OutputItemEditor } from "./OutputItemEditor";
+import { OutputItemEditor, type OutputTextDraft } from "./OutputItemEditor";
 import { OutputSubtitleSettings } from "./OutputSubtitleSettings";
 import { OutputOrderControls } from "./OutputOrderControls";
 import { CoverEditor } from "./CoverEditor";
@@ -34,27 +34,53 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
   const editTabsId=useId();
   const [editSection,setEditSection]=useState<EditSection>("frame");
   const [hookSourceId,setHookSourceId]=useState("");
-  const [textDrafts,setTextDrafts]=useState<Record<string,boolean>>({});
-  const onTextDraftChange=useCallback((id:string,hasDraft:boolean)=>setTextDrafts(previous=>{
-    if(Boolean(previous[id])===hasDraft)return previous;
-    const next={...previous};
-    if(hasDraft)next[id]=true;else delete next[id];
-    return next;
-  }),[]);
+  const draftScope=JSON.stringify([project,collection,output]);
+  const [outputTextDrafts,setOutputTextDrafts]=useState<Record<string,Record<string,OutputTextDraft>>>({});
+  const textDrafts=outputTextDrafts[draftScope]??{};
+  const textDirty=Object.keys(textDrafts).length>0;
+  function onTextDraftChange(clip:HighlightClip,draft:OutputTextDraft){
+    const next:OutputTextDraft={};
+    if(draft.text!==undefined&&draft.text!==clip.text)next.text=draft.text;
+    if(draft.translation!==undefined&&draft.translation!==(clip.translation_text??""))next.translation=draft.translation;
+    setOutputTextDrafts(previous=>{
+      const drafts={...previous[draftScope]};
+      if(Object.keys(next).length)drafts[clip.instance_id]=next;else delete drafts[clip.instance_id];
+      return {...previous,[draftScope]:drafts};
+    });
+  }
   const [result,setResult]=useState<HighlightResult|null>(null);const [error,setError]=useState("");const [saving,setBusy]=useState(false);const [coverDirty,setCoverDirty]=useState(false);const [coverVersion,setCoverVersion]=useState<number>();const busy=saving||coverDirty;const lock=useRef(false);
   const [ranges,setRanges]=useState<Record<string,{start:number;end:number}>>({});
   const [undo,setUndo]=useState<typeof ranges[]>([]);const [redo,setRedo]=useState<typeof ranges[]>([]);
   const [audition,setAudition]=useState<Audition>();const [rendered,setRendered]=useState(false);const [duration,setDuration]=useState(0);
   const [navigation,setNavigation]=useState<(()=>void)|null>(null);
   const dirty=Object.keys(ranges).length>0;
-  useEffect(()=>{onDirty?.(dirty||coverDirty||subtitleDirty||Object.values(textDrafts).some(Boolean));return()=>onDirty?.(false);},[dirty,coverDirty,subtitleDirty,textDrafts,onDirty]);
+  useEffect(()=>{onDirty?.(dirty||coverDirty||subtitleDirty||textDirty);return()=>onDirty?.(false);},[dirty,coverDirty,subtitleDirty,textDirty,onDirty]);
   useEffect(()=>{if(!dirty)return;const unload=(event:BeforeUnloadEvent)=>event.preventDefault();window.addEventListener("beforeunload",unload);const unregister=registerDraftGuard(proceed=>setNavigation(()=>proceed));return()=>{window.removeEventListener("beforeunload",unload);unregister();};},[dirty]);
   function changeRange(id:string,start:number,end:number){setUndo([...undo,ranges]);setRedo([]);setRanges({...ranges,[id]:{start,end}});setRendered(false);}
   function discard(){setRanges({});setUndo([]);setRedo([]);}
   const [jumpTo,setJumpTo]=useState<{ms:number;sequence:number}>();
   const [versions,setVersions]=useState<Awaited<ReturnType<typeof getOutputVersions>>>([]);
   const [actionError,setActionError]=useState("");const [historyError,setHistoryError]=useState("");const [viewVersion,setViewVersion]=useState<number|undefined>();
-  async function update(operation:()=>Promise<HighlightResult>){if(lock.current)throw new Error("请等待当前保存完成");lock.current=true;setBusy(true);setActionError("");try{const updated=await operation();setJumpTo(undefined);setResult(updated);onUpdated?.(updated);setViewVersion(undefined);setVersions([]);}finally{lock.current=false;setBusy(false);}}
+  function receiveUpdated(updated:HighlightResult,resetTextIds:string[]=[]){
+    const previousClips=result?.outputs.find(plan=>plan.output_id===output)?.clips??[];
+    const updatedClips=updated.outputs.find(plan=>plan.output_id===output)?.clips??[];
+    setOutputTextDrafts(previous=>{
+      const drafts:Record<string,OutputTextDraft>={};
+      for(const clip of updatedClips){
+        const draft=previous[draftScope]?.[clip.instance_id];
+        const old=previousClips.find(entry=>entry.instance_id===clip.instance_id);
+        // A new source range invalidates corrections even when the instance ID survives.
+        if(!draft||resetTextIds.includes(clip.instance_id)||!old||old.start_ms!==clip.start_ms||old.end_ms!==clip.end_ms)continue;
+        const next:OutputTextDraft={};
+        if(draft.text!==undefined&&draft.text!==clip.text)next.text=draft.text;
+        if(draft.translation!==undefined&&draft.translation!==(clip.translation_text??""))next.translation=draft.translation;
+        if(Object.keys(next).length)drafts[clip.instance_id]=next;
+      }
+      return {...previous,[draftScope]:drafts};
+    });
+    setJumpTo(undefined);setResult(updated);onUpdated?.(updated);setViewVersion(undefined);setVersions([]);
+  }
+  async function update(operation:()=>Promise<HighlightResult>,resetTextIds:string[]=[]){if(lock.current)throw new Error("请等待当前保存完成");lock.current=true;setBusy(true);setActionError("");try{receiveUpdated(await operation(),resetTextIds);}finally{lock.current=false;setBusy(false);}}
   useEffect(()=>{const controller=new AbortController();getHighlights(project,collection,controller.signal).then(value=>{if(!controller.signal.aborted)setResult(value);}).catch(reason=>{if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"读取作品失败");});return()=>controller.abort();},[project,collection]);
   const lastBatchRequest=useRef("");
   useEffect(()=>{
@@ -77,10 +103,10 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
   const draftClips=visibleClips.map(c=>ranges[c.instance_id]?{...c,start_ms:ranges[c.instance_id].start,end_ms:ranges[c.instance_id].end}:c);
   const limit=duration||result.source_duration_ms||0;
   const valid=draftClips.every(c=>Number.isFinite(c.start_ms)&&Number.isFinite(c.end_ms)&&c.start_ms>=0&&c.end_ms>c.start_ms&&(!limit||c.end_ms<=limit));
-  async function saveDraft(){if(!plan||!valid)return false;try{await update(()=>saveOutputRanges(project,collection,output,plan.revision,Object.entries(ranges).map(([instance_id,r])=>({instance_id,source_start_ms:r.start,source_end_ms:r.end}))));discard();setRendered(false);return true;}catch(reason){setActionError(String(reason));return false;}}
+  async function saveDraft(){if(!plan||!valid)return false;try{await update(()=>saveOutputRanges(project,collection,output,plan.revision,Object.entries(ranges).map(([instance_id,r])=>({instance_id,source_start_ms:r.start,source_end_ms:r.end}))),Object.keys(ranges));discard();setRendered(false);return true;}catch(reason){setActionError(String(reason));return false;}}
   const sourceUrl=`/api/projects/${encodeURIComponent(project)}/media/source/${encodeURIComponent(result.asset_id)}`;
   const sourceTime=(visibleClips.find(clip=>!clip.deleted)?.start_ms??0)/1000;
-  const unsavedSubtitles=subtitleDirty||Object.values(textDrafts).some(Boolean);
+  const unsavedSubtitles=subtitleDirty||textDirty;
   const previewStale=!!previewSnapshot&&(previewSnapshot.revision!==(viewVersion??plan.revision)||JSON.stringify(previewSnapshot.options)!==JSON.stringify(effectiveOptions));
   const preview=<>
     <div className="output-settings-toolbar" role="region" aria-label="输出设置">
@@ -99,7 +125,7 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
     {dirty&&<p>有未保存的范围修改；已有成片属于保存前的旧版本。</p>}
   </>;
   const boundaryWarnings=outputBoundaryWarnings(result.notes??[],plan.title);
-  const subtitleSettings=<OutputSubtitleSettings key={`${collection}:${output}:${viewVersion??plan.revision}`} project={project} collection={collection} plan={subtitlePlan} disabled={busy||historical||dirty} disabledReason={historical?"历史版本只读，请切回当前版本后修改或翻译。":dirty?"请先保存或放弃范围修改，再修改或翻译字幕。":undefined} onDirty={setSubtitleDirty} onUpdated={updated=>{setResult(updated);onUpdated?.(updated);setViewVersion(undefined);setVersions([]);}} />;
+  const subtitleSettings=<OutputSubtitleSettings key={`${collection}:${output}:${viewVersion??plan.revision}`} project={project} collection={collection} plan={subtitlePlan} disabled={busy||historical||dirty} disabledReason={historical?"历史版本只读，请切回当前版本后修改或翻译。":dirty?"请先保存或放弃范围修改，再修改或翻译字幕。":undefined} onDirty={setSubtitleDirty} onUpdated={updated=>receiveUpdated(updated)} />;
   const hookCandidates=visibleClips.filter(clip=>clip.role==="body"&&!clip.deleted&&!visibleClips.some(hook=>hook.role==="hook"&&hook.segment_id===clip.segment_id&&hook.start_ms===clip.start_ms&&hook.end_ms===clip.end_ms));
   const selectedHookSource=hookCandidates.find(clip=>clip.instance_id===hookSourceId)??hookCandidates[0];
   function changeRole(clip:HighlightClip,role:"hook"|"body"){
@@ -109,19 +135,20 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
   }
   function renderClip(clip:HighlightClip,index:number){
     return <OutputItemEditor
-      key={(viewVersion??currentPlan.revision)+":"+clip.instance_id}
+      key={`${draftScope}:${historical?viewVersion:"current"}:${clip.instance_id}`}
       clip={clip}
       subtitleMode={(visibleVersion??currentPlan).subtitle_mode??undefined}
       busy={busy||historical}
       splitDisabled={dirty||historical}
-      onTextDraftChange={onTextDraftChange}
+      textDraft={historical?undefined:textDrafts[clip.instance_id]}
+      onTextDraftChange={draft=>onTextDraftChange(clip,draft)}
       onSplitPreview={async lines=>{if(dirty||historical)throw new Error("请先保存范围草稿并切回当前版本");return (await previewManualSplit(project,collection,output,clip.instance_id,currentPlan.revision,lines)).ranges;}}
-      onSplitApply={lines=>update(()=>applyManualSplit(project,collection,output,clip.instance_id,currentPlan.revision,lines))}
+      onSplitApply={lines=>update(()=>applyManualSplit(project,collection,output,clip.instance_id,currentPlan.revision,lines),[clip.instance_id])}
       range={ranges[clip.instance_id]??{start:clip.start_ms,end:clip.end_ms}}
       durationMs={limit||undefined}
       onRange={(start,end)=>changeRange(clip.instance_id,start,end)}
       onAudition={part=>{setRendered(false);setAudition(previous=>({id:clip.instance_id,part,sequence:(previous?.sequence??0)+1}));}}
-      onSave={changes=>dirty?Promise.reject(new Error("请先保存或放弃范围修改")):update(()=>editOutputItem(project,collection,output,clip.instance_id,changes))}
+      onSave={changes=>dirty?Promise.reject(new Error("请先保存或放弃范围修改")):update(()=>editOutputItem(project,collection,output,clip.instance_id,changes),changes.display_text!==undefined||changes.translation_text!==undefined?[clip.instance_id]:[])}
       onJump={seconds=>setJumpTo(previous=>({ms:seconds===undefined?clip.start_ms:Math.round(seconds*1000),sequence:(previous?.sequence??0)+1}))}
       actions={<>
         <button disabled={busy||historical||dirty||index===0||visibleClips[index-1]?.role!==clip.role} onClick={()=>{const order=visibleClips.map(entry=>entry.instance_id);[order[index-1],order[index]]=[order[index],order[index-1]];void update(()=>reorderOutput(project,collection,output,order,{})).catch(reason=>setActionError(String(reason)));}}>上移</button>
@@ -140,7 +167,7 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
     try{await singleSettings.flush();}catch{throw new Error("字幕设置已应用；画面和音频设置尚未同步，请点击重试保存导出设置。");}
   }
   const edit=<>
-    {plan.workflow==="speech_cleanup"&&<CleanupReview key={output} project={project} collection={collection} plan={plan} sourceUrl={sourceUrl} sourceDuration={limit} disabled={busy||historical||dirty||unsavedSubtitles} onUpdated={value=>{setResult(value);onUpdated?.(value);setVersions([]);}} onRestore={id=>update(()=>editOutputItem(project,collection,output,id,{deleted:false}))}/>}
+    {plan.workflow==="speech_cleanup"&&<CleanupReview key={output} project={project} collection={collection} plan={plan} sourceUrl={sourceUrl} sourceDuration={limit} disabled={busy||historical||dirty||unsavedSubtitles} onUpdated={value=>receiveUpdated(value)} onRestore={id=>update(()=>editOutputItem(project,collection,output,id,{deleted:false}))}/>}
     {navigation&&createPortal(<div className="draft-dialog" role="dialog" aria-label="未保存修改"><p>范围尚未保存，是否保存后切换？</p><button disabled={busy||!valid} onClick={()=>void saveDraft().then(ok=>{if(ok){const go=navigation;setNavigation(null);go();}})}>保存并切换</button><button onClick={()=>{const go=navigation;discard();setNavigation(null);go();}}>放弃并切换</button><button onClick={()=>setNavigation(null)}>继续编辑</button></div>,document.body)}
     <section className="output-preset-section" aria-label="成片导出预设"><h3>导出预设</h3><ExportPresetControls draft={singleSettings.draft} onChange={singleSettings.change} saveOptions={{...singleSettings.draft.options,subtitle_settings:subtitleSettingsFromPlan(currentPlan)}} onApply={applyPreset} disabled={busy||historical||dirty||unsavedSubtitles||!singleSettings.loaded||!!singleSettings.loadError||singleSettings.saving||!!singleSettings.saveError} disabledReason={dirty||unsavedSubtitles?"先保存或放弃当前修改，再保存或应用预设。":historical?"历史版本只读，请切回当前版本后应用预设。":undefined}/><ExportDraftStatus state={singleSettings}/></section>
     <div className="edit-section-tabs" role="tablist" aria-label="编辑区域">

@@ -1,14 +1,19 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { HighlightClip, SplitRange } from "./api";
 
+export type OutputTextDraft = {text?: string; translation?: string};
+
 type Changes = {deleted?: boolean; display_text?: string;translation_text?:string; source_start_ms?: number; source_end_ms?: number};
-export function OutputItemEditor({clip, busy, subtitleMode, onSave, onJump, actions, range, onRange, onAudition, durationMs, onSplitPreview, onSplitApply, splitDisabled, onTextDraftChange}: {clip: HighlightClip; busy: boolean; subtitleMode?:"bilingual"|"translated"|"source"; onSave: (changes: Changes) => Promise<void>; onJump: (seconds?:number) => void; actions?:ReactNode;range?:{start:number;end:number};onRange?:(start:number,end:number)=>void;onAudition?:(part:"start"|"end"|"whole")=>void;durationMs?:number;onSplitPreview?:(lines:string[])=>Promise<SplitRange[]>;onSplitApply?:(lines:string[])=>Promise<void>;splitDisabled?:boolean;onTextDraftChange?:(id:string,dirty:boolean)=>void}) {
+export function OutputItemEditor({clip, busy, subtitleMode, onSave, onJump, actions, range, onRange, onAudition, durationMs, onSplitPreview, onSplitApply, splitDisabled, textDraft, onTextDraftChange}: {clip: HighlightClip; busy: boolean; subtitleMode?:"bilingual"|"translated"|"source"; onSave: (changes: Changes) => Promise<void>; onJump: (seconds?:number) => void; actions?:ReactNode;range?:{start:number;end:number};onRange?:(start:number,end:number)=>void;onAudition?:(part:"start"|"end"|"whole")=>void;durationMs?:number;onSplitPreview?:(lines:string[])=>Promise<SplitRange[]>;onSplitApply?:(lines:string[])=>Promise<void>;splitDisabled?:boolean;textDraft?:OutputTextDraft;onTextDraftChange:(draft:OutputTextDraft)=>void}) {
   const [splitPreview,setSplitPreview]=useState<{lines:string[];ranges:SplitRange[]}|null>(null);
   const [splitting,setSplitting]=useState(false);
-  const [translation,setTranslation]=useState(clip.translation_text??"");
-  const [savedTranslation,setSavedTranslation]=useState(clip.translation_text??"");
-  const [draft, setDraft] = useState(clip.text);
-  const [savedText, setSavedText] = useState(clip.text);
+  useEffect(()=>setSplitPreview(null),[clip.text,clip.start_ms,clip.end_ms]);
+  const draft = textDraft?.text ?? clip.text;
+  const translation = textDraft?.translation ?? clip.translation_text ?? "";
+  const savedText = clip.text;
+  const savedTranslation = clip.translation_text ?? "";
+  function setDraft(text:string){onTextDraftChange({...textDraft,text});}
+  function setTranslation(translation:string){onTextDraftChange({...textDraft,translation});}
   const [localStart, setStart] = useState(clip.start_ms / 1000);
   const [localEnd, setEnd] = useState(clip.end_ms / 1000);
   const start=range?range.start/1000:localStart;const end=range?range.end/1000:localEnd;
@@ -19,14 +24,12 @@ export function OutputItemEditor({clip, busy, subtitleMode, onSave, onJump, acti
   const [message, setMessage] = useState("");
   async function save(changes: Changes) {
     setError(""); setMessage("");
-    try {await onSave(changes); if(changes.display_text !== undefined)setSavedText(changes.display_text); if(changes.translation_text !== undefined)setSavedTranslation(changes.translation_text); setMessage(changes.display_text !== undefined || changes.translation_text !== undefined ? "字幕已保存" : changes.source_start_ms !== undefined ? "范围已保存，字幕已按新范围更新" : "片段状态已保存（未保存字幕草稿）");}
+    try {await onSave(changes); setMessage(changes.display_text !== undefined || changes.translation_text !== undefined ? "字幕已保存" : changes.source_start_ms !== undefined ? "范围已保存，字幕已按新范围更新" : "片段状态已保存（未保存字幕草稿）");}
     catch (reason: unknown) {setError(reason instanceof Error ? reason.message : "保存失败");}
   }
   const valid = Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end > start && end <= limit;
-  const unsaved=draft!==savedText||translation!==savedTranslation||Math.round(start*1000)!==clip.start_ms||Math.round(end*1000)!==clip.end_ms;
   const textUnsaved=draft!==savedText||translation!==savedTranslation;
-  useEffect(()=>{onTextDraftChange?.(clip.instance_id,textUnsaved);},[clip.instance_id,textUnsaved,onTextDraftChange]);
-  useEffect(()=>()=>onTextDraftChange?.(clip.instance_id,false),[clip.instance_id,onTextDraftChange]);
+  const unsaved=textUnsaved||Math.round(start*1000)!==clip.start_ms||Math.round(end*1000)!==clip.end_ms;
   return <li className={clip.deleted ? "segment segment--delete subtitle-card" : "segment subtitle-card"}>
     <details className="subtitle-disclosure">
       <summary aria-label={`编辑字幕 ${clip.instance_id}`}>
