@@ -5,12 +5,29 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from threading import Lock, RLock
 from typing import cast
+from weakref import WeakValueDictionary
 
 from minicut.errors import ProcessingError, UserInputError
 from minicut.media import MediaAsset
 
 MANIFEST_SCHEMA_VERSION = 1
+
+# Repositories are created per request. Share a lock for each canonical project
+# path within this process; inactive projects need not stay in the registry.
+_project_locks: WeakValueDictionary[Path, RLock] = WeakValueDictionary()
+_project_locks_guard = Lock()
+
+
+def _project_lock(directory: Path) -> RLock:
+    key = directory.resolve()
+    with _project_locks_guard:
+        lock = _project_locks.get(key)
+        if lock is None:
+            lock = RLock()
+            _project_locks[key] = lock
+        return lock
 
 
 @dataclass(slots=True)
@@ -65,7 +82,7 @@ def _replace_file(source: Path, destination: Path) -> None:
 
 
 class ProjectRepository:
-    """Persist one project manifest in a local directory."""
+    """Persist a project with serialized manifest mutations in one process."""
 
     def __init__(
         self,
@@ -76,16 +93,18 @@ class ProjectRepository:
         self.project_directory = Path(project_directory)
         self.manifest_path = self.project_directory / "manifest.json"
         self._replace_file = replace_file
+        self._mutation_lock = _project_lock(self.project_directory)
 
     def create(self, manifest: ProjectManifest) -> None:
         """Create a new manifest without replacing an existing project."""
-        self.project_directory.mkdir(parents=True, exist_ok=True)
-        if self.manifest_path.exists():
-            raise UserInputError("Project manifest already exists")
-        try:
-            self._write(manifest)
-        except OSError as error:
-            raise ProcessingError("Project manifest could not be created") from error
+        with self._mutation_lock:
+            self.project_directory.mkdir(parents=True, exist_ok=True)
+            if self.manifest_path.exists():
+                raise UserInputError("Project manifest already exists")
+            try:
+                self._write(manifest)
+            except OSError as error:
+                raise ProcessingError("Project manifest could not be created") from error
 
     def read(self) -> ProjectManifest:
         """Read the current project manifest."""
@@ -103,33 +122,35 @@ class ProjectRepository:
             ) from error
 
     def update(self, manifest: ProjectManifest) -> None:
-        """Atomically replace an existing project manifest."""
-        if not self.manifest_path.is_file():
-            raise UserInputError("Project manifest does not exist")
-        try:
-            self._write(manifest)
-        except OSError as error:
-            raise ProcessingError("Project manifest could not be updated") from error
+        """Replace the entire manifest; derived edits must hold the mutation lock."""
+        with self._mutation_lock:
+            if not self.manifest_path.is_file():
+                raise UserInputError("Project manifest does not exist")
+            try:
+                self._write(manifest)
+            except OSError as error:
+                raise ProcessingError("Project manifest could not be updated") from error
 
     def add_asset(self, asset: MediaAsset) -> MediaAsset:
         """Register new content or return the matching existing asset."""
-        manifest = self.read()
-        for existing_asset in manifest.assets:
-            if existing_asset.content_fingerprint == asset.content_fingerprint:
-                return existing_asset
+        with self._mutation_lock:
+            manifest = self.read()
+            for existing_asset in manifest.assets:
+                if existing_asset.content_fingerprint == asset.content_fingerprint:
+                    return existing_asset
 
-        for existing_asset in manifest.assets:
-            if existing_asset.asset_id == asset.asset_id:
-                raise UserInputError("Project asset ID already exists")
+            for existing_asset in manifest.assets:
+                if existing_asset.asset_id == asset.asset_id:
+                    raise UserInputError("Project asset ID already exists")
 
-        updated_manifest = ProjectManifest(
-            project_id=manifest.project_id,
-            assets=(*manifest.assets, asset),
-            schema_version=manifest.schema_version,
-            name=manifest.name,
-        )
-        self.update(updated_manifest)
-        return asset
+            updated_manifest = ProjectManifest(
+                project_id=manifest.project_id,
+                assets=(*manifest.assets, asset),
+                schema_version=manifest.schema_version,
+                name=manifest.name,
+            )
+            self.update(updated_manifest)
+            return asset
 
     def _write(self, manifest: ProjectManifest) -> None:
         temporary_path: Path | None = None

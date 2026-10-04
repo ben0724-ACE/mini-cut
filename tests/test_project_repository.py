@@ -1,8 +1,12 @@
 import json
 import unittest
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event
 from typing import cast
+
+import pytest
 
 from minicut.errors import ProcessingError, UserInputError
 from minicut.media import MediaAsset
@@ -49,6 +53,65 @@ class FailingReplacer:
     def __call__(self, source: Path, destination: Path) -> None:
         self.temporary_path = source
         raise OSError("simulated raw filesystem failure")
+
+
+@pytest.mark.parametrize("case", ["different_content", "same_content", "conflicting_id"])
+def test_concurrent_asset_registration_shares_lock_across_repositories(
+    tmp_path: Path, case: str
+) -> None:
+    directory = tmp_path / "project"
+    repository = ProjectRepository(directory)
+    repository.create(ProjectManifest(project_id="project-1", name="我的播客"))
+    first = _asset()
+    second = _asset(
+        asset_id=first.asset_id if case == "conflicting_id" else "asset-2",
+        content_fingerprint=(
+            first.content_fingerprint if case == "same_content" else "fingerprint-2"
+        ),
+    )
+    writing = Event()
+    release = Event()
+    second_started = Event()
+
+    def pause_replace(source: Path, destination: Path) -> None:
+        writing.set()
+        assert release.wait(5), "first writer was not released"
+        source.replace(destination)
+
+    first_repository = ProjectRepository(directory, replace_file=pause_replace)
+    # Equivalent paths and distinct repository instances must share the same lock.
+    second_repository = ProjectRepository(directory / ".." / directory.name)
+
+    def register_second() -> MediaAsset:
+        second_started.set()
+        return second_repository.add_asset(second)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_result = executor.submit(first_repository.add_asset, first)
+        try:
+            assert writing.wait(5), "first writer did not reach replacement"
+            second_result = executor.submit(register_second)
+            assert second_started.wait(5), "second registration did not start"
+            try:
+                second_result.result(timeout=0.2)
+            except TimeoutError:
+                pass
+        finally:
+            release.set()
+        assert first_result.result(timeout=5) == first
+        if case == "conflicting_id":
+            with pytest.raises(UserInputError, match="asset ID already exists"):
+                second_result.result(timeout=5)
+        else:
+            assert second_result.result(timeout=5) == (
+                first if case == "same_content" else second
+            )
+
+    manifest = repository.read()
+    assert manifest.assets == (
+        (first, second) if case == "different_content" else (first,)
+    )
+    assert manifest.name == "我的播客"
 
 
 class ProjectRepositoryTest(unittest.TestCase):
