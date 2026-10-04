@@ -1,7 +1,7 @@
 import {useEffect,useRef,useState} from "react";
-import {getHighlights,listAssets,recoverHighlights,readHighlightTask,saveHighlightSelection,startOutputExportBatch,uploadAsset,type AssetDetail,type HighlightResult,type HighlightOutput} from "./api";
+import {getHighlights,listAssets,recoverHighlights,recoverOutputExport,readHighlightTask,saveHighlightSelection,startOutputExportBatch,uploadAsset,type AssetDetail,type HighlightResult,type HighlightOutput} from "./api";
 import {exportSettingsRoute,getExportDraft,type ExportOptions} from "./exportSettingsApi";
-import {navigateToExportResults} from "./exportNavigation";
+import {navigateToExportResults,type ExportLocationEntry} from "./exportNavigation";
 import {QuickPreview} from "./QuickPreview";
 import {WorkflowManager} from "./WorkflowManager";
 import {GenerationDetails} from "./GenerationDetails";
@@ -16,10 +16,17 @@ export function MinimalWorkspace({project,onRefine}:{project:string;onRefine:(co
   const [assets,setAssets]=useState<AssetDetail[]>([]);const [assetId,setAssetId]=useState("");const [file,setFile]=useState<File|null>(null);const input=useRef<HTMLInputElement>(null);
   const [run,setRun]=useState<WorkflowRun|null>(null);const [result,setResult]=useState<HighlightResult|null>(null);const [selected,setSelected]=useState<string[]>([]);const [focused,setFocused]=useState("");
   const [detailsOpen,setDetailsOpen]=useState(false);
+  const [recoveredExports,setRecoveredExports]=useState<{project:string;collection:string;entries:ExportLocationEntry[]}|null>(null);
   const [loaded,setLoaded]=useState(false);const [busy,setBusy]=useState(false);const [error,setError]=useState("");const [retry,setRetry]=useState(0);const [libraryRetry,setLibraryRetry]=useState(0);const [status,setStatus]=useState("");
   const lock=useRef(false);const runKey=useRef<string|null>(null);const uploaded=useRef<string|null>(null);const exportKey=useRef<string|null>(null);
   const active=run?.status==="pending"||run?.status==="running";
   const workflow=workflows.find(w=>w.workflow_id===workflowId);const output=result?.outputs.find(o=>o.output_id===focused)??result?.outputs[0];
+  const collection=result?.collection_id??"";const outputIds=JSON.stringify(result?.outputs.map(o=>o.output_id)??[]);
+  const exportsForCollection=run?.result?.collection_id===collection?run.exports??[]:[];
+  const workflowExports=JSON.stringify(exportsForCollection);
+  const recoveredEntries=recoveredExports?.project===project&&recoveredExports.collection===collection?recoveredExports.entries:[];
+  const exportsByOutput=new Map([...exportsForCollection,...recoveredEntries].map(entry=>[entry.outputId,entry]));
+  const exportEntries=result?.outputs.flatMap(o=>exportsByOutput.has(o.output_id)?[exportsByOutput.get(o.output_id)!]:[])??[];
   function applyResult(value:HighlightResult|null){setResult(value);setSelected(value?.selected_output_ids??[]);}
   useEffect(()=>{const refresh=()=>setLibraryRetry(value=>value+1);window.addEventListener(workflowsChanged,refresh);return()=>window.removeEventListener(workflowsChanged,refresh);},[]);
   useEffect(()=>{const controller=new AbortController();listWorkflows(controller.signal).then(value=>{if(!controller.signal.aborted){setWorkflows(value);setWorkflowId(current=>value.some(w=>w.workflow_id===current)?current:value[0]?.workflow_id??"");}}).catch(reason=>{if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"无法读取工作流");});return()=>controller.abort();},[libraryRetry,retry]);
@@ -29,6 +36,13 @@ export function MinimalWorkspace({project,onRefine}:{project:string;onRefine:(co
     const current=generation?await getHighlights(project,generation.collection_id,controller.signal):null;
     if(!controller.signal.aborted){applyResult(current);setLoaded(true);}
   }).catch(reason=>{if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"无法恢复工作区");});return()=>controller.abort();},[project,retry]);
+  useEffect(()=>{
+    if(!collection)return;const controller=new AbortController();const ids=JSON.parse(outputIds) as string[];
+    Promise.all(ids.map(async outputId=>{const task=await recoverOutputExport(project,collection,outputId,controller.signal);return task?{outputId,taskId:task.task_id}:null;})).then(entries=>{
+      if(!controller.signal.aborted)setRecoveredExports({project,collection,entries:entries.filter((entry):entry is ExportLocationEntry=>entry!==null)});
+    }).catch(reason=>{if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"无法恢复导出结果");});
+    return()=>controller.abort();
+  },[project,collection,outputIds,workflowExports,retry]);
   useEffect(()=>{if(!active||!run)return;const controller=new AbortController();const timer=setTimeout(async()=>{try{
     const latest=await latestWorkflowRun(project,controller.signal);if(controller.signal.aborted)return;setRun(latest);
     if(latest?.result&&(latest.result.collection_id!==result?.collection_id||latest.status!==run.status||latest.phase!==run.phase)){const current=await getHighlights(project,latest.result.collection_id,controller.signal);if(!controller.signal.aborted)applyResult(current);}
@@ -73,11 +87,10 @@ export function MinimalWorkspace({project,onRefine}:{project:string;onRefine:(co
     {run&&<div className="minimal-progress" role="status"><span className="minimal-progress-text"><strong>{run.workflow_name}</strong> · {run.status==="succeeded"?"已完成":run.status==="failed"?"执行失败":run.status==="cancelled"?"已取消":phaseLabels[run.phase]??run.phase}{active&&status?` · ${status}`:""}</span>
       {active&&<button type="button" disabled={busy||run.cancel_requested} onClick={()=>void action(async()=>setRun(await workflowAction(project,run.task_id,"cancel")))}>{run.cancel_requested?"正在取消…":"取消工作流"}</button>}
       {(run.status==="failed"||run.status==="cancelled")&&<button type="button" disabled={busy} onClick={()=>void action(async()=>setRun(await workflowAction(project,run.task_id,"resume")))}>继续工作流</button>}
-      {!!run.exports?.length&&run.result&&<button type="button" onClick={()=>navigateToExportResults(project,run.result!.collection_id,run.exports)}>查看导出结果</button>}
     </div>}
     {run?.error&&<p role="alert" className="minimal-notice">{run.error}</p>}
     {result?<section aria-label="极简模式结果" className="minimal-results">
-      <div className="minimal-results-heading"><h2>候选作品 <span className="muted">{result.outputs.length} 条</span></h2><div className="minimal-results-actions"><button type="button" onClick={()=>setDetailsOpen(true)}>生成详情</button><button type="button" disabled={blocked||!selected.length} onClick={()=>void action(exportSelected)}>导出已选作品（{selected.length}）</button></div></div>
+      <div className="minimal-results-heading"><h2>候选作品 <span className="muted">{result.outputs.length} 条</span></h2><div className="minimal-results-actions"><button type="button" onClick={()=>setDetailsOpen(true)}>生成详情</button>{exportEntries.length>0&&<button type="button" onClick={()=>navigateToExportResults(project,result.collection_id,exportEntries)}>查看导出结果</button>}<button type="button" disabled={blocked||!selected.length} onClick={()=>void action(exportSelected)}>导出已选作品（{selected.length}）</button></div></div>
       {result.outputs.length?<div className="minimal-result-layout"><div className="minimal-candidates" aria-label="候选列表">{result.outputs.map(o=><article className={`minimal-candidate ${output?.output_id===o.output_id?"is-current":""}`} key={o.output_id}>
         <button className="candidate-title" type="button" title={o.title} aria-pressed={output?.output_id===o.output_id} onClick={()=>setFocused(o.output_id)}>{o.title}</button><p className="muted">{(o.duration_ms/1000).toFixed(1)} 秒</p>
         <div className="minimal-candidate-actions"><label className="checkbox-field"><input type="checkbox" aria-label={`选择${o.title}`} disabled={blocked} checked={selected.includes(o.output_id)} onChange={event=>void action(()=>toggleSelected(o.output_id,event.target.checked))}/>选择导出</label><button type="button" disabled={active} onClick={()=>onRefine(result.collection_id,o.output_id)}>精修</button></div>
