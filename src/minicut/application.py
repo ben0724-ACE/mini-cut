@@ -209,7 +209,11 @@ class TranscribeProjectUseCase:
                 transcript = self._transcriber(asset, request)
             if request.cancellation is not None:
                 request.cancellation.raise_if_cancelled()
-            cache.write(key, transcript)
+            from minicut.output_repository import TranscriptVersionRepository
+
+            TranscriptVersionRepository(
+                request.project_directory, asset.asset_id
+            ).publish(key, transcript)
         return TranscribeResult(
             transcript.transcript_id, asset.asset_id, len(transcript.words), reused
         )

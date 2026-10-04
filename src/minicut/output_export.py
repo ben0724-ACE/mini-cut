@@ -24,7 +24,6 @@ from minicut.render_command import SubtitleMode
 from minicut.render_profile import RenderProfile, source_dimensions
 from minicut.renderer import FfmpegRenderer
 from minicut.subtitle import parse_srt
-from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
 
 _DEFAULT_PROFILE = RenderProfile()
@@ -80,12 +79,7 @@ def export_output(
     repository = OutputCollectionRepository(project, collection)
     try:
         asset_id = json.loads(repository.path.read_text(encoding="utf-8"))["asset_id"]
-        cache = json.loads(
-            (project / ".minicut/transcripts" / f"{asset_id}.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        transcript = Transcript.from_dict(cache["transcript"])
+        transcript = repository.source_transcript(asset_id)
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise UserInputError(
             "Output and transcription are required for export"

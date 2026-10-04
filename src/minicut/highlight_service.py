@@ -42,19 +42,7 @@ def generate_highlights(
     *,
     cancellation: CancellationToken | None = None,
 ) -> dict[str, object]:
-    try:
-        cache = json.loads(
-            (project / ".minicut/transcripts" / f"{asset_id}.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        transcript = Transcript.from_dict(cache["transcript"])
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        raise UserInputError(
-            "Transcription is required before generating highlights"
-        ) from error
-    if transcript.source.asset_id != asset_id:
-        raise UserInputError("Transcript asset does not match")
+    transcript = _source_transcript(project, asset_id, collection_id)
     key = os.environ.get("DEEPSEEK_API_KEY", "")
     if not key:
         raise UserInputError("DeepSeek is not configured on the server")
@@ -237,7 +225,9 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
                 row["duration_ms"] = compile_output_timeline(
                     plan, segments, collection.asset_id
                 ).estimated_duration_ms
-                transcript = _source_transcript(project, collection.asset_id)
+                transcript = _source_transcript(
+                    project, collection.asset_id, collection_id
+                )
                 row["clips"] = [
                     {
                         "instance_id": item.instance_id,
@@ -281,12 +271,7 @@ def source_segments(
                     SemanticSegment.from_dict(row)
                     for row in json.loads(snapshot.read_text(encoding="utf-8"))
                 )
-        cache = json.loads(
-            (project / ".minicut/transcripts" / f"{asset}.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        transcript = Transcript.from_dict(cache["transcript"])
+        transcript = _source_transcript(project, asset, collection_id)
         utterances = transcript.utterances or build_utterances(
             transcript, normalize_transcript_words(transcript)
         )
@@ -473,7 +458,7 @@ def translate_output_subtitles(
         translate_collection(
             replace(collection, plans=(plan,)),
             segments,
-            _source_transcript(project, collection.asset_id),
+            _source_transcript(project, collection.asset_id, collection_id),
             recorded,
             os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
             language,
@@ -611,7 +596,9 @@ def output_versions(
     ]
     plans = [plan for plan in plans if plan.revision < current.revision] + [current]
     by_id = {segment.segment_id: segment for segment in segments}
-    transcript = _source_transcript(project, cast(str, result["asset_id"]))
+    transcript = _source_transcript(
+        project, cast(str, result["asset_id"]), collection_id
+    )
     return [
         {
             "revision": plan.revision,
@@ -660,7 +647,13 @@ def output_versions(
     ]
 
 
-def _source_transcript(project: Path, asset_id: str) -> Transcript:
+def _source_transcript(
+    project: Path, asset_id: str, collection_id: str | None = None
+) -> Transcript:
+    if collection_id is not None:
+        return OutputCollectionRepository(project, collection_id).source_transcript(
+            asset_id
+        )
     data = json.loads(
         (project / ".minicut/transcripts" / f"{asset_id}.json").read_text(
             encoding="utf-8"
@@ -766,7 +759,9 @@ def split_saved_output(
         raise UserInputError("作品不存在")
     if plan.revision != base_revision:
         raise UserInputError("版本冲突，请刷新后重试")
-    updated = split_output_sentences(plan, segments, _source_transcript(project, asset))
+    updated = split_output_sentences(
+        plan, segments, _source_transcript(project, asset, collection_id)
+    )
     if updated.items != plan.items:
         updated = replace(updated, revision=plan.revision + 1)
         repository.write(
@@ -807,7 +802,11 @@ def manual_split_output(
         raise UserInputError("片段不存在")
     segment = next(s for s in segments if s.segment_id == item.segment_id)
     parts = split_item_by_lines(
-        item, segment, _source_transcript(project, asset), lines, plan.revision + 1
+        item,
+        segment,
+        _source_transcript(project, asset, collection_id),
+        lines,
+        plan.revision + 1,
     )
     if not apply:
         return {

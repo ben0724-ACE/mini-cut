@@ -4,7 +4,9 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from threading import RLock
 from typing import cast
+from uuid import uuid4
 
 from minicut.errors import ProcessingError, UserInputError
 from minicut.output_plan import (
@@ -13,20 +15,47 @@ from minicut.output_plan import (
     validate_output_id,
 )
 from minicut.semantic_segment import SemanticSegment
+from minicut.transcript import Transcript
+from minicut.transcription_cache import TranscriptionCacheKey
+
+_transcript_locks: dict[Path, RLock] = {}
 
 
 class OutputCollectionRepository:
     def __init__(self, project_directory: Path, collection_id: str) -> None:
         validate_output_id(collection_id)
+        self.project_directory = project_directory
         self.collection_id = collection_id
         self.path = (
             project_directory / ".minicut/output-collections" / f"{collection_id}.json"
         )
 
     def write_segments(self, segments: tuple[SemanticSegment, ...]) -> None:
-        self._write_json(
+        self.write_json(
             self.path.with_suffix(".segments.json"), [s.to_dict() for s in segments]
         )
+
+    def source_transcript(self, asset_id: str) -> Transcript:
+        """Bind once, including legacy collections, without changing edit revisions."""
+        sources = TranscriptVersionRepository(self.project_directory, asset_id)
+        binding_path = self.path.with_suffix(".transcript.json")
+        with sources.lock:
+            if binding_path.is_file():
+                try:
+                    binding = json.loads(binding_path.read_text(encoding="utf-8"))
+                    if binding["asset_id"] != asset_id:
+                        raise ValueError("transcript binding asset mismatch")
+                    return sources.read_version(binding["transcript_version"])
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    raise UserInputError(
+                        "Bound source transcript is missing or invalid"
+                    ) from error
+            version, transcript = sources.latest()
+            self.write_json(
+                binding_path,
+                {"asset_id": asset_id, "transcript_version": version},
+            )
+            return transcript
 
     def write(
         self, collection: OutputCollection, segments: tuple[SemanticSegment, ...]
@@ -39,10 +68,10 @@ class OutputCollectionRepository:
                 json.loads(self.path.read_text(encoding="utf-8"))
             )
             for plan in prior.plans:
-                self._write_json(
+                self.write_json(
                     self.version_path(plan.output_id, plan.revision), plan.to_dict()
                 )
-        self._write_json(self.path, collection.to_dict())
+        self.write_json(self.path, collection.to_dict())
 
     def version_path(self, output_id: str, revision: int) -> Path:
         validate_output_id(output_id)
@@ -67,7 +96,7 @@ class OutputCollectionRepository:
         )
 
     def write_highlight_result(self, result: object) -> None:
-        self._write_json(
+        self.write_json(
             self.path.parent.parent
             / "highlight-results"
             / f"{self.collection_id}.json",
@@ -85,10 +114,10 @@ class OutputCollectionRepository:
         if export_id is not None:
             validate_output_id(export_id)
             path = path.parent / export_id / path.name
-        self._write_json(path, record)
+        self.write_json(path, record)
 
     @staticmethod
-    def _write_json(path: Path, value: object) -> None:
+    def write_json(path: Path, value: object) -> None:
         temporary: Path | None = None
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,3 +151,94 @@ class OutputCollectionRepository:
             return collection
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
             raise UserInputError("Output collection is missing or invalid") from error
+
+
+class TranscriptVersionRepository:
+    """Keep full word-level versions while retaining the latest keyed cache."""
+
+    def __init__(self, project_directory: Path, asset_id: str) -> None:
+        validate_output_id(asset_id)
+        self.project_directory = project_directory
+        self.asset_id = asset_id
+        self.cache_path = (
+            project_directory / ".minicut/transcripts" / f"{asset_id}.json"
+        )
+        self.lock = _transcript_locks.setdefault(project_directory.resolve(), RLock())
+
+    def version_path(self, version: str) -> Path:
+        validate_output_id(version)
+        return (
+            self.project_directory
+            / ".minicut/transcript-versions"
+            / self.asset_id
+            / f"{version}.json"
+        )
+
+    def read_version(self, version: str) -> Transcript:
+        try:
+            transcript = Transcript.from_dict(
+                json.loads(self.version_path(version).read_text(encoding="utf-8"))
+            )
+            if transcript.source.asset_id != self.asset_id:
+                raise ValueError("transcript asset mismatch")
+            return transcript
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise UserInputError(
+                "Source transcript version is missing or invalid"
+            ) from error
+
+    def _snapshot(self, transcript: Transcript) -> str:
+        if transcript.source.asset_id != self.asset_id:
+            raise UserInputError("Transcript asset does not match")
+        version = uuid4().hex
+        OutputCollectionRepository.write_json(
+            self.version_path(version), transcript.to_dict()
+        )
+        return version
+
+    def latest(self) -> tuple[str, Transcript]:
+        with self.lock:
+            try:
+                data = json.loads(self.cache_path.read_text(encoding="utf-8"))
+                version = data.get("transcript_version")
+                if version is not None:
+                    return version, self.read_version(version)
+                transcript = Transcript.from_dict(data["transcript"])
+                # Legacy caches stay byte-for-byte unchanged when first bound.
+                return self._snapshot(transcript), transcript
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                raise UserInputError(
+                    "Source transcript is missing or invalid"
+                ) from error
+
+    def publish(self, key: TranscriptionCacheKey, transcript: Transcript) -> None:
+        with self.lock:
+            if self.cache_path.is_file():
+                # Archive before replacement, even if no collection was opened.
+                version, _ = self.latest()
+                directory = self.project_directory / ".minicut/output-collections"
+                for path in directory.glob("*.json"):
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    if not isinstance(data, dict) or "collection_id" not in data:
+                        continue
+                    payload = cast(dict[str, object], data)
+                    if payload.get("asset_id") != self.asset_id:
+                        continue
+                    repository = OutputCollectionRepository(
+                        self.project_directory, cast(str, payload["collection_id"])
+                    )
+                    binding_path = repository.path.with_suffix(".transcript.json")
+                    if not binding_path.is_file():
+                        OutputCollectionRepository.write_json(
+                            binding_path,
+                            {"asset_id": self.asset_id, "transcript_version": version},
+                        )
+            version = self._snapshot(transcript)
+            OutputCollectionRepository.write_json(
+                self.cache_path,
+                {
+                    "key": key.to_dict(),
+                    "transcript": transcript.to_dict(),
+                    "transcript_version": version,
+                },
+            )
