@@ -6,6 +6,7 @@ import os
 import shutil
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -491,13 +492,15 @@ def _job_path(project_directory: Path, task_id: str) -> Path:
 def _write_job(path: Path, payload: dict[str, object], *, create: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if create:
+        output = path.open("x", encoding="utf-8")
         try:
-            with path.open("x", encoding="utf-8") as output:
+            with output:
                 json.dump(payload, output, ensure_ascii=False)
                 output.write("\n")
-            return
-        except FileExistsError:
+        except Exception:
+            path.unlink(missing_ok=True)
             raise
+        return
     temporary_path: Path | None = None
     try:
         with NamedTemporaryFile(
@@ -551,6 +554,15 @@ def _task_response(payload: dict[str, object]) -> TaskResponse:
             },
         }
     return TaskResponse.model_validate(payload)
+
+
+@dataclass
+class _TaskRunner:
+    run: Callable[[], None]
+    fail_submission: Callable[[], None]
+
+    def __call__(self) -> None:
+        self.run()
 
 
 def _plan_response(result: ReadPlanResult) -> PlanDetailResponse:
@@ -759,6 +771,17 @@ def create_app(
         job["progress"] = {"completed": done, "total": total, "phase": "transcription"}
         _write_job(path, job)
 
+    def existing_task(
+        path: Path, kind: str, request_data: dict[str, object]
+    ) -> TaskResponse:
+        existing = _read_job(path)
+        if existing.get("kind") != kind or existing.get("request") != request_data:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency key is already used by another request",
+            )
+        return _task_response(existing)
+
     def submit_task(
         project_id: str,
         task_id: str,
@@ -767,7 +790,7 @@ def create_app(
         background_tasks: BackgroundTasks,
         operation: Callable[[], dict[str, object]],
         *,
-        runners: list[Callable[[], None]] | None = None,
+        runners: list[_TaskRunner] | None = None,
         generation_config: dict[str, object] | None = None,
     ) -> TaskResponse:
         project_directory = root / project_id
@@ -790,13 +813,20 @@ def create_app(
         try:
             _write_job(path, pending, create=True)
         except FileExistsError:
-            existing = _read_job(path)
-            if existing.get("kind") != kind or existing.get("request") != request_data:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Idempotency key is already used by another request",
-                ) from None
-            return _task_response(existing)
+            return existing_task(path, kind, request_data)
+
+        def fail_submission() -> None:
+            job = _read_job(path)
+            if job.get("status") == "pending":
+                _write_job(
+                    path,
+                    {
+                        **job,
+                        "status": "failed",
+                        "error": "任务提交或调度失败；可恢复已保存的任务。",
+                    },
+                )
+                export_tokens.pop((project_id, task_id), None)
 
         def run() -> None:
             # ML/model work stays serial while FFmpeg work uses a small bounded pool.
@@ -813,8 +843,8 @@ def create_app(
                     return
             started = monotonic()
             running = {**pending, "status": "running"}
-            _write_job(path, running)
             try:
+                _write_job(path, running)
                 token.raise_if_cancelled()
                 result = operation()
                 _write_job(
@@ -854,22 +884,47 @@ def create_app(
                 slot.release()
                 export_tokens.pop((project_id, task_id), None)
 
-        if runners is None:
-            background_tasks.add_task(run)
-        else:
-            runners.append(run)
-        return _task_response(pending)
+        try:
+            response = _task_response(pending)
+            runner = _TaskRunner(run, fail_submission)
+            if runners is None:
+                background_tasks.add_task(runner)
+            else:
+                runners.append(runner)
+            return response
+        except Exception:
+            fail_submission()
+            raise
 
-    def run_export_batch(runners: list[Callable[[], None]]) -> None:
+    def fail_submissions(runners: list[_TaskRunner]) -> None:
+        # Attempt every cleanup even if one task file cannot be updated.
+        first_error: Exception | None = None
+        try:
+            for runner in runners:
+                try:
+                    runner.fail_submission()
+                except Exception as error:
+                    if first_error is None:
+                        first_error = error
+        finally:
+            runners.clear()
+        if first_error is not None:
+            raise first_error
+
+    def run_export_batch(runners: list[_TaskRunner]) -> None:
         if not runners:
             return
-        with ThreadPoolExecutor(
-            max_workers=min(export_concurrency, len(runners)),
-            thread_name_prefix="minicut-export",
-        ) as executor:
-            futures = [executor.submit(runner) for runner in runners]
-            for future in futures:
-                future.result()
+        try:
+            with ThreadPoolExecutor(
+                max_workers=min(export_concurrency, len(runners)),
+                thread_name_prefix="minicut-export",
+            ) as executor:
+                futures = [executor.submit(runner.run) for runner in runners]
+                for future in futures:
+                    future.result()
+        except Exception:
+            fail_submissions(runners)
+            raise
 
     @api.get("/api/projects/{project_id}/activity")
     def project_activity(project_id: ProjectId) -> dict[str, object]:  # pyright: ignore[reportUnusedFunction]
@@ -1049,13 +1104,11 @@ def create_app(
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
     )
 
-    def enqueue_output_export(
+    def resolve_output_export(
         project_id: ProjectId,
         body: OutputExportBody,
-        background_tasks: BackgroundTasks,
         idempotency_key: str,
-        runners: list[Callable[[], None]] | None = None,
-    ) -> TaskResponse:
+    ) -> OutputExportBody:
         existing_path = _job_path(root / project_id, idempotency_key)
         if body.cover_version is None and existing_path.is_file():
             existing_request = _read_job(existing_path).get("request")
@@ -1079,11 +1132,22 @@ def create_app(
                 "cover_snapshot": saved_cover[1] if saved_cover else None,
             }
         )
-        token = export_tokens.setdefault(
-            (project_id, idempotency_key), CancellationToken()
-        )
+        if existing_path.is_file():
+            existing_task(existing_path, "output-export", body.model_dump(mode="json"))
+        return body
+
+    def enqueue_output_export(
+        project_id: ProjectId,
+        body: OutputExportBody,
+        background_tasks: BackgroundTasks,
+        idempotency_key: str,
+        runners: list[_TaskRunner] | None = None,
+    ) -> TaskResponse:
 
         def operation() -> dict[str, object]:
+            token = export_tokens.setdefault(
+                (project_id, idempotency_key), CancellationToken()
+            )
             try:
                 return export_output(
                     root / project_id,
@@ -1137,7 +1201,10 @@ def create_app(
         idempotency_key: Annotated[str, task_key_header],
     ) -> TaskResponse:
         return enqueue_output_export(
-            project_id, body, background_tasks, idempotency_key
+            project_id,
+            resolve_output_export(project_id, body, idempotency_key),
+            background_tasks,
+            idempotency_key,
         )
 
     @api.post(
@@ -1151,19 +1218,32 @@ def create_app(
         background_tasks: BackgroundTasks,
         idempotency_key: Annotated[str, task_key_header],
     ) -> list[TaskResponse]:
-        runners: list[Callable[[], None]] = []
-        responses = [
-            enqueue_output_export(
+        inspect(project_id)
+        outputs = [
+            resolve_output_export(
                 project_id,
                 output,
-                background_tasks,
                 f"{idempotency_key}-{output.output_id}",
-                runners,
             )
             for output in body.outputs
         ]
-        background_tasks.add_task(run_export_batch, runners)
-        return responses
+        runners: list[_TaskRunner] = []
+        try:
+            responses = [
+                enqueue_output_export(
+                    project_id,
+                    output,
+                    background_tasks,
+                    f"{idempotency_key}-{output.output_id}",
+                    runners,
+                )
+                for output in outputs
+            ]
+            background_tasks.add_task(run_export_batch, runners)
+            return responses
+        except Exception:
+            fail_submissions(runners)
+            raise
 
     @api.post(
         "/api/projects/{project_id}/tasks/output-preview",
@@ -2296,23 +2376,37 @@ def create_app(
             ]
         else:
             # Use the same bounded FFmpeg worker pool as ordinary batch exports.
-            runners: list[Callable[[], None]] = []
+            runners: list[_TaskRunner] = []
             responses: list[TaskResponse] = []
-            for output in cast(list[JsonObject], data["outputs"]):
-                body = OutputExportBody.model_validate(output)
-                identity = f"{key}-{body.output_id}"
-                response = existing_or_submit(
-                    identity,
-                    lambda body=body, identity=identity: enqueue_output_export(
-                        project_id, body, background, identity, runners
-                    ),
+            try:
+                for output in cast(list[JsonObject], data["outputs"]):
+                    body = OutputExportBody.model_validate(output)
+                    identity = f"{key}-{body.output_id}"
+                    response = existing_or_submit(
+                        identity,
+                        lambda body=body, identity=identity: enqueue_output_export(
+                            project_id,
+                            resolve_output_export(project_id, body, identity),
+                            background,
+                            identity,
+                            runners,
+                        ),
+                    )
+                    responses.append(response)
+                # Recovery adapters schedule individual runners; include those in
+                # the same pool rather than executing retries sequentially.
+                runners.extend(
+                    cast(_TaskRunner, scheduled.func) for scheduled in background.tasks
                 )
-                responses.append(response)
-            # Recovery adapters schedule individual runners; include those in
-            # the same pool rather than executing retries sequentially.
-            runners.extend(scheduled.func for scheduled in background.tasks)
-            background.tasks.clear()
-            background.add_task(run_export_batch, runners)
+                background.tasks.clear()
+                background.add_task(run_export_batch, runners)
+            except Exception:
+                runners.extend(
+                    cast(_TaskRunner, scheduled.func) for scheduled in background.tasks
+                )
+                background.tasks.clear()
+                fail_submissions(runners)
+                raise
         started([response.task_id for response in responses])
         # All adapters above schedule synchronous local task runners.
         for scheduled in background.tasks:
