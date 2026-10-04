@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 import httpx
+import pytest
 
 from minicut.api import create_app
 from minicut.errors import UserInputError
@@ -65,6 +66,7 @@ def test_highlight_tasks_are_idempotent_and_recover_shortfall(tmp_path: Path) ->
             assert recovered["result"]["notes"] == ["数量不足"]
             assert len(calls) == 1
             assert calls[0].instructions == "保留限定条件"
+            assert calls[0].boundary_version == 3
 
     asyncio.run(run())
 
@@ -154,5 +156,81 @@ def test_generation_rejects_untranscribed_and_persists_failure(tmp_path: Path) -
             ).json()
             assert recovered["status"] == "failed"
             assert recovered["error"] == "DeepSeek not configured"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("saved_version", [None, 2])
+def test_boundary_request_version_is_preserved_on_resume(
+    tmp_path: Path, saved_version: int | None
+) -> None:
+    import json
+
+    directory = tmp_path / "demo"
+    ProjectRepository(directory).create(
+        ProjectManifest(
+            "demo", assets=(MediaAsset("asset", "/a.mp4", 1000, (), "fixture"),)
+        )
+    )
+    cache = directory / ".minicut/transcripts/asset.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text("{}")
+    jobs = directory / ".minicut/jobs"
+    jobs.mkdir()
+    request: dict[str, object] = {
+        "asset_id": "asset",
+        "preset": "podcast_highlights",
+        "count": 1,
+    }
+    if saved_version is not None:
+        request["boundary_version"] = saved_version
+    (jobs / "old.json").write_text(
+        json.dumps(
+            {
+                "task_id": "old",
+                "kind": "highlights",
+                "status": "failed",
+                "resumable": True,
+                "request": request,
+                "result": None,
+                "error": "interrupted",
+            }
+        )
+    )
+    seen: list[HighlightBrief] = []
+
+    def generate(
+        project: Path, asset: str, collection: str, brief: HighlightBrief
+    ) -> dict[str, object]:
+        seen.append(brief)
+        return {"collection_id": collection, "asset_id": asset, "outputs": []}
+
+    async def run() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(
+                app=create_app(tmp_path, highlights=generate)
+            ),
+            base_url="http://test",
+        ) as client:
+            assert (
+                await client.post("/api/projects/demo/tasks/old/resume")
+            ).status_code == 202
+            assert seen[-1].boundary_version == saved_version
+            assert (
+                await client.post(
+                    "/api/projects/demo/tasks/highlights",
+                    json={k: v for k, v in request.items() if k != "boundary_version"},
+                    headers={"Idempotency-Key": "new"},
+                )
+            ).status_code == 202
+            assert seen[-1].boundary_version == 3
+            saved = json.loads((jobs / "new.json").read_text())
+            assert saved["generation_config"]["boundary_version"] == 3
+            saved.update(status="failed", result=None, error="interrupted")
+            (jobs / "new.json").write_text(json.dumps(saved))
+            assert (
+                await client.post("/api/projects/demo/tasks/new/resume")
+            ).status_code == 202
+            assert seen[-1].boundary_version == 3
 
     asyncio.run(run())

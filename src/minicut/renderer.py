@@ -2,7 +2,8 @@
 
 import subprocess
 import time
-from collections.abc import Callable
+from collections import deque
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
@@ -70,12 +71,13 @@ def _publish(source: Path, destination: Path) -> None:
 
 def _drain(
     stream: TextIO | None,
-    destination: list[str],
+    destination: deque[str] | None,
     line_queue: Queue[str] | None = None,
 ) -> None:
     if stream is not None:
         for line in stream:
-            destination.append(line)
+            if destination is not None:
+                destination.append(line[-4096:])
             if line_queue is not None:
                 line_queue.put(line)
 
@@ -89,7 +91,7 @@ def _terminate_and_reap(process: RenderProcess) -> None:
         process.wait()
 
 
-def _error_summary(stderr_lines: list[str]) -> str:
+def _error_summary(stderr_lines: Iterable[str]) -> str:
     meaningful = [line.strip() for line in stderr_lines if line.strip()]
     if not meaningful:
         return "FFmpeg exited without an error message."
@@ -135,8 +137,7 @@ class FfmpegRenderer:
         except FileNotFoundError as error:
             raise RenderFailed("FFmpeg executable is not available.") from error
 
-        stdout_lines: list[str] = []
-        stderr_lines: list[str] = []
+        stderr_lines: deque[str] = deque(maxlen=200)
         progress_lines: Queue[str] = Queue()
         parser = FfmpegProgressParser()
         events: list[FfmpegProgressEvent] = []
@@ -155,7 +156,7 @@ class FfmpegRenderer:
         readers = (
             Thread(
                 target=_drain,
-                args=(process.stdout, stdout_lines, progress_lines),
+                args=(process.stdout, None, progress_lines),
                 daemon=True,
             ),
             Thread(target=_drain, args=(process.stderr, stderr_lines), daemon=True),
@@ -183,7 +184,13 @@ class FfmpegRenderer:
             reader.join()
         report_available_progress()
         if return_code != 0:
-            raise RenderFailed(f"FFmpeg render failed: {_error_summary(stderr_lines)}")
+            if return_code == -9:
+                raise RenderFailed(
+                    "FFmpeg 被信号 9 终止，可能是系统内存不足或进程被手动结束。请关闭并行渲染后重试。"
+                )
+            raise RenderFailed(
+                f"FFmpeg render failed (exit {return_code}): {_error_summary(stderr_lines)}"
+            )
         return tuple(events)
 
     def render_to_path(

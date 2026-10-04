@@ -10,6 +10,7 @@ from typing import cast
 
 from minicut.application import TimelineRenderer
 from minicut.audio_denoise import build_denoiser_registry, resolve_denoiser
+from minicut.cleanup_render import can_stream_cleanup, render_cleanup
 from minicut.errors import ProcessingError, UserInputError
 from minicut.export_settings import ExportSubtitleSettings
 from minicut.media import StreamType
@@ -18,9 +19,11 @@ from minicut.output_repository import OutputCollectionRepository
 from minicut.output_timeline import (
     OutputContextIssue,
     build_output_pages,
+    coalesce_output_media,
     compile_output_timeline,
     inspect_output_context,
     map_output_words,
+    validate_output_timeline,
 )
 from minicut.probe import ProbeResult, probe_media
 from minicut.project import ProjectRepository
@@ -239,26 +242,51 @@ class RenderOutputUseCase:
             ) as staging:
                 staged_video = Path(staging) / "result.mp4"
                 staged_subtitle = staged_video.with_suffix(".srt")
-                command = self._builder.build_output_timeline(
-                    timeline,
-                    plan,
-                    request.segments,
-                    collection.asset_id,
-                    assets,
-                    str(staged_video),
-                    requirements,
-                    request.video_metadata,
-                    audio_fade=fade,
-                    denoise_filter=None
-                    if denoiser is None
-                    else denoiser.ffmpeg_filter(),
-                )
-                self._renderer.render_to_path(
-                    command,
-                    staged_video,
-                    timeout_seconds=request.timeout_seconds,
-                    cancellation=request.cancellation,
-                )
+                media_timeline = coalesce_output_media(timeline, plan)
+                stream_cleanup = can_stream_cleanup(plan, media_timeline)
+                if stream_cleanup:
+                    validate_output_timeline(
+                        timeline,
+                        plan,
+                        request.segments,
+                        collection.asset_id,
+                        assets,
+                        requirements,
+                    )
+                    render_cleanup(
+                        media_timeline,
+                        assets[0],
+                        staged_video,
+                        request.video_metadata,
+                        fade,
+                        None if denoiser is None else denoiser.ffmpeg_filter(),
+                        requirements.require_audio,
+                        self._builder,
+                        self._renderer,
+                        request.timeout_seconds,
+                        request.cancellation,
+                    )
+                else:
+                    command = self._builder.build_output_timeline(
+                        timeline,
+                        plan,
+                        request.segments,
+                        collection.asset_id,
+                        assets,
+                        str(staged_video),
+                        requirements,
+                        request.video_metadata,
+                        audio_fade=fade,
+                        denoise_filter=None
+                        if denoiser is None
+                        else denoiser.ffmpeg_filter(),
+                    )
+                    self._renderer.render_to_path(
+                        command,
+                        staged_video,
+                        timeout_seconds=request.timeout_seconds,
+                        cancellation=request.cancellation,
+                    )
                 staged_subtitle.write_text(subtitle_text, encoding="utf-8")
                 styled_subtitles = request.subtitle_mode is SubtitleMode.BURNED
                 subtitle_input = staged_subtitle
@@ -298,6 +326,7 @@ class RenderOutputUseCase:
                     video_metadata=request.video_metadata,
                     styled_subtitles=styled_subtitles,
                     subtitle_fonts_directory=fonts_directory,
+                    worker_threads=2 if stream_cleanup else None,
                 )
                 self._renderer.render_to_path(
                     command,

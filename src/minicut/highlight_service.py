@@ -58,6 +58,12 @@ def generate_highlights(
     key = os.environ.get("DEEPSEEK_API_KEY", "")
     if not key:
         raise UserInputError("DeepSeek is not configured on the server")
+    if brief.cleanup_version in {1, 2}:
+        from minicut.speech_cleanup import generate_cleanup
+
+        return generate_cleanup(
+            project, asset_id, collection_id, brief, transcript, cancellation
+        )
     segments = sentence_segments(transcript)
     repository = OutputCollectionRepository(project, collection_id)
     repository.write_segments(segments)
@@ -206,6 +212,7 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
             }
             for plan in collection.plans:
                 row = rows[plan.output_id]
+                row["workflow"] = plan.workflow
                 row["title"] = plan.title
                 row["social_copy"] = plan.social_copy
                 row["revision"] = plan.revision
@@ -246,6 +253,7 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
                             item, by_id[item.segment_id], transcript
                         ),
                         "deleted": item.deleted,
+                        "cleanup_category": item.cleanup_category,
                         "start_ms": item.source_start_ms
                         if item.source_start_ms is not None
                         else by_id[item.segment_id].start_ms,
@@ -406,7 +414,9 @@ def save_output_subtitle_settings(
         subtitle_horizontal_percent=subtitle_horizontal_percent,
         subtitle_bottom_percent=subtitle_bottom_percent,
         subtitle_order=subtitle_order,
-        subtitle_style=style if style or replace_subtitle_style else plan.subtitle_style,
+        subtitle_style=style
+        if style or replace_subtitle_style
+        else plan.subtitle_style,
     )
     repository.write(
         replace(
@@ -633,6 +643,7 @@ def output_versions(
                     "translation_language": item.translation_language,
                     "subtitle_mode": item.subtitle_mode,
                     "deleted": item.deleted,
+                    "cleanup_category": item.cleanup_category,
                     "text": item.display_text
                     or item_source_text(item, by_id[item.segment_id], transcript),
                     "start_ms": item.source_start_ms
@@ -823,6 +834,36 @@ def manual_split_output(
             collection,
             plans=tuple(
                 updated if p.output_id == output_id else p for p in collection.plans
+            ),
+        ),
+        segments,
+    )
+    return read_highlights(project, collection_id)
+
+
+def rename_output(
+    project: Path, collection_id: str, output_id: str, base_revision: int, title: str
+) -> dict[str, object]:
+    title = title.strip()
+    if not title or len(title) > 200:
+        raise UserInputError("作品名需为 1–200 个字符")
+    result = read_highlights(project, collection_id)
+    segments = source_segments(project, cast(str, result["asset_id"]), collection_id)
+    repository = OutputCollectionRepository(project, collection_id)
+    collection = repository.read(segments)
+    plan = next((p for p in collection.plans if p.output_id == output_id), None)
+    if plan is None:
+        raise UserInputError("作品不存在")
+    if plan.revision != base_revision:
+        raise RevisionConflict("作品已有新版本，请刷新后重试")
+    repository.write(
+        replace(
+            collection,
+            plans=tuple(
+                replace(p, title=title, revision=p.revision + 1)
+                if p.output_id == output_id
+                else p
+                for p in collection.plans
             ),
         ),
         segments,

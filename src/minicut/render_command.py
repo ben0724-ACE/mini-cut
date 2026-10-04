@@ -19,6 +19,17 @@ from minicut.timeline_validation import (
 )
 
 
+def _sum_expressions(values: tuple[str, ...]) -> str:
+    # FFmpeg's expression parser has a nesting limit. A flat, left-associative
+    # sum with hundreds of cuts exceeds it; a balanced tree has logarithmic depth.
+    if not values:
+        return "0"
+    if len(values) == 1:
+        return values[0]
+    middle = len(values) // 2
+    return f"({_sum_expressions(values[:middle])}+{_sum_expressions(values[middle:])})"
+
+
 def _seconds(milliseconds: int) -> str:
     return f"{milliseconds / 1000:.3f}"
 
@@ -209,12 +220,25 @@ class RenderCommandBuilder:
         video_metadata: VideoOutputMetadata | None = None,
         styled_subtitles: bool = False,
         subtitle_fonts_directory: str | None = None,
+        worker_threads: int | None = None,
     ) -> tuple[str, ...]:
         """Attach a selectable track or render subtitle text into video frames."""
         input_url = _local_file_url(input_path, label="subtitle video input")
         subtitle_url = _local_file_url(subtitle_path, label="subtitle input")
         output_url = _local_file_url(output_path, label="subtitle video output")
-        command = [self.executable, "-nostdin", "-y", "-i", input_url]
+        command = [self.executable, "-nostdin", "-y"]
+        if worker_threads is not None:
+            if worker_threads < 1:
+                raise ValueError("render worker threads must be positive")
+            command.extend(
+                (
+                    "-filter_threads",
+                    str(worker_threads),
+                    "-threads",
+                    str(worker_threads),
+                )
+            )
+        command.extend(("-i", input_url))
         if mode is SubtitleMode.SOFT:
             command.extend(
                 (
@@ -271,6 +295,10 @@ class RenderCommandBuilder:
             )
         else:
             raise ValueError("unsupported subtitle output mode")
+        if worker_threads is not None and mode is SubtitleMode.BURNED:
+            command.extend(("-threads", str(worker_threads)))
+            if encoding.video_codec == "libx264":
+                command.extend(("-preset", "veryfast"))
         command.append(output_url)
         return tuple(command)
 
@@ -416,6 +444,151 @@ class RenderCommandBuilder:
                 ),
                 0,
             ),
+        )
+
+    def build_cleanup_video(
+        self,
+        timeline: Timeline,
+        asset: MediaAsset,
+        output_path: str,
+        metadata: VideoOutputMetadata,
+    ) -> tuple[str, ...]:
+        """One decoder/filter chain; cut timestamps share one output clock."""
+        selected = _sum_expressions(
+            tuple(
+                f"gte(t,{_seconds(c.source_range.start_ms)})*lt(t,{_seconds(c.source_range.end_ms)})"
+                for c in timeline.clips
+            )
+        )
+        previous = 0
+        offsets: list[str] = []
+        for clip in timeline.clips:
+            gap = clip.source_range.start_ms - previous
+            if gap:
+                offsets.append(
+                    f"gte(T,{_seconds(clip.source_range.start_ms)})*{_seconds(gap)}"
+                )
+            previous = clip.source_range.end_ms
+        removed = _sum_expressions(tuple(offsets))
+        geometry = (
+            f"scale={metadata.width}:{metadata.height}:force_original_aspect_ratio=decrease,"
+            f"pad={metadata.width}:{metadata.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,"
+            if metadata.fit == "pad"
+            else f"scale={metadata.width}:{metadata.height}:force_original_aspect_ratio=increase,"
+            f"crop={metadata.width}:{metadata.height},setsar=1,"
+        )
+        filters = (
+            f"settb=AVTB,select='{selected}',setpts='PTS-({removed})/TB',"
+            + _source_crop(metadata)
+            + geometry
+            + f"format=yuv420p,fps={metadata.frame_rate}"
+        )
+        return (
+            self.executable,
+            "-nostdin",
+            "-y",
+            "-threads",
+            "2",
+            "-filter_threads",
+            "2",
+            "-t",
+            _seconds(timeline.clips[-1].source_range.end_ms),
+            "-i",
+            _local_file_url(asset.source_path, label="cleanup source"),
+            "-map",
+            f"0:{_first_stream_index(asset, StreamType.VIDEO)}",
+            "-an",
+            "-vf",
+            filters,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-threads",
+            "2",
+            "-pix_fmt",
+            "yuv420p",
+            _local_file_url(output_path, label="cleanup video output"),
+        )
+
+    def build_cleanup_audio(
+        self,
+        asset: MediaAsset,
+        start_ms: int,
+        duration_ms: int,
+        output_path: str,
+        fade: AudioFade,
+        denoise_filter: str | None,
+    ) -> tuple[str, ...]:
+        # Seek and decode just this kept interval, then concatenate raw samples
+        # on disk. Per-clip AAC padding and video-frame rounding never accumulate.
+        filters = ["aresample=48000", "aformat=channel_layouts=stereo"]
+        if denoise_filter:
+            filters.append(denoise_filter)
+        filters.extend(_audio_fade_filters(duration_ms, fade))
+        filters.extend(
+            (
+                f"apad=whole_len={duration_ms * 48}",
+                f"atrim=end_sample={duration_ms * 48}",
+            )
+        )
+        return (
+            self.executable,
+            "-nostdin",
+            "-y",
+            "-threads",
+            "2",
+            "-filter_threads",
+            "2",
+            "-ss",
+            _seconds(start_ms),
+            "-vn",
+            "-i",
+            _local_file_url(asset.source_path, label="cleanup audio source"),
+            "-map",
+            f"0:{_first_stream_index(asset, StreamType.AUDIO)}",
+            "-vn",
+            "-af",
+            ",".join(filters),
+            "-c:a",
+            "pcm_s16le",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-f",
+            "s16le",
+            _local_file_url(output_path, label="cleanup audio output"),
+        )
+
+    def build_cleanup_mux(
+        self, video: Path, audio: Path, output: Path
+    ) -> tuple[str, ...]:
+        return (
+            self.executable,
+            "-nostdin",
+            "-y",
+            "-i",
+            _local_file_url(str(video), label="cleanup video"),
+            "-f",
+            "s16le",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-i",
+            _local_file_url(str(audio), label="cleanup samples"),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-threads",
+            "2",
+            _local_file_url(str(output), label="cleanup mux output"),
         )
 
     def _build_concat_arguments(

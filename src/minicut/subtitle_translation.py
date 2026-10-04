@@ -35,6 +35,7 @@ async def translate_collection(
         for i in p.items
         if not i.deleted and (not only_missing or not i.translation_text)
     }
+    texts = {key: text for key, text in texts.items() if text != "（此范围无转录文字）"}
     unique = list(dict.fromkeys(texts.values()))
     translated: dict[str, str] = {}
     while unique:

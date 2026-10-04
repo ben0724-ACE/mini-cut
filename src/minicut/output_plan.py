@@ -49,6 +49,7 @@ class OutputItem:
     translation_text: str | None = None
     translation_language: str | None = None
     subtitle_mode: str = "bilingual"
+    cleanup_category: str | None = None
 
     def __post_init__(self) -> None:
         if self.translation_language not in {
@@ -114,6 +115,7 @@ class OutputPlan:
     subtitle_bottom_percent: int = 10
     subtitle_order: str = "source_first"
     subtitle_style: SubtitleStyle | None = None
+    workflow: str | None = None
 
     def __post_init__(self) -> None:
         if self.subtitle_mode not in {None, "bilingual", "translated", "source"}:
@@ -204,6 +206,7 @@ class OutputPlan:
                     cast(str | None, item.get("translation_text")),
                     cast(str | None, item.get("translation_language")),
                     cast(str, item.get("subtitle_mode", "bilingual")),
+                    cast(str | None, item.get("cleanup_category")),
                 )
                 for item in items
             ),
@@ -220,6 +223,7 @@ class OutputPlan:
             SubtitleStyle.from_dict(cast(Mapping[str, object], data["subtitle_style"]))
             if data.get("subtitle_style") is not None
             else None,
+            cast(str | None, data.get("workflow")),
         )
 
 

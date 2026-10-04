@@ -34,7 +34,7 @@ it("应用完整工作流程填入全部参数，切回内置预设保留其原�
   const original=JSON.stringify(template);
   render(<Harness initial={initial} submit={submit} />);
   await screen.findByRole("option",{name:"双语访谈"});
-  expect(screen.getAllByRole("combobox")[0]).toBe(screen.getByLabelText("预设"));
+  expect(screen.getAllByRole("combobox")[0]).toBe(screen.getByLabelText("处理方式"));
   expect(screen.queryByRole("group",{name:"应用内容"})).not.toBeInTheDocument();
   await userEvent.selectOptions(screen.getByLabelText("预设"),"custom:interview");
   expect(screen.getByLabelText("剪辑提示词")).toHaveValue(activeGenerationPrompt(initial));

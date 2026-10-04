@@ -1,5 +1,5 @@
 import { it,expect,vi } from "vitest";
-import { fireEvent,render,screen } from "@testing-library/react";
+import { fireEvent,render,screen,waitFor } from "@testing-library/react";
 import { RenderedPreview } from "./RenderedPreview";
 import { recoverOutputPreview,startOutputPreview } from "./api";
 import {defaultExportOptions} from "./exportSettingsApi";
@@ -13,7 +13,8 @@ it("直接播放真实成片而非源视频，新版本不展示旧文件",async
   expect(await screen.findByRole("status")).toHaveTextContent("v2");
 });
 it("生成失败明确显示错误而不回退成源视频",async()=>{
-  vi.mocked(recoverOutputPreview).mockResolvedValueOnce({task_id:"failed",status:"failed",result:null,error:"render failed"});
+  vi.mocked(recoverOutputPreview).mockResolvedValueOnce(null);
+  vi.mocked(startOutputPreview).mockResolvedValueOnce({task_id:"failed",status:"failed",result:null,error:"render failed"});
   render(<RenderedPreview project="p" collection="c" output="o" revision={1} title="Failed" sourceUrl="/source" />);
   expect(await screen.findByRole("alert")).toHaveTextContent("render failed");
   expect(screen.getByRole("button",{name:"重试预览"})).toBeInTheDocument();
@@ -46,4 +47,29 @@ it("成片仍可播放，并显示需要对照原音复核的字幕提示",async
   render(<RenderedPreview project="p" collection="c" output="o" revision={1} title="Review" sourceUrl="/source" />);
   expect(await screen.findByLabelText("成片预览 · Review")).toHaveAttribute("src","/review.mp4");
   expect(screen.getByText(/译文分页缺少可靠的原文对应边界/)).toBeInTheDocument();
+});
+
+
+it.each(["failed","cancelled"] as const)("显式生成时遇到旧 %s 记录会提交新预览，新的失败不会无限重试",async status=>{
+  vi.mocked(startOutputPreview).mockClear();
+  vi.mocked(recoverOutputPreview).mockResolvedValueOnce({task_id:"old",status,result:null,error:"旧 Late SEI 警告"});
+  vi.mocked(startOutputPreview).mockResolvedValueOnce({task_id:"new",status:"failed",result:null,error:"新任务的真实错误"});
+  render(<RenderedPreview project="p" collection="c" output="o" revision={1} title="重试" sourceUrl="/source"/>);
+  expect(await screen.findByRole("alert")).toHaveTextContent("新任务的真实错误");
+  expect(screen.queryByText("旧 Late SEI 警告")).not.toBeInTheDocument();
+  expect(startOutputPreview).toHaveBeenCalledTimes(1);
+  const firstKey=vi.mocked(startOutputPreview).mock.calls[0][4];
+  vi.mocked(startOutputPreview).mockResolvedValueOnce({task_id:"second",status:"pending",result:null,error:null});
+  fireEvent.click(screen.getByRole("button",{name:"重试预览"}));
+  await waitFor(()=>expect(startOutputPreview).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(startOutputPreview).mock.calls[1][4]).not.toBe(firstKey);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it.each(["pending","running"] as const)("已有 %s 任务仍恢复原任务，避免重复渲染",async status=>{
+  vi.mocked(startOutputPreview).mockClear();
+  vi.mocked(recoverOutputPreview).mockResolvedValueOnce({task_id:"active",status,result:null,error:null});
+  render(<RenderedPreview project="p" collection="c" output="o" revision={1} title="进行中" sourceUrl="/source"/>);
+  await waitFor(()=>expect(recoverOutputPreview).toHaveBeenCalled());
+  expect(startOutputPreview).not.toHaveBeenCalled();
 });

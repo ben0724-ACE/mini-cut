@@ -59,3 +59,15 @@ it("按作品展示初选淘汰、词级复核和最终开场预告结果", () =
   expect(screen.getByText(/第三个候选的开场预告边界跨相邻句子/)).toBeInTheDocument();
   expect(view.container).not.toHaveTextContent("AI 监管：未找到独立原话钩子，保留正文");
 });
+
+it("清理复核只显示折叠的本地摘要，不铺满重复建议",()=>{
+  const result:HighlightResult={collection_id:"c",asset_id:"a",source_duration_ms:5000,brief:{preset:"clean_speech",count:1,min_ms:null,max_ms:null,hook_ms:null,max_source_overlap:1},outputs:[{output_id:"cleanup",workflow:"speech_cleanup",title:"素材 · 清理版",reason:"",revision:1,duration_ms:4900,clips:[]}],notes:[
+    "第 1 段第 1 处建议（源 1.00–1.10 秒）：转录置信度较低，已忽略该建议并保留相关原文，请试听复核。",
+    "第 1 段第 2 处建议（源 2.00–2.10 秒）：转录置信度较低，已忽略该建议并保留相关原文，请试听复核。",
+  ]};
+  const view=render(<GenerationDetails assetName="素材" result={result}/>);
+  expect(screen.getByText("查看保留原因（2 条本地校验提示）").closest("details")).not.toHaveAttribute("open");
+  expect(screen.getByText(/转录不确定 · 2 条/)).toBeInTheDocument();
+  expect(view.container).not.toHaveTextContent("第 1 段第");
+  expect(view.container).toHaveTextContent("1.00–1.10、2.00–2.10");
+});

@@ -193,6 +193,7 @@ def test_one_click_reuses_tasks_idempotency_and_applies_saved_settings(
             assert len(calls) == len(transcription.calls) == 1
             assert transcription.calls[0].language == "en"
             assert calls[0].editing_prompt == "完整的知识解释\n\n保留例子和限定条件"
+            assert calls[0].boundary_version == 3
             if not empty:
                 output = completed["result"]["outputs"][0]
                 assert output["subtitle_source_scale"] == 1.2

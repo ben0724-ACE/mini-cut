@@ -65,7 +65,7 @@ export function MinimalWorkspace({project,onRefine}:{project:string;onRefine:(co
       </div></div>
       <button className="primary-button minimal-run" disabled={blocked||!workflow||(!file&&!assetId)} onClick={()=>void action(start)}>{busy?status||"正在提交…":active?"正在执行…":workflow?.auto_export?"一键生成并导出":"一键生成"}</button>
       <div className="minimal-launch-meta">
-        <span>{workflow?`${workflow.transcription.language==="en"?"英文":"中文"} · ${workflow.generation.count} 条 · ${workflow.generation.limit_duration&&workflow.generation.preset!=="clean_speech"?`${workflow.generation.min_seconds}–${workflow.generation.max_seconds} 秒`:"不限时"} · ${workflow.export_options.aspect_ratio==="original"?"原始比例":workflow.export_options.aspect_ratio} · ${workflow.auto_export?"自动导出":"生成后审阅"}`:loaded?"点击“管理”保存常用工作流，之后直接运行。":"正在恢复工作区…"}</span>
+        <span>{workflow?`${workflow.transcription.language==="en"?"英文":"中文"} · ${workflow.generation.preset==="clean_speech"?1:workflow.generation.count} 条 · ${workflow.generation.limit_duration&&workflow.generation.preset!=="clean_speech"?`${workflow.generation.min_seconds}–${workflow.generation.max_seconds} 秒`:"不限时"} · ${workflow.export_options.aspect_ratio==="original"?"原始比例":workflow.export_options.aspect_ratio} · ${workflow.auto_export?"自动导出":"生成后审阅"}`:loaded?"点击“管理”保存常用工作流，之后直接运行。":"正在恢复工作区…"}</span>
         <span title="视频在本地处理，转录文本会发送至配置的 AI 服务。">AI 处理可能产生费用</span>
       </div>
     </div>
@@ -87,5 +87,5 @@ export function MinimalWorkspace({project,onRefine}:{project:string;onRefine:(co
   </section>;
 }
 function MinimalPreview({project,result,output}:{project:string;result:HighlightResult;output:HighlightOutput}){
-  return <section className="minimal-preview" aria-label="作品试听"><h3 title={output.title}>{output.title}</h3><div className="minimal-media"><QuickPreview compact sourceUrl={`/api/projects/${encodeURIComponent(project)}/media/source/${encodeURIComponent(result.asset_id)}`} title={output.title} clips={output.clips} onDuration={()=>{}}/></div><p className="helper-text minimal-preview-hint">源视频试听 · 成片字幕与转场以导出为准</p><details className="minimal-reason"><summary>选材理由</summary><p className="helper-text">{output.reason}</p></details></section>;
+  return <section className="minimal-preview" aria-label="作品试听"><h3 title={output.title}>{output.title}</h3><div className="minimal-media"><QuickPreview compact sourceUrl={`/api/projects/${encodeURIComponent(project)}/media/source/${encodeURIComponent(result.asset_id)}`} title={output.title} clips={output.clips} onDuration={()=>{}}/></div><p className="helper-text minimal-preview-hint">源视频试听 · 成片字幕与转场以导出为准</p>{output.workflow==="speech_cleanup"?<p>此流程不生成文案</p>:<details className="minimal-reason"><summary>选材理由</summary><p className="helper-text">{output.reason}</p></details>}</section>;
 }

@@ -27,7 +27,7 @@ from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
 
 _DEFAULT_PROFILE = RenderProfile()
-RENDER_ENGINE_VERSION = 11
+RENDER_ENGINE_VERSION = 12
 
 
 def _extract_cover(
@@ -151,6 +151,7 @@ def export_output(
     response: dict[str, object] = {
         "output_id": output,
         "title": plan.title,
+        "workflow": plan.workflow,
         "social_copy": plan.social_copy,
         "render_engine_version": RENDER_ENGINE_VERSION,
         "revision": revision,

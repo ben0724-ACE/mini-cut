@@ -24,7 +24,7 @@ it("按需读取预设，将生成和导出预设组合成独立工作流",async
 it("可以载入当前素材已保存的配置，不触发生成",async()=>{
   vi.mocked(api.getGenerationDraft).mockResolvedValue({source:"asset",draft:{...defaultGenerationDraft(),count:7}});vi.mocked(api.recoverTranscription).mockResolvedValue(null);vi.mocked(api.recoverHighlights).mockResolvedValue(null);const user=userEvent.setup();render(<WorkflowManager project="p" asset="a"/>);
   await user.click(screen.getByRole("button",{name:"管理我的工作流"}));await waitFor(()=>expect(screen.getByLabelText("工作流名称")).toBeEnabled());await user.click(screen.getByRole("button",{name:"载入当前素材已保存配置"}));
-  expect(await screen.findByText(/当前配置：7 条候选/)).toBeInTheDocument();expect(api.getGenerationDraft).toHaveBeenCalledWith("p","a");
+  expect(await screen.findByText(/当前配置：7 条作品/)).toBeInTheDocument();expect(api.getGenerationDraft).toHaveBeenCalledWith("p","a");
 });
 it("弹窗关闭后恢复焦点，重新打开保留尚未保存的工作流名称",async()=>{
   const user=userEvent.setup();render(<WorkflowManager project="p"/>);

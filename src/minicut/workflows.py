@@ -415,7 +415,12 @@ def workflow_router(
                 )
                 result = child(
                     "highlights",
-                    {"asset_id": request["asset_id"], **body.brief()},
+                    {
+                        "asset_id": request["asset_id"],
+                        **body.brief(),
+                        "cleanup_version": request.get("cleanup_version"),
+                        "boundary_version": request.get("boundary_version"),
+                    },
                     "generate",
                 )
                 save(result=result)
@@ -505,6 +510,8 @@ def workflow_router(
                 "request": {
                     **body.model_dump(),
                     "definition": library.get(body.workflow_id),
+                    "cleanup_version": 2,
+                    "boundary_version": 3,
                 },
                 "result": None,
                 "error": None,

@@ -261,3 +261,24 @@ class AtomicRenderPublicationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_signal_kill_reports_termination_instead_of_last_decoder_warning() -> None:
+    import pytest
+
+    process = FakeProcess(return_code=-9, stderr="Late SEI is not implemented.\n")
+    with pytest.raises(RenderFailed, match="信号 9") as raised:
+        FfmpegRenderer(launcher=CapturingLauncher(process)).execute(
+            ("ffmpeg", "file:///output.mp4"), timeout_seconds=5
+        )
+    assert "Late SEI" not in str(raised.value)
+
+
+def test_warning_storm_keeps_only_a_bounded_tail() -> None:
+    from collections import deque
+
+    from minicut.renderer import _drain  # pyright: ignore[reportPrivateUsage]
+
+    retained: deque[str] = deque(maxlen=200)
+    _drain(StringIO("warning\n" * 20000 + "actual failure\n"), retained)
+    assert len(retained) == 200 and retained[-1] == "actual failure\n"

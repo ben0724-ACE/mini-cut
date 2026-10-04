@@ -8,7 +8,7 @@ it("未转录不能生成，切换预设保留各自的提示词草稿", async (
   expect(screen.getByRole("button", {name: "生成候选"})).toBeDisabled();
   await userEvent.clear(screen.getByLabelText("剪辑提示词"));
   await userEvent.type(screen.getByLabelText("剪辑提示词"), "保留反方论述");
-  await userEvent.selectOptions(screen.getByLabelText("预设"), "opinion_first");
+  await userEvent.selectOptions(screen.getByLabelText("预设"), "knowledge_digest");
   await userEvent.selectOptions(screen.getByLabelText("预设"), "podcast_highlights");
   expect(screen.getByLabelText("剪辑提示词")).toHaveValue("保留反方论述");
   view.rerender(<HighlightForm ready busy={false} onSubmit={vi.fn()} />);
@@ -41,16 +41,20 @@ it("预设提示词可编辑，单条作品不受作品间重叠限制", async (
   expect(screen.queryByLabelText("预设提示词")).not.toBeInTheDocument();
 });
 
-it("清理预设说明连续模式限制，观点预设不自动开启开场预告", async () => {
+it("清理流程独立，隐藏选材参数并提交单条无钩子的清理", async () => {
   const submit=vi.fn();
   render(<HighlightForm ready busy={false} onSubmit={submit} />);
-  await userEvent.selectOptions(screen.getByLabelText("预设"), "clean_speech");
-  expect(screen.getByText(/当前为连续正文/)).toBeInTheDocument();
-  await userEvent.selectOptions(screen.getByLabelText("正文模式"), "compact");
-  expect(screen.getByText(/当前为精简拼接/)).toBeInTheDocument();
-  await userEvent.selectOptions(screen.getByLabelText("预设"), "opinion_first");
-  await userEvent.click(screen.getByRole("button", {name:"生成候选"}));
-  expect(submit).toHaveBeenCalledWith(expect.objectContaining({body_mode:"compact",hook_ms:null}));
+  expect(screen.queryByRole("option", {name:"观点先行"})).not.toBeInTheDocument();
+  await userEvent.click(screen.getByLabelText("原话开场预告"));
+  await userEvent.selectOptions(screen.getByLabelText("处理方式"), "cleanup");
+  expect(screen.getByText(/整段清理/)).toBeInTheDocument();
+  expect(screen.queryByLabelText("数量")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("正文模式")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("原话开场预告")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", {name:"一键清理"}));
+  expect(submit).toHaveBeenCalledWith(expect.objectContaining({preset:"clean_speech",count:1,body_mode:"compact",hook_ms:null,min_ms:null,max_ms:null}));
+  await userEvent.selectOptions(screen.getByLabelText("处理方式"), "highlights");
+  expect(screen.getByLabelText("原话开场预告")).toBeChecked();
 });
 
 it("自定义开场预告时长发送毫秒，关闭后不发送时长", async () => {

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { activeGenerationPrompt, applyGenerationPreset, normalizeGenerationDraft, type GenerationDraft } from "./generationDraft";
 import type { PresetLibraryState } from "./usePresetLibrary";
 
-const builtins:Record<string,string> = {podcast_highlights:"播客精选",knowledge_digest:"知识精华",opinion_first:"观点先行",clean_speech:"口播清理"};
+const builtins:Record<string,string> = {podcast_highlights:"播客精选",knowledge_digest:"知识精华"};
 export function PresetControls({draft:rawDraft,onChange,disabled,library}:{draft:GenerationDraft;onChange:(draft:GenerationDraft)=>void;disabled:boolean;library:PresetLibraryState}) {
   const draft = normalizeGenerationDraft(rawDraft);
   const [selection, setSelection] = useState(draft.custom_preset_id?`custom:${draft.custom_preset_id}`:draft.preset);
@@ -48,8 +48,9 @@ export function PresetControls({draft:rawDraft,onChange,disabled,library}:{draft
     if (deleted) {if(!applied)setSelection(draft.custom_preset_id?`custom:${draft.custom_preset_id}`:draft.preset);setConfirmDelete(false);setNotice(`已删除“${current.name}”；当前草稿和历史配置仍保留`);}
   }
   return <div className="preset-controls">
-    <label>预设<select aria-label="预设" value={selection} disabled={busy} onChange={event=>select(event.target.value)}>
-      <optgroup label="内置预设">{Object.entries(builtins).map(([id,label])=><option key={id} value={id}>{label}</option>)}</optgroup>
+    <label>{draft.preset==="clean_speech"?"清理配置":"预设"}<select aria-label="预设" value={selection} disabled={busy} onChange={event=>select(event.target.value)}>
+      {draft.preset==="clean_speech"&&<option value="clean_speech">默认清理</option>}
+      <optgroup label="内置预设">{Object.entries(draft.preset==="clean_speech"?{}:builtins).map(([id,label])=><option key={id} value={id}>{label}</option>)}</optgroup>
       {!!library.presets.length&&<optgroup label="我的预设">{library.presets.map(item=><option key={item.preset_id} value={`custom:${item.preset_id}`}>{item.name}</option>)}</optgroup>}
       {selectedId&&!current&&<option value={selection}>{draft.custom_preset_name??"自定义预设"}（{library.loading?"读取中":library.loadError?"库暂不可用":"已删除或未找到"}）</option>}
     </select></label>

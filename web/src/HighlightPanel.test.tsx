@@ -73,7 +73,7 @@ it("从结果页返回时恢复导出面板",async()=>{
 
 it("生成完成、切换作品造成表单重挂载后仍保留项目草稿", async()=>{
   const {defaultGenerationDraft} = await import("./generationDraft");
-  const saved:import("./generationDraft").GenerationDraft = {...defaultGenerationDraft(),instructions:"保存的要求",hook_seconds:12.5,translation_language:"en" as const,prompts:{...defaultGenerationDraft().prompts,opinion_first:"未使用的预设草稿"}};
+  const saved:import("./generationDraft").GenerationDraft = {...defaultGenerationDraft(),instructions:"保存的要求",hook_seconds:12.5,translation_language:"en" as const,prompts:{...defaultGenerationDraft().prompts,knowledge_digest:"未使用的预设草稿"}};
   vi.mocked(getGenerationDraft).mockResolvedValue({source:"asset",draft:saved});
   const result={collection_id:"generated",asset_id:"asset",brief:{preset:"podcast_highlights",count:3,min_ms:60000,max_ms:90000,hook_ms:null,instructions:"保存的要求",max_source_overlap:0.3},notes:[],outputs:[{output_id:"first",title:"生成后的作品",reason:"完整",duration_ms:60000,clips:[],revision:1}]};
   vi.mocked(startHighlights).mockResolvedValueOnce({task_id:"generated",status:"succeeded",result,error:null});
@@ -85,7 +85,7 @@ it("生成完成、切换作品造成表单重挂载后仍保留项目草稿", a
   await screen.findByRole("button",{name:"生成后的作品"});
   await userEvent.click(screen.getByRole("tab",{name:"生成"}));
   expect(screen.getByLabelText("剪辑提示词")).toHaveValue(saved.prompts.podcast_highlights+"\n\n保存的要求");
-  await userEvent.selectOptions(screen.getByLabelText("预设"),"opinion_first");
+  await userEvent.selectOptions(screen.getByLabelText("预设"),"knowledge_digest");
   expect(screen.getByLabelText("剪辑提示词")).toHaveValue("未使用的预设草稿\n\n保存的要求");
   await userEvent.click(screen.getByLabelText("原话开场预告"));
   expect(screen.getByLabelText("开场预告目标秒数")).toHaveValue(12.5);

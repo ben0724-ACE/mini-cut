@@ -126,8 +126,26 @@ export function generationDetails(result: HighlightResult) {
   };
 }
 
+function cleanupWarningGroups(notes:string[]) {
+  const groups=new Map<string,{label:string;times:string[];count:number}>();
+  for(const note of notes){
+    const label=note.includes("置信度较低")?"转录不确定":note.includes("重叠")?"时间范围重叠":note.includes("全部讲话")?"删除范围过大":/未知词|上下文词|顺序颠倒|字段|类别/.test(note)?"编号或范围无效":"其他校验提示";
+    const group=groups.get(label)??{label,times:[],count:0};
+    group.count++;
+    const time=note.match(/源 ([\d.]+[–—-][\d.]+) 秒/);
+    if(time&&!group.times.includes(time[1]))group.times.push(time[1]);
+    groups.set(label,group);
+  }
+  return [...groups.values()];
+}
+
 export function GenerationDetails({assetName, result, expanded=false}: {assetName: string; result: HighlightResult;expanded?:boolean}) {
   const {bounds, missingOpeningPreviews, boundaryWarnings, openingPreviewTraces, openingPreviewNotes, explanations} = generationDetails(result);
+  if (result.outputs[0]?.workflow === "speech_cleanup") {
+    const plan=result.outputs[0];
+    const deleted=plan.clips.filter(c=>c.deleted);
+    return <section aria-label="清理详情"><h3>清理结果</h3><p>源素材：{assetName}</p><p>{((result.source_duration_ms??0)/1000).toFixed(1)} 秒 → {(plan.duration_ms/1000).toFixed(1)} 秒 · 当前删除 {deleted.length} 处 · 节省 {(((result.source_duration_ms??plan.duration_ms)-plan.duration_ms)/1000).toFixed(1)} 秒</p><p>此流程不生成文案。进入编辑可试听、恢复每处删除。</p>{deleted.length===0&&<p>未删除内容，保留完整素材。</p>}{result.notes.length>0&&<details><summary>查看保留原因（{result.notes.length} 条本地校验提示）</summary><p>这些提示由本地校验生成；不确定的删除建议已忽略，相关原文保留。</p><ul>{cleanupWarningGroups(result.notes).map(group=><li key={group.label}>{group.label} · {group.count} 条{group.times.length>0&&<p>源视频时间：{group.times.join("、")} 秒</p>}</li>)}</ul></details>}</section>;
+  }
   const target = result.brief.count;
   const generatedOpeningPreviews = openingPreviewTraces.length - missingOpeningPreviews;
   const content=<>

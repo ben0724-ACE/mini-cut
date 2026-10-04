@@ -28,6 +28,8 @@ class HighlightBrief:
     translation_language: str | None = None
     subtitle_mode: str = "bilingual"
     editing_prompt: str | None = None
+    cleanup_version: int | None = None
+    boundary_version: int | None = None
 
     def __post_init__(self) -> None:
         if self.editing_prompt is not None and (
@@ -96,6 +98,9 @@ class HighlightBrief:
 
     def to_dict(self) -> dict[str, object]:
         data = asdict(self)
+        for field in ("cleanup_version", "boundary_version"):
+            if getattr(self, field) is None:
+                data.pop(field)
         if self.editing_prompt is not None:
             data.pop("preset_prompt")
             data.pop("instructions")

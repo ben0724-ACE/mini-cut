@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import cast
 
 import httpx
+import pytest
 
 from minicut.api import create_app
 from minicut.generation_settings import GenerationDraft
@@ -283,15 +284,25 @@ def test_template_changes_never_rewrite_applied_drafts_or_generation_history(
     asyncio.run(run())
 
 
+@pytest.mark.parametrize(
+    ("preset", "versions"),
+    [
+        ("podcast_highlights", {}),
+        ("podcast_highlights", {"boundary_version": 2}),
+        ("clean_speech", {}),
+        ("clean_speech", {"cleanup_version": 1}),
+        ("clean_speech", {"cleanup_version": 2}),
+    ],
+)
 def test_legacy_builtin_request_still_matches_existing_idempotency_record(
-    tmp_path: Path,
+    tmp_path: Path, preset: str, versions: dict[str, int],
 ) -> None:
     import json
 
     setup_projects(tmp_path)
     request: dict[str, object] = {
         "asset_id": "asset",
-        "preset": "podcast_highlights",
+        "preset": preset,
         "count": 3,
         "min_ms": None,
         "max_ms": None,
@@ -302,6 +313,7 @@ def test_legacy_builtin_request_still_matches_existing_idempotency_record(
         "body_mode": "continuous",
         "translation_language": None,
         "subtitle_mode": "bilingual",
+        **versions,
     }
     job: dict[str, object] = {
         "task_id": "old",
@@ -322,7 +334,7 @@ def test_legacy_builtin_request_still_matches_existing_idempotency_record(
         ) as client:
             response = await client.post(
                 "/api/projects/one/tasks/highlights",
-                json=request,
+                json={key: value for key, value in request.items() if key not in versions},
                 headers={"Idempotency-Key": "old"},
             )
             assert response.status_code == 202
@@ -333,5 +345,19 @@ def test_legacy_builtin_request_still_matches_existing_idempotency_record(
             )
             assert len(history) == 1
             assert history[0]["custom_preset_name"] is None
+            changed = await client.post(
+                "/api/projects/one/tasks/highlights",
+                json={**request, "instructions": "新的要求"},
+                headers={"Idempotency-Key": "old"},
+            )
+            assert changed.status_code == 409
+            if preset == "podcast_highlights":
+                changed_version = await client.post(
+                    "/api/projects/one/tasks/highlights",
+                    json={**request, "boundary_version": 3},
+                    headers={"Idempotency-Key": "old"},
+                )
+                assert changed_version.status_code == 409
+            assert json.loads((directory / "old.json").read_text()) == job
 
     asyncio.run(run())

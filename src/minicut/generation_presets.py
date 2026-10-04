@@ -28,7 +28,8 @@ class GenerationPresetBody(PresetRenameBody):
     @model_validator(mode="after")
     def reusable_configuration(self) -> Self:
         draft = self.draft
-        if not draft.count.is_integer() or not 1 <= draft.count <= 10:
+        clean = draft.preset is HighlightPreset.CLEAN_SPEECH
+        if not clean and (not draft.count.is_integer() or not 1 <= draft.count <= 10):
             raise ValueError("数量需为 1–10 的整数")
         prompt = self.active_prompt()
         if not prompt.strip():
@@ -39,12 +40,16 @@ class GenerationPresetBody(PresetRenameBody):
         )
         HighlightBrief(
             preset=draft.preset,
-            count=int(draft.count),
+            count=1 if clean else int(draft.count),
             min_ms=round(draft.min_seconds * 1000) if limited else None,
             max_ms=round(draft.max_seconds * 1000) if limited else None,
-            hook_ms=round(draft.hook_seconds * 1000) if draft.hook_enabled else None,
+            hook_ms=round(draft.hook_seconds * 1000)
+            if draft.hook_enabled and not clean
+            else None,
             editing_prompt=prompt,
-            max_source_overlap=1 if draft.count == 1 else draft.overlap_percent / 100,
+            max_source_overlap=1
+            if clean or draft.count == 1
+            else draft.overlap_percent / 100,
             body_mode=draft.body_mode,
             translation_language=(
                 draft.translation_language if draft.translation_enabled else None

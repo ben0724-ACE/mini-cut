@@ -178,6 +178,8 @@ class PlanTaskBody(BaseModel):
 class HighlightTaskBody(BaseModel):
     asset_id: SafeFileName
     preset: HighlightPreset
+    cleanup_version: int | None = Field(default=2, ge=1, le=2)
+    boundary_version: int | None = Field(default=3, ge=2, le=3)
     custom_preset_id: str | None = Field(default=None, max_length=80)
     custom_preset_name: str | None = Field(default=None, max_length=80)
     body_mode: str = Field(default="continuous", pattern=r"^(continuous|compact)$")
@@ -193,16 +195,32 @@ class HighlightTaskBody(BaseModel):
     max_source_overlap: float = Field(default=0.3, ge=0, le=1)
 
     def brief(self) -> HighlightBrief:
-        return HighlightBrief(
-            **self.model_dump(
-                exclude={"asset_id", "custom_preset_id", "custom_preset_name"}
-            )
+        values = self.model_dump(
+            exclude={"asset_id", "custom_preset_id", "custom_preset_name"}
         )
+        if self.preset is HighlightPreset.CLEAN_SPEECH and self.cleanup_version:
+            values.update(
+                count=1,
+                min_ms=None,
+                max_ms=None,
+                hook_ms=None,
+                body_mode="compact",
+                max_source_overlap=1,
+                boundary_version=None,
+            )
+        else:
+            values["cleanup_version"] = None
+        return HighlightBrief(**values)
 
     @model_validator(mode="after")
     def valid_brief(self) -> Self:
         self.brief()
         return self
+
+
+class OutputTitleBody(BaseModel):
+    base_revision: int = Field(ge=1)
+    title: str = Field(min_length=1, max_length=200)
 
 
 class ManualSplitBody(BaseModel):
@@ -1379,6 +1397,8 @@ def create_app(
             for asset in ProjectRepository(directory).read().assets
         }
         fields = set(HighlightTaskBody.model_fields) - {
+            "cleanup_version",
+            "boundary_version",
             "asset_id",
             "custom_preset_id",
             "custom_preset_name",
@@ -1532,6 +1552,23 @@ def create_app(
         idempotency_key: Annotated[str, task_key_header],
     ) -> TaskResponse:
         inspect(project_id)
+        existing_path = _job_path(root / project_id, idempotency_key)
+        if existing_path.is_file():
+            existing = _read_job(existing_path)
+            existing_request = existing.get("request")
+            if existing.get("kind") == "highlights" and isinstance(
+                existing_request, dict
+            ):
+                saved_request = cast(dict[str, object], existing_request)
+                # An omitted version must retain the saved task's pipeline,
+                # including legacy tasks that predate version fields.
+                body = body.model_copy(
+                    update={
+                        field: saved_request.get(field)
+                        for field in ("cleanup_version", "boundary_version")
+                        if field not in body.model_fields_set
+                    }
+                )
         manifest = ProjectRepository(root / project_id).read()
         if not any(asset.asset_id == body.asset_id for asset in manifest.assets):
             raise HTTPException(404, "Asset does not exist")
@@ -1542,7 +1579,12 @@ def create_app(
 
         # Resolve defaults once so the snapshot and the actual generation agree.
         resolved = HighlightTaskBody.model_validate(
-            {"asset_id": body.asset_id, **body.brief().to_dict()}
+            {
+                "asset_id": body.asset_id,
+                "cleanup_version": None,
+                "boundary_version": None,
+                **body.brief().to_dict(),
+            }
         ).brief()
 
         def operation() -> dict[str, object]:
@@ -1560,8 +1602,16 @@ def create_app(
             return highlights(root / project_id, body.asset_id, collection, resolved)
 
         request_data = body.model_dump(mode="json")
+        request_data["cleanup_version"] = resolved.cleanup_version
+        request_data["boundary_version"] = resolved.boundary_version
         # Retain old idempotency requests when no custom template was used.
-        for field in ("custom_preset_id", "custom_preset_name", "editing_prompt"):
+        for field in (
+            "custom_preset_id",
+            "custom_preset_name",
+            "editing_prompt",
+            "cleanup_version",
+            "boundary_version",
+        ):
             if request_data[field] is None:
                 request_data.pop(field)
         return submit_task(
@@ -1703,6 +1753,32 @@ def create_app(
                     output_id,
                     body.base_revision,
                     [row.model_dump() for row in body.ranges],
+                )
+        except RevisionConflict as error:
+            raise HTTPException(409, str(error)) from error
+        except (MiniCutError, ValueError) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @api.put(
+        "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/title"
+    )
+    def put_output_title(  # pyright: ignore[reportUnusedFunction]
+        project_id: ProjectId,
+        collection_id: SafeFileName,
+        output_id: SafeFileName,
+        body: OutputTitleBody,
+    ) -> dict[str, object]:
+        from minicut.highlight_service import rename_output
+
+        inspect(project_id)
+        try:
+            with output_edit_lock:
+                return rename_output(
+                    root / project_id,
+                    collection_id,
+                    output_id,
+                    body.base_revision,
+                    body.title,
                 )
         except RevisionConflict as error:
             raise HTTPException(409, str(error)) from error
@@ -1961,6 +2037,11 @@ def create_app(
                     **cast(dict[str, object], request),
                     **cast(dict[str, object], job["generation_config"]),
                 }
+            request = {
+                "cleanup_version": None,
+                "boundary_version": None,
+                **cast(dict[str, object], request),
+            }
             return submit_highlights(
                 project_id,
                 HighlightTaskBody.model_validate(request),

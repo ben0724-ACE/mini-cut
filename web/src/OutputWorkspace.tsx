@@ -1,3 +1,4 @@
+import {CleanupReview} from "./CleanupReview";
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { saveOutputSubtitleSettings, previewManualSplit, applyManualSplit, splitOutputSentences, saveOutputRanges, getHighlights, editOutputItem, reorderOutput, getOutputVersions, type HighlightResult, type HighlightClip } from "./api";
@@ -139,6 +140,7 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
     try{await singleSettings.flush();}catch{throw new Error("字幕设置已应用；画面和音频设置尚未同步，请点击重试保存导出设置。");}
   }
   const edit=<>
+    {plan.workflow==="speech_cleanup"&&<CleanupReview key={output} project={project} collection={collection} plan={plan} sourceUrl={sourceUrl} sourceDuration={limit} disabled={busy||historical||dirty||unsavedSubtitles} onUpdated={value=>{setResult(value);onUpdated?.(value);setVersions([]);}} onRestore={id=>update(()=>editOutputItem(project,collection,output,id,{deleted:false}))}/>}
     {navigation&&createPortal(<div className="draft-dialog" role="dialog" aria-label="未保存修改"><p>范围尚未保存，是否保存后切换？</p><button disabled={busy||!valid} onClick={()=>void saveDraft().then(ok=>{if(ok){const go=navigation;setNavigation(null);go();}})}>保存并切换</button><button onClick={()=>{const go=navigation;discard();setNavigation(null);go();}}>放弃并切换</button><button onClick={()=>setNavigation(null)}>继续编辑</button></div>,document.body)}
     <section className="output-preset-section" aria-label="成片导出预设"><h3>导出预设</h3><ExportPresetControls draft={singleSettings.draft} onChange={singleSettings.change} saveOptions={{...singleSettings.draft.options,subtitle_settings:subtitleSettingsFromPlan(currentPlan)}} onApply={applyPreset} disabled={busy||historical||dirty||unsavedSubtitles||!singleSettings.loaded||!!singleSettings.loadError||singleSettings.saving||!!singleSettings.saveError} disabledReason={dirty||unsavedSubtitles?"先保存或放弃当前修改，再保存或应用预设。":historical?"历史版本只读，请切回当前版本后应用预设。":undefined}/><ExportDraftStatus state={singleSettings}/></section>
     <div className="edit-section-tabs" role="tablist" aria-label="编辑区域">
@@ -186,5 +188,5 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
     </section>
   </>;
   const exportPanel=dirty?<p>请先保存或放弃范围修改后导出。</p>:historical?<p>切回当前版本后导出</p>:<OutputExport cover={<CoverEditor key={`cover:${collection}:${output}:${plan.revision}`} project={project} collection={collection} output={output} revision={plan.revision} clips={plan.clips} onDirty={setCoverDirty} onSaved={setCoverVersion} />} disabled={coverDirty||coverVersion===undefined||unsavedSubtitles} disabledReason={unsavedSubtitles?"先保存字幕修改，再导出。":undefined} coverVersion={coverVersion} onAdjust={openEdit} key={`${collection}:${output}:${plan.revision}`} project={project} collection={collection} output={output} revision={plan.revision} onSubmitted={onExportSubmitted} />;
-  return compose?compose({preview,edit,exportPanel}):<Workbench tab={localPanel} onTabChange={setLocalPanel} sidebar={<><h2>当前作品</h2><p>{plan.title}</p><details><summary>选材理由</summary><p>{plan.reason}</p></details><a href={`?project=${encodeURIComponent(project)}`}>返回候选列表</a></>} preview={preview} generate={<p>返回候选列表以生成新作品</p>} edit={edit} exportPanel={exportPanel} />;
+  return compose?compose({preview,edit,exportPanel}):<Workbench tab={localPanel} onTabChange={setLocalPanel} sidebar={<><h2>当前作品</h2><p>{plan.title}</p>{plan.workflow!=="speech_cleanup"&&<details><summary>选材理由</summary><p>{plan.reason}</p></details>}<a href={`?project=${encodeURIComponent(project)}`}>返回候选列表</a></>} preview={preview} generate={<p>返回候选列表以生成新作品</p>} edit={edit} exportPanel={exportPanel} />;
 }

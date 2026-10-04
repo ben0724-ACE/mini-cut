@@ -74,6 +74,8 @@ export function combineEditingPrompt(prompt:string, instructions:string):string 
 // Legacy requirements were shared by all built-ins. Carry that text into each
 // cached prompt once, without altering any submitted history or library record.
 export function normalizeGenerationDraft(draft:GenerationDraft):GenerationDraft {
+  if (draft.preset === "opinion_first") draft = {...draft, preset:"knowledge_digest", prompts:{...draft.prompts, knowledge_digest:draft.prompts.opinion_first??draft.prompts.knowledge_digest}};
+  if (draft.preset === "clean_speech" && draft.prompts.clean_speech?.includes("连续正文模式仅选择完整表达范围")) draft = {...draft,prompts:{...draft.prompts,clean_speech:presetDefaults.clean_speech}};
   if (!draft.instructions) return draft;
   return {...draft,instructions:"",
     prompts:Object.fromEntries(Object.entries(draft.prompts).map(([key,prompt])=>[key,combineEditingPrompt(prompt,draft.instructions)])),
@@ -82,12 +84,12 @@ export function normalizeGenerationDraft(draft:GenerationDraft):GenerationDraft 
 }
 
 export function generationValidationError(draft:GenerationDraft):string {
-  if (!Number.isInteger(draft.count) || draft.count < 1 || draft.count > 10 ||
+  if (draft.preset !== "clean_speech" && (!Number.isInteger(draft.count) || draft.count < 1 || draft.count > 10 ||
       (draft.preset !== "clean_speech" && draft.limit_duration && (!Number.isFinite(draft.min_seconds) || !Number.isFinite(draft.max_seconds) || draft.min_seconds <= 0 || draft.max_seconds < draft.min_seconds)) ||
-      (draft.count !== 1 && (!Number.isFinite(draft.overlap_percent) || draft.overlap_percent < 0 || draft.overlap_percent > 100))) return "请检查数量（1–10）与时长范围、重复比例";
+      (draft.count !== 1 && (!Number.isFinite(draft.overlap_percent) || draft.overlap_percent < 0 || draft.overlap_percent > 100)))) return "请检查数量（1–10）与时长范围、重复比例";
   if (!activeGenerationPrompt(draft)?.trim()) return "请填写剪辑提示词";
   if (activeGenerationPrompt(draft).length > 25000) return "剪辑提示词不能超过 25000 字符";
-  if (draft.hook_enabled && (!Number.isFinite(draft.hook_seconds) || draft.hook_seconds < 1 || draft.hook_seconds > 60)) return "开场预告目标时长需在 1–60 秒之间";
+  if (draft.preset !== "clean_speech" && draft.hook_enabled && (!Number.isFinite(draft.hook_seconds) || draft.hook_seconds < 1 || draft.hook_seconds > 60)) return "开场预告目标时长需在 1–60 秒之间";
   return "";
 }
 

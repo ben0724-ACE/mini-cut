@@ -30,3 +30,11 @@ it("并列展示导出包，并允许失败任务按原设置恢复",async()=>{
   expect(resumeTask).toHaveBeenCalledWith("p","task-b");
   expect(window.location.search).toContain("task-b-resumed");
 });
+
+it("清理作品明确说明不生成文案", async()=>{
+  // The export snapshot must carry the workflow even after returning later.
+  const {readOutputExport}=await import("./api");
+  vi.mocked(readOutputExport).mockResolvedValue({task_id:"clean",status:"succeeded",resumable:true,error:null,result:{output_id:"cleanup",revision:1,workflow:"speech_cleanup",title:"清理版",social_copy:null,media_url:"/c.mp4",subtitle_url:"/c.srt",duration_ms:1000}});
+  render(<ExportResults project="p" collection="c" entries={[{taskId:"clean",outputId:"cleanup"}]}/>);
+  expect(await screen.findByText("此流程不生成文案")).toBeInTheDocument();
+});
