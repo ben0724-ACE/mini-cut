@@ -26,7 +26,7 @@ class AudioAnalysisTest(unittest.TestCase):
 
         self.assertEqual(
             command[command.index("-i") + 1],
-            "file:///media/%E9%87%87%E8%AE%BF%20take.wav",
+            "file:///media/采访 take.wav",
         )
         self.assertIn("silencedetect", command[command.index("-af") + 1])
         self.assertEqual(silence_ms, 1_750)

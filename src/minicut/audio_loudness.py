@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import cast
 
 from minicut.errors import ProcessingError
+from minicut.ffmpeg_paths import ffmpeg_file
 from minicut.probe import ProcessRunner, run_process
 
 
@@ -60,7 +61,7 @@ def _number(value: float) -> str:
 
 
 def _input_url(path: str | Path) -> str:
-    return Path(path).absolute().as_uri()
+    return ffmpeg_file(path)
 
 
 def _analysis_filter(profile: LoudnessProfile) -> str:

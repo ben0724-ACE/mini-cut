@@ -24,7 +24,7 @@ class LoudnessCommandTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            analysis[analysis.index("-i") + 1], "file:///media/input%20file.mp4"
+            analysis[analysis.index("-i") + 1], "file:///media/input file.mp4"
         )
         self.assertIn("print_format=json", analysis[analysis.index("-af") + 1])
         loudnorm = normalization[normalization.index("-af") + 1]

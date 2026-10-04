@@ -27,6 +27,8 @@ def source_dimensions(path: Path) -> tuple[int, int]:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
             timeout=30,
         )

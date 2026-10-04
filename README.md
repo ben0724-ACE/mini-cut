@@ -25,9 +25,9 @@
 
 ## 环境要求
 
-- Python 3.11 或更高版本、uv。
+- Python 3.11 或更高版本、uv；Windows/Linux CPU 转录本轮以 Python 3.11 为兼容目标。
 - Node.js 22.12 或更高版本、npm。
-- FFmpeg 与 ffprobe，均需可从终端调用。
+- FFmpeg 与 ffprobe，均需可从终端调用；需要 `libx264` 编码器，烧录字幕还需要 `subtitles`/libass 滤镜和中文字体。
 - Apple Silicon 可使用 MLX；其他平台可使用 PyTorch Whisper。转录后端和模型需另行安装。
 - AI 选材需要可用的 DeepSeek API 密钥；仅转录、编辑和渲染无需该密钥。
 
@@ -36,7 +36,7 @@
 以下命令从仓库根目录执行。初次安装：
 
 ```bash
-uv sync
+uv sync --python 3.11
 # Apple Silicon：
 uv pip install mlx-whisper
 # 使用 PyTorch Whisper 时改为：uv pip install openai-whisper
@@ -47,10 +47,17 @@ cd ..
 
 复制 `.env.example` 为 `.env`，填写 `DEEPSEEK_API_KEY`。已有配置时直接编辑，避免覆盖密钥。可通过 `DEEPSEEK_MODEL`、`DEEPSEEK_BASE_URL` 调整模型与服务地址。
 
-启动后端：
+macOS / Linux（Bash、Zsh）启动后端：
 
 ```bash
 MINICUT_PROJECTS_ROOT="$PWD/projects" \
+uv run --no-sync --env-file .env minicut-api
+```
+
+Windows PowerShell 启动后端：
+
+```powershell
+$env:MINICUT_PROJECTS_ROOT = Join-Path $PWD.Path "projects"
 uv run --no-sync --env-file .env minicut-api
 ```
 
@@ -68,6 +75,61 @@ npm run dev -- --host 127.0.0.1
 - 更换后端端口时设置 `MINICUT_API_PORT`，同时给前端设置对应的 `MINICUT_API_URL`，例如 `http://127.0.0.1:8001`。
 - 批量导出默认同时运行 2 个 FFmpeg 任务；可通过 `MINICUT_EXPORT_CONCURRENCY` 调整为 1–4。并发越高，CPU、内存和磁盘占用越大。
 - 保持两个终端运行；同一个项目目录只启动一个 API 进程。默认服务面向本地使用，没有面向公网的账户与权限系统。
+
+## Windows 与 Linux 安装补充
+
+本轮兼容目标为 Windows 11 x64、Ubuntu 22.04/24.04 x64，使用 Python 3.11 和 CPU PyTorch Whisper；GPU 加速及其他发行版不在本轮验收范围。自动化配置使用 Windows Server 2022 和 Ubuntu runner，不能替代 Windows 11 的人工验收。macOS Apple Silicon 继续使用 MLX。具体验证状态见下方「跨平台验证」。
+
+先安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)、[Node.js](https://nodejs.org/en/download) 22.12+ 和 [FFmpeg](https://ffmpeg.org/download.html)。安装后重新打开终端，确保 `uv`、`node`、`npm`、`ffmpeg`、`ffprobe` 可调用。Windows 使用包含 libass 的 FFmpeg 构建；Ubuntu 可安装系统媒体工具与字体：
+
+```bash
+sudo apt-get update
+sudo apt-get install ffmpeg fonts-noto-cjk
+```
+
+从仓库根目录安装基础依赖和 CPU 转录后端。以下命令在 PowerShell、Bash 中均可使用：
+
+```text
+uv sync --python 3.11
+uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+uv pip install openai-whisper
+cd web
+npm ci
+cd ..
+```
+
+CPU PyTorch 安装方式参考 [PyTorch 官方安装页](https://docs.pytorch.org/get-started/locally/)，Whisper 依赖参考 [Whisper 官方说明](https://github.com/openai/whisper#setup)。基础依赖不包含转录引擎；重新同步时使用 `uv sync --inexact` 保留单独安装的后端。
+
+PowerShell 初次复制配置（已有 `.env` 时保留）：
+
+```powershell
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+```
+
+Bash 初次复制配置（已有 `.env` 时保留）：
+
+```bash
+if [ ! -f .env ]; then cp .env.example .env; fi
+```
+
+填写 `.env` 后，按上方对应系统的命令启动两个服务。若 PowerShell 的脚本执行策略阻止 `npm`，可使用 `npm.cmd ci` 和 `npm.cmd run dev -- --host 127.0.0.1`。
+
+新转录与新工作流从后端读取默认值：Apple Silicon macOS 为 MLX / large-v3-turbo；Windows、Linux、Intel macOS 为 PyTorch Whisper / small。CPU 转录速度取决于硬件，人工验收可先选 tiny。首次运行下载模型；Whisper 使用自己的模型缓存，`HF_HUB_OFFLINE` 只适用于相关 Hugging Face/MLX 缓存。已有任务和工作流保留原引擎与模型，迁移使用时请明确选择当前机器支持的引擎，不会自动改写历史任务。
+
+Windows 默认检测微软雅黑，Ubuntu 默认检测 Noto Sans CJK。找不到字体时安装本机中文字体，或在 `.env` 中同时设置 `MINICUT_SUBTITLE_FONT_PATH` 和 `MINICUT_SUBTITLE_FONT_NAME`；字体路径不做 URL 编码。Windows 建议使用较短的项目目录，长路径是否可用还受系统配置和 FFmpeg 构建影响。项目记录包含本机媒体路径与字体选择，复制项目目录到另一台机器不等于完成数据迁移。
+
+### 跨平台验证
+
+`.github/workflows/platform-tests.yml` 提供 Windows Server 2022、Ubuntu 22.04/24.04 的针对性后端及真实 FFmpeg 测试，并运行前端测试与构建。它覆盖后端默认值、进程存活检测、任务恢复、媒体导入、Unicode/空格/百分号路径、软字幕/烧录字幕、原音保留、封面与长滤镜文件读取；转录后端单元测试使用替身，不下载模型或调用付费 AI。此配置尚需推送后由 GitHub Actions 实际运行，本地 macOS 测试不能证明目标系统已经通过。
+
+人工验收请在每个目标系统执行：
+
+1. 按安装说明启动服务，建立项目，导入文件名包含中文、空格和 `%20` 的讲话视频。
+2. 确认新转录和新工作流默认使用 PyTorch Whisper，先以 tiny 模型完成一次真实转录，检查词时间与源语言。
+3. 生成或载入候选，修改范围并保存，分别播放快速预览和成片预览；AI 生成会使用已配置的模型服务并产生相应费用。
+4. 分别导出软字幕与烧录字幕 MP4、SRT 和封面，检查中文字幕、原音、首帧及下载文件；试听片头、切点和片尾。
+5. 运行口播清理并检查长素材/较多切点；取消任务后恢复，并在后端重启后确认旧任务可恢复、已有作品可读取。
+6. 在 macOS 检查原 MLX 默认值和既有项目的编辑、预览、导出。
 
 ## 操作说明
 

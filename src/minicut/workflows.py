@@ -34,6 +34,10 @@ from minicut.generation_settings import GenerationDraft, GenerationSettings
 from minicut.highlight_service import read_highlights, source_segments
 from minicut.output_plan import OutputPlan
 from minicut.output_repository import OutputCollectionRepository
+from minicut.platform_support import (
+    default_transcription_model,
+    default_transcription_provider,
+)
 from minicut.project import ProjectRepository
 from minicut.transcription_task import TranscriptionCancelled
 
@@ -57,8 +61,12 @@ SafeId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
 
 class WorkflowTranscription(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    provider: Literal["mlx", "whisper"] = "mlx"
-    model: str = Field(default="large-v3-turbo", min_length=1, max_length=200)
+    provider: Literal["mlx", "whisper"] = Field(
+        default_factory=default_transcription_provider
+    )
+    model: str = Field(
+        default_factory=default_transcription_model, min_length=1, max_length=200
+    )
     language: Literal["zh", "en"] = "zh"
 
 

@@ -8,6 +8,7 @@ from fractions import Fraction
 from pathlib import Path
 
 from minicut.errors import ProcessingError
+from minicut.ffmpeg_paths import ffmpeg_file
 from minicut.probe import ProcessRunner, run_process
 from minicut.timeline_validation import ValidationSeverity
 
@@ -77,7 +78,7 @@ def build_audio_analysis_command(
     """Build argv for silence and peak-level measurement without shell parsing."""
     if not executable.strip():
         raise ValueError("FFmpeg executable must not be blank")
-    source_url = Path(source_path).absolute().as_uri()
+    source_url = ffmpeg_file(source_path)
     return (
         executable,
         "-nostdin",

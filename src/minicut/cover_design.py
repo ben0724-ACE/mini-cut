@@ -7,12 +7,12 @@ import sqlite3
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Literal
-from urllib.parse import unquote
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 
 from minicut.errors import UserInputError
+from minicut.ffmpeg_paths import ffmpeg_file
 from minicut.highlight_service import source_segments
 from minicut.output_plan import OutputPlan, validate_output_id
 from minicut.output_repository import OutputCollectionRepository
@@ -213,14 +213,14 @@ def extract_frame(
             "-ss",
             f"{frame_ms / 1000:.3f}",
             "-i",
-            unquote(source.absolute().as_uri()),
+            ffmpeg_file(source),
             "-map",
             "0:v:0",
             "-frames:v",
             "1",
             "-vf",
             "scale='min(1920,iw)':-1",
-            destination.as_uri(),
+            ffmpeg_file(destination),
         ),
         destination,
         timeout_seconds=120,

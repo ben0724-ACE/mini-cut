@@ -87,6 +87,13 @@ from minicut.llm_provider import TextModelProviderError
 from minicut.media import classify_media
 from minicut.output_export import RENDER_ENGINE_VERSION, export_output, preview_output
 from minicut.output_repository import OutputCollectionRepository
+from minicut.platform_support import (
+    default_transcription_model,
+    default_transcription_provider,
+    process_alive,
+    supports_mlx,
+    valid_windows_filename,
+)
 from minicut.project import ProjectRepository
 from minicut.project_deletion import ProjectDeletionGuard
 from minicut.render_profile import RenderProfile
@@ -520,13 +527,7 @@ def _read_job(path: Path) -> dict[str, object]:
             pid = job.get("owner_pid")
             alive = False
             if type(pid) is int and pid > 0:
-                try:
-                    os.kill(pid, 0)
-                    alive = True
-                except ProcessLookupError:
-                    pass
-                except PermissionError:
-                    alive = True
+                alive = process_alive(pid)
             if not alive:
                 job.update(
                     status="failed",
@@ -677,6 +678,17 @@ def create_app(
 
     api.add_middleware(ProjectDeletionGuard)
     preset_library = GenerationPresetLibrary(root)
+
+    @api.get("/api/transcription-defaults")
+    def transcription_defaults() -> dict[str, object]:  # pyright: ignore[reportUnusedFunction]
+        return {
+            "options": {
+                "provider": default_transcription_provider(),
+                "model": default_transcription_model(),
+                "language": "zh",
+            },
+            "mlx_supported": supports_mlx(),
+        }
 
     @api.get("/api/generation-presets")
     def list_generation_presets() -> list[dict[str, object]]:  # pyright: ignore[reportUnusedFunction]
@@ -999,6 +1011,7 @@ def create_app(
             or len(filename) > 200
             or any(character in filename for character in ("/", "\\", "\x00"))
             or any(ord(character) < 32 for character in filename)
+            or (os.name == "nt" and not valid_windows_filename(filename))
         ):
             raise HTTPException(400, "Invalid media filename")
         try:

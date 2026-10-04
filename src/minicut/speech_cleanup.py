@@ -231,7 +231,12 @@ def detect_silence(
     ]
     # communicate drains stderr while polling cancellation; no media is written.
     with subprocess.Popen(
-        command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     ) as process:
         try:
             while True:

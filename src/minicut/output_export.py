@@ -13,6 +13,7 @@ from minicut.export_settings import (
     ExportSubtitleSettings,
     PreviewOptions,
 )
+from minicut.ffmpeg_paths import ffmpeg_file
 from minicut.highlight_service import source_segments
 from minicut.output_plan import OutputPlan
 from minicut.output_render import OutputRenderRequest, RenderOutputUseCase
@@ -41,14 +42,14 @@ def _extract_cover(
         "-nostdin",
         "-y",
         "-i",
-        video_path.as_uri(),
+        ffmpeg_file(video_path),
         "-map",
         "0:v:0",
         "-frames:v",
         "1",
         "-q:v",
         "2",
-        cover_path.as_uri(),
+        ffmpeg_file(cover_path),
     )
     FfmpegRenderer().render_to_path(
         command,

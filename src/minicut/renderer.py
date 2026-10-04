@@ -1,18 +1,22 @@
 """FFmpeg process execution with progress, cancellation, and safe failures."""
 
+import re
 import subprocess
 import time
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Generator, Iterable
+from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from queue import Empty, Queue
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from threading import Thread
 from typing import Protocol, TextIO, cast
 from urllib.parse import unquote
 
 from minicut.errors import ProcessingError
+from minicut.ffmpeg_paths import ffmpeg_file
 from minicut.render_progress import FfmpegProgressEvent, FfmpegProgressParser
 from minicut.transcription_task import CancellationToken
 
@@ -57,8 +61,61 @@ def _launch_process(command: tuple[str, ...]) -> RenderProcess:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         ),
     )
+
+
+@lru_cache(maxsize=4)
+def _modern_filter_files(executable: str) -> bool:
+    """FFmpeg 7+ accepts slash-prefixed options; older releases use scripts."""
+    result = subprocess.run(
+        (executable, "-version"), capture_output=True, check=True, timeout=10
+    )
+    match = re.search(rb"ffmpeg version (?:n)?(\d+)\.", result.stdout)
+    if match is None:
+        raise RenderFailed("Cannot determine FFmpeg version for a long filter graph.")
+    return int(match[1]) >= 7
+
+
+@contextmanager
+def _filter_files(command: tuple[str, ...]) -> Generator[tuple[str, ...], None, None]:
+    # Windows CreateProcess limits its UTF-16 command line to 32,767 characters.
+    # Leave room for quoting, paths and progress flags; move large graphs to disk.
+    length = len(subprocess.list2cmdline(command).encode("utf-16-le")) // 2
+    if length < 16000:
+        yield command
+        return
+    filters = {
+        "-vf": "filter:v",
+        "-af": "filter:a",
+        "-filter_complex": "filter_complex",
+    }
+    if not any(option in filters for option in command):
+        yield command
+        return
+    modern = _modern_filter_files(command[0])
+    with TemporaryDirectory(prefix="minicut-filters-") as directory:
+        prepared: list[str] = []
+        arguments = iter(command)
+        for argument in arguments:
+            if argument not in filters:
+                prepared.append(argument)
+                continue
+            graph = next(arguments)
+            path = Path(directory) / f"filter-{len(prepared)}.txt"
+            path.write_text(graph, encoding="utf-8")
+            option = filters[argument]
+            flag = (
+                f"-/{option}"
+                if modern
+                else "-filter_complex_script"
+                if option == "filter_complex"
+                else f"-filter_script:{option[-1]}"
+            )
+            prepared.extend((flag, str(path)))
+        yield tuple(prepared)
 
 
 def _ignore_progress(event: FfmpegProgressEvent) -> None:
@@ -124,6 +181,29 @@ class FfmpegRenderer:
             raise ValueError("render command must not be empty")
         if timeout_seconds <= 0:
             raise ValueError("render timeout must be positive")
+        try:
+            with _filter_files(command) as prepared:
+                return self._execute(
+                    prepared,
+                    timeout_seconds=timeout_seconds,
+                    cancellation=cancellation,
+                    on_progress=on_progress,
+                )
+        except FileNotFoundError as error:
+            raise RenderFailed("FFmpeg executable is not available.") from error
+        except subprocess.SubprocessError as error:
+            raise RenderFailed(
+                "Cannot read FFmpeg version for a long filter graph."
+            ) from error
+
+    def _execute(
+        self,
+        command: tuple[str, ...],
+        *,
+        timeout_seconds: float,
+        cancellation: CancellationToken | None,
+        on_progress: RenderProgressReporter,
+    ) -> tuple[FfmpegProgressEvent, ...]:
         token = cancellation if cancellation is not None else CancellationToken()
         progress_command = (
             command[0],
@@ -207,6 +287,7 @@ class FfmpegRenderer:
         if not command or command[-1] not in (
             destination.as_uri(),
             unquote(destination.as_uri()),
+            ffmpeg_file(destination),
         ):
             raise ValueError("render command output does not match publish destination")
         if not destination.parent.is_dir():
@@ -219,7 +300,7 @@ class FfmpegRenderer:
             delete=False,
         ) as temporary_file:
             temporary_path = Path(temporary_file.name)
-        temporary_command = (*command[:-1], unquote(temporary_path.as_uri()))
+        temporary_command = (*command[:-1], ffmpeg_file(temporary_path))
         try:
             events = self.execute(
                 temporary_command,

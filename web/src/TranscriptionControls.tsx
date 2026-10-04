@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { recoverTranscription, readTranscription, startTranscription, resumeTask, cancelOutputExport, type TranscriptionTask, type TranscriptionOptions } from "./api";
+import { getTranscriptionDefaults, recoverTranscription, readTranscription, startTranscription, resumeTask, cancelOutputExport, type TranscriptionTask, type TranscriptionOptions } from "./api";
 
 interface Props {project: string; asset: string; onComplete?: () => void; recover?: typeof recoverTranscription; read?: typeof readTranscription; start?: typeof startTranscription}
 export function TranscriptionControls({project, asset, onComplete, recover = recoverTranscription, read = readTranscription, start = startTranscription}: Props) {
-  const [options, setOptions] = useState<TranscriptionOptions>({provider: "mlx", model: "large-v3-turbo", language: "zh"});
+  const [options, setOptions] = useState<TranscriptionOptions>({provider: "whisper", model: "small", language: "zh"});
+  const [mlxSupported, setMlxSupported] = useState(false);
   const [task, setTask] = useState<TranscriptionTask | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -13,7 +14,7 @@ export function TranscriptionControls({project, asset, onComplete, recover = rec
   const complete = useRef(onComplete); complete.current = onComplete;
   useEffect(() => {
     const controller = new AbortController();
-    recover(project, asset, controller.signal).then(value => {if (!controller.signal.aborted) {setTask(value); if(value?.configuration)setOptions(value.configuration); setLoading(false);}}).catch((reason: unknown) => {if (!controller.signal.aborted) {setError(reason instanceof Error ? reason.message : "无法恢复任务"); setLoading(false);}});
+    Promise.all([recover(project, asset, controller.signal), getTranscriptionDefaults(controller.signal)]).then(([value, defaults]) => {if (!controller.signal.aborted) {setTask(value); setOptions(value?.configuration ?? defaults.options); setMlxSupported(defaults.mlx_supported); setLoading(false);}}).catch((reason: unknown) => {if (!controller.signal.aborted) {setError(reason instanceof Error ? reason.message : "无法恢复任务"); setLoading(false);}});
     return () => controller.abort();
   }, [project, asset, recover, retry]);
   const active = task?.status === "pending" || task?.status === "running";
@@ -33,10 +34,11 @@ export function TranscriptionControls({project, asset, onComplete, recover = rec
     finally {setSubmitting(false);}
   }
   return <div className="transcription-controls">
-    <label>转录引擎<select aria-label="转录引擎" disabled={active || submitting} value={options.provider} onChange={event => setOptions({...options, provider: event.target.value as TranscriptionOptions["provider"]})}><option value="mlx">MLX（Apple 芯片）</option><option value="whisper">PyTorch Whisper</option></select></label>
-    <label>模型<select aria-label="模型" disabled={active || submitting} value={options.model} onChange={event => setOptions({...options, model: event.target.value})}>{["tiny", "base", "small", "medium", "large", "large-v2", "large-v3", "large-v3-turbo"].map(model => <option key={model}>{model}</option>)}</select></label>
-    <label>语言<select aria-label="语言" disabled={active || submitting} value={options.language} onChange={event => setOptions({...options, language: event.target.value})}><option value="zh">中文</option><option value="en">英文</option></select></label>
+    <label>转录引擎<select aria-label="转录引擎" disabled={loading || active || submitting} value={options.provider} onChange={event => setOptions({...options, provider: event.target.value as TranscriptionOptions["provider"]})}><option value="mlx" disabled={!mlxSupported}>MLX（Apple 芯片）</option><option value="whisper">PyTorch Whisper</option></select></label>
+    <label>模型<select aria-label="模型" disabled={loading || active || submitting} value={options.model} onChange={event => setOptions({...options, model: event.target.value})}>{["tiny", "base", "small", "medium", "large", "large-v2", "large-v3", "large-v3-turbo"].map(model => <option key={model}>{model}</option>)}</select></label>
+    <label>语言<select aria-label="语言" disabled={loading || active || submitting} value={options.language} onChange={event => setOptions({...options, language: event.target.value})}><option value="zh">中文</option><option value="en">英文</option></select></label>
     <p className="helper-text">本机转录 · 未缓存模型需联网下载</p>
+    {!loading && !mlxSupported && options.provider === "mlx" && <p role="status">已保存的任务使用 MLX；当前后端不支持该引擎。新转录请选择 PyTorch Whisper。</p>}
     <details className="helper-details"><summary>转录说明</summary><p className="helper-text">需安装所选引擎。设置仅用于下次转录；刷新后恢复任务与设置。</p></details>
     <button className="primary-button" disabled={loading || submitting || active || !!error} onClick={submit}>{loading ? "正在恢复任务…" : submitting ? "正在提交…" : "开始转录"}</button>
     {error && <p role="alert">{error}<button onClick={() => {setError(""); setPaused(false); setLoading(true); setRetry(value => value + 1);}}>重试查询</button></p>}

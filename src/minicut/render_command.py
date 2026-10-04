@@ -5,8 +5,8 @@ from enum import StrEnum
 from fractions import Fraction
 from math import isfinite
 from pathlib import Path
-from urllib.parse import unquote
 
+from minicut.ffmpeg_paths import ffmpeg_file
 from minicut.media import MediaAsset, StreamType
 from minicut.output_plan import OutputPlan, OutputRole, transition_gap_ms
 from minicut.output_timeline import coalesce_output_media, validate_output_timeline
@@ -37,8 +37,7 @@ def _seconds(milliseconds: int) -> str:
 def _local_file_url(path: str, *, label: str) -> str:
     if not path or "\0" in path:
         raise ValueError(f"{label} path must be a valid local path")
-    # FFmpeg's file protocol does not URL-decode percent-encoded local names.
-    return unquote(Path(path).absolute().as_uri())
+    return ffmpeg_file(path)
 
 
 def _source_crop(metadata: "VideoOutputMetadata") -> str:
@@ -146,7 +145,7 @@ class SubtitleMode(StrEnum):
 
 
 def _subtitle_filter_path(path: str) -> str:
-    value = str(Path(path).absolute())
+    value = Path(path).absolute().as_posix()
     # Escape the option parser, then the enclosing filtergraph parser. A single
     # quoted string is insufficient for filenames containing an apostrophe.
     option_value = "".join(
