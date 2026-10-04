@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import NoReturn
 
@@ -13,6 +12,7 @@ from fastapi import BackgroundTasks
 import minicut.api as api_module
 from minicut.api import create_app
 from minicut.project import ProjectManifest, ProjectRepository
+from minicut.task_workers import TaskQueueFull, TaskWorkerPool
 
 
 def test_batch_validates_all_covers_before_creating_tasks(
@@ -57,7 +57,7 @@ def test_batch_validates_all_covers_before_creating_tasks(
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("failure", ["create", "register", "executor", "submit"])
+@pytest.mark.parametrize("failure", ["create", "register", "full", "submit"])
 def test_failed_batch_submission_settles_only_new_unexecuted_tasks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
@@ -70,7 +70,6 @@ def test_failed_batch_submission_settles_only_new_unexecuted_tasks(
 
     monkeypatch.setattr(api_module, "export_output", export)
     write_job = api_module._write_job  # pyright: ignore[reportPrivateUsage]
-    submit = ThreadPoolExecutor.submit
 
     def fail_create(
         path: Path, payload: dict[str, object], *, create: bool = False
@@ -87,22 +86,13 @@ def test_failed_batch_submission_settles_only_new_unexecuted_tasks(
     ) -> NoReturn:
         raise RuntimeError("registration failed")
 
-    def fail_executor(*args: object, **kwargs: object) -> NoReturn:
-        raise RuntimeError("executor failed")
-
-    submitted = 0
+    def fail_full(*args: object, **kwargs: object) -> NoReturn:
+        raise TaskQueueFull("queue full")
 
     def fail_submit(
-        self: ThreadPoolExecutor,
-        fn: Callable[..., object],
-        *args: object,
-        **kwargs: object,
-    ) -> Future[object]:
-        nonlocal submitted
-        submitted += 1
-        if submitted == 2:
-            raise RuntimeError("submission failed")
-        return submit(self, fn, *args, **kwargs)
+        self: TaskWorkerPool, operations: list[Callable[[], None]]
+    ) -> NoReturn:
+        raise RuntimeError("submission failed")
 
     async def run() -> None:
         async with httpx.AsyncClient(
@@ -125,19 +115,17 @@ def test_failed_batch_submission_settles_only_new_unexecuted_tasks(
                     patch.setattr(api_module, "_write_job", fail_create)
                 elif failure == "register":
                     patch.setattr(BackgroundTasks, "add_task", fail_register)
-                elif failure == "executor":
-                    patch.setattr(api_module, "ThreadPoolExecutor", fail_executor)
+                elif failure == "full":
+                    patch.setattr(TaskWorkerPool, "submit_many", fail_full)
                 else:
-                    patch.setattr(ThreadPoolExecutor, "submit", fail_submit)
+                    patch.setattr(TaskWorkerPool, "submit_many", fail_submit)
                 response = await client.post(
                     "/api/projects/demo/tasks/output-export-batch",
                     json={"outputs": outputs},
                     headers={"Idempotency-Key": "batch"},
                 )
-                # Executor failures happen after the 202 response has been sent.
-                assert response.status_code == (
-                    202 if failure in {"executor", "submit"} else 500
-                )
+                # Admission now happens before sending a successful response.
+                assert response.status_code == (503 if failure == "full" else 500)
 
             assert calls.count("existing") == 1
             assert (await client.get("/api/projects/demo/tasks/batch-existing")).json()[

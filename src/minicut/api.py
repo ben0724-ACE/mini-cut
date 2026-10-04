@@ -1,16 +1,18 @@
 """Local HTTP API that adapts web schemas to MiniCut application services."""
 
+import asyncio
 import json
 import mimetypes
 import os
 import shutil
-from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import AsyncGenerator, Callable, Iterator
+from concurrent.futures import CancelledError, Future
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from threading import BoundedSemaphore, Lock
+from threading import Lock
 from time import monotonic
 from typing import Annotated, Self, cast
 from uuid import uuid4
@@ -100,6 +102,7 @@ from minicut.project_deletion import ProjectDeletionGuard
 from minicut.render_profile import RenderProfile
 from minicut.subtitle_font import available_subtitle_fonts
 from minicut.subtitle_style import SubtitleStyle
+from minicut.task_workers import TaskQueueFull, TaskWorkerPool, wait_for_task
 from minicut.transcription_task import CancellationToken, TranscriptionCancelled
 from minicut.workflows import JsonObject, workflow_router
 
@@ -560,9 +563,10 @@ def _task_response(payload: dict[str, object]) -> TaskResponse:
 class _TaskRunner:
     run: Callable[[], None]
     fail_submission: Callable[[], None]
-
-    def __call__(self) -> None:
-        self.run()
+    pool: TaskWorkerPool
+    settle: Callable[[Future[None]], None]
+    identity: tuple[str, str]
+    future: Future[None] | None = None
 
 
 def _plan_response(result: ReadPlanResult) -> PlanDetailResponse:
@@ -663,6 +667,7 @@ def create_app(
     projects_root: Path,
     *,
     export_concurrency: int | None = None,
+    task_queue_capacity: int = 64,
     init_project: InitProjectOperation | None = None,
     inspect_project: InspectOperation | None = None,
     transcribe: TranscribeOperation | None = None,
@@ -686,7 +691,26 @@ def create_app(
     plan_modifier = modify_plan or ModifyPlanUseCase()
     preview_compiler = preview_timeline or PreviewTimelineUseCase()
     export_concurrency = _resolve_export_concurrency(export_concurrency)
-    api = FastAPI(title="MiniCut local API", version="0.1.0")
+    compute_workers = TaskWorkerPool(
+        1, capacity=task_queue_capacity, name="minicut-compute"
+    )
+    export_workers = TaskWorkerPool(
+        export_concurrency, capacity=task_queue_capacity, name="minicut-export"
+    )
+    workflow_workers = TaskWorkerPool(
+        2, capacity=task_queue_capacity, name="minicut-workflow"
+    )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
+        try:
+            yield
+        finally:
+            # Coordinators must finish their children before child queues close.
+            for pool in (workflow_workers, compute_workers, export_workers):
+                await asyncio.to_thread(pool.shutdown)
+
+    api = FastAPI(title="MiniCut local API", version="0.1.0", lifespan=lifespan)
 
     api.add_middleware(ProjectDeletionGuard)
     preset_library = GenerationPresetLibrary(root)
@@ -760,8 +784,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     export_tokens: dict[tuple[str, str], CancellationToken] = {}
-    compute_slot = BoundedSemaphore(1)
-    export_slot = BoundedSemaphore(export_concurrency)
+    task_futures: dict[tuple[str, str], tuple[TaskWorkerPool, Future[None]]] = {}
     resume_lock = Lock()
     output_edit_lock = Lock()
 
@@ -815,6 +838,8 @@ def create_app(
         except FileExistsError:
             return existing_task(path, kind, request_data)
 
+        token = export_tokens.setdefault((project_id, task_id), CancellationToken())
+
         def fail_submission() -> None:
             job = _read_job(path)
             if job.get("status") == "pending":
@@ -829,18 +854,6 @@ def create_app(
                 export_tokens.pop((project_id, task_id), None)
 
         def run() -> None:
-            # ML/model work stays serial while FFmpeg work uses a small bounded pool.
-            token = export_tokens.setdefault((project_id, task_id), CancellationToken())
-            slot = (
-                export_slot
-                if kind in {"output-export", "output-preview", "render"}
-                else compute_slot
-            )
-            while not slot.acquire(timeout=0.2):
-                if token.is_cancelled:
-                    _write_job(path, {**pending, "status": "cancelled"})
-                    export_tokens.pop((project_id, task_id), None)
-                    return
             started = monotonic()
             running = {**pending, "status": "running"}
             try:
@@ -881,14 +894,25 @@ def create_app(
                     },
                 )
             finally:
-                slot.release()
                 export_tokens.pop((project_id, task_id), None)
+
+        def settle(_future: Future[None]) -> None:
+            export_tokens.pop((project_id, task_id), None)
+            task_futures.pop((project_id, task_id), None)
 
         try:
             response = _task_response(pending)
-            runner = _TaskRunner(run, fail_submission)
+            runner = _TaskRunner(
+                run,
+                fail_submission,
+                export_workers
+                if kind in {"output-export", "output-preview", "render"}
+                else compute_workers,
+                settle,
+                (project_id, task_id),
+            )
             if runners is None:
-                background_tasks.add_task(runner)
+                schedule_runners([runner], background_tasks)
             else:
                 runners.append(runner)
             return response
@@ -911,17 +935,27 @@ def create_app(
         if first_error is not None:
             raise first_error
 
-    def run_export_batch(runners: list[_TaskRunner]) -> None:
+    async def observe_runners(runners: list[_TaskRunner]) -> None:
+        # Keep graceful shutdown tracking without occupying HTTP worker threads.
+        await asyncio.gather(
+            *(wait_for_task(runner.future) for runner in runners if runner.future)
+        )
+
+    def schedule_runners(
+        runners: list[_TaskRunner], background: BackgroundTasks
+    ) -> None:
         if not runners:
             return
         try:
-            with ThreadPoolExecutor(
-                max_workers=min(export_concurrency, len(runners)),
-                thread_name_prefix="minicut-export",
-            ) as executor:
-                futures = [executor.submit(runner.run) for runner in runners]
-                for future in futures:
-                    future.result()
+            background.add_task(observe_runners, runners)
+            futures = runners[0].pool.submit_many([runner.run for runner in runners])
+            for runner, future in zip(runners, futures, strict=True):
+                runner.future = future
+                task_futures[runner.identity] = (runner.pool, future)
+                future.add_done_callback(runner.settle)
+        except TaskQueueFull as error:
+            fail_submissions(runners)
+            raise HTTPException(503, str(error)) from error
         except Exception:
             fail_submissions(runners)
             raise
@@ -1239,7 +1273,7 @@ def create_app(
                 )
                 for output in outputs
             ]
-            background_tasks.add_task(run_export_batch, runners)
+            schedule_runners(runners, background_tasks)
             return responses
         except Exception:
             fail_submissions(runners)
@@ -1350,6 +1384,17 @@ def create_app(
                 "This task cannot be cancelled by this server; it may predate a restart",
             )
         token.cancel()
+        queued = task_futures.get((project_id, task_id))
+        if queued is not None:
+            pool, future = queued
+            if pool.cancel(
+                future,
+                on_cancel=lambda: _write_job(
+                    _job_path(root / project_id, task_id),
+                    {**job, "status": "cancelled"},
+                ),
+            ):
+                job = _read_job(_job_path(root / project_id, task_id))
         return _task_response(job)
 
     @api.get(
@@ -2135,9 +2180,18 @@ def create_app(
                 "boundary_version": None,
                 **cast(dict[str, object], request),
             }
+            body = HighlightTaskBody.model_validate(request)
+            try:
+                OutputCollectionRepository(
+                    root / project_id, f"highlights-{identity}"
+                ).inherit_source_transcript(
+                    body.asset_id, f"highlights-{job['task_id']}"
+                )
+            except (MiniCutError, ValueError) as error:
+                raise HTTPException(400, str(error)) from error
             return submit_highlights(
                 project_id,
-                HighlightTaskBody.model_validate(request),
+                body,
                 background_tasks,
                 identity,
             )
@@ -2393,24 +2447,19 @@ def create_app(
                         ),
                     )
                     responses.append(response)
-                # Recovery adapters schedule individual runners; include those in
-                # the same pool rather than executing retries sequentially.
-                runners.extend(
-                    cast(_TaskRunner, scheduled.func) for scheduled in background.tasks
-                )
-                background.tasks.clear()
-                background.add_task(run_export_batch, runners)
+                schedule_runners(runners, background)
             except Exception:
-                runners.extend(
-                    cast(_TaskRunner, scheduled.func) for scheduled in background.tasks
-                )
-                background.tasks.clear()
                 fail_submissions(runners)
                 raise
         started([response.task_id for response in responses])
-        # All adapters above schedule synchronous local task runners.
+        # Only dedicated workflow workers wait synchronously for child completion.
         for scheduled in background.tasks:
-            scheduled.func(*scheduled.args, **scheduled.kwargs)
+            for runner in cast(list[_TaskRunner], scheduled.args[0]):
+                if runner.future is not None:
+                    try:
+                        runner.future.result()
+                    except CancelledError:
+                        pass
         completed = [
             _read_job(_job_path(root / project_id, response.task_id))
             for response in responses
@@ -2437,13 +2486,16 @@ def create_app(
             "pending",
             "running",
         }:
-            export_tokens.setdefault(
-                (project_id, task_id), CancellationToken()
-            ).cancel()
+            cancel_export(project_id, task_id)
 
     api.include_router(
         workflow_router(
-            root, _read_job, _write_job, workflow_child, cancel_workflow_child
+            root,
+            _read_job,
+            _write_job,
+            workflow_child,
+            cancel_workflow_child,
+            workflow_workers,
         )
     )
     return api

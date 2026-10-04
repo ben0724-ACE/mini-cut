@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 from collections.abc import Callable
+from concurrent.futures import Future
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +40,7 @@ from minicut.platform_support import (
     default_transcription_provider,
 )
 from minicut.project import ProjectRepository
+from minicut.task_workers import TaskQueueFull, TaskWorkerPool, wait_for_task
 from minicut.transcription_task import TranscriptionCancelled
 
 # SQLite and task journals contain heterogeneous JSON; models below validate
@@ -310,11 +312,36 @@ def workflow_router(
     write_job: JobWriter,
     child_task: WorkflowChild,
     cancel_child: Callable[[str, str], None],
+    workers: TaskWorkerPool,
 ) -> APIRouter:
     router = APIRouter()
     library = WorkflowLibrary(root)
     lock = Lock()
     active: set[tuple[str, str]] = set()
+    scheduled_runs: dict[tuple[str, str], Future[None]] = {}
+
+    def schedule_run(background: BackgroundTasks, project: str, identity: str) -> None:
+        # Register an async observer before admitting work; registration failure
+        # must leave a resumable record rather than an unscheduled pending job.
+        futures: list[Future[None]] = []
+
+        async def observe() -> None:
+            for future in futures:
+                await wait_for_task(future)
+
+        try:
+            background.add_task(observe)
+            future = workers.submit(lambda: run(project, identity))
+            futures.append(future)
+            scheduled_runs[project, identity] = future
+        except Exception as error:
+            job = read_job(path(project, identity))
+            job.update(status="failed", error=str(error))
+            write_job(path(project, identity), job)
+            active.discard((project, identity))
+            if isinstance(error, TaskQueueFull):
+                raise HTTPException(503, str(error)) from error
+            raise
 
     def path(project: str, identity: str) -> Path:
         return root / project / ".minicut/jobs" / f"{identity}.json"
@@ -463,6 +490,7 @@ def workflow_router(
         finally:
             with lock:
                 active.discard((project, identity))
+                scheduled_runs.pop((project, identity), None)
 
     @router.get("/api/projects/{project}/workflow-run")
     def latest_run(  # pyright: ignore[reportUnusedFunction]
@@ -528,7 +556,7 @@ def workflow_router(
             }
             write_job(existing, job, create=True)
             active.add((project, identity))
-            background.add_task(run, project, identity)
+            schedule_run(background, project, identity)
             return response(job)
 
     @router.post(
@@ -553,7 +581,7 @@ def workflow_router(
             job.update(status="pending", cancel_requested=False, owner_pid=os.getpid())
             write_job(path(project, identity), job)
             active.add((project, identity))
-            background.add_task(run, project, identity)
+            schedule_run(background, project, identity)
             return response(job)
 
     @router.post("/api/projects/{project}/workflow-runs/{identity}/cancel")
@@ -568,6 +596,16 @@ def workflow_router(
             if job["status"] in {"pending", "running"}:
                 job["cancel_requested"] = True
                 write_job(path(project, identity), job)
+                future = scheduled_runs.get((project, identity))
+                if future is not None:
+
+                    def cancelled() -> None:
+                        job["status"] = "cancelled"
+                        write_job(path(project, identity), job)
+
+                    if workers.cancel(future, on_cancel=cancelled):
+                        active.discard((project, identity))
+                        scheduled_runs.pop((project, identity), None)
                 for task_id in job.get("child_task_ids", []):
                     cancel_child(project, task_id)
             return response(job)
