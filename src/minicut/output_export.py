@@ -47,6 +47,8 @@ def _extract_cover(
         "0:v:0",
         "-frames:v",
         "1",
+        "-update",
+        "1",
         "-q:v",
         "2",
         ffmpeg_file(cover_path),

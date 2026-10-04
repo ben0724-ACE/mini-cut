@@ -218,6 +218,8 @@ def extract_frame(
             "0:v:0",
             "-frames:v",
             "1",
+            "-update",
+            "1",
             "-vf",
             "scale='min(1920,iw)':-1",
             ffmpeg_file(destination),

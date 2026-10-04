@@ -120,7 +120,7 @@ Windows 默认检测微软雅黑，Ubuntu 默认检测 Noto Sans CJK。找不到
 
 ### 跨平台验证
 
-`.github/workflows/platform-tests.yml` 提供 Windows Server 2022、Ubuntu 22.04/24.04 的针对性后端及真实 FFmpeg 测试，并运行前端测试与构建。它覆盖后端默认值、进程存活检测、任务恢复、媒体导入、Unicode/空格/百分号路径、软字幕/烧录字幕、原音保留、封面与长滤镜文件读取；转录后端单元测试使用替身，不下载模型或调用付费 AI。此配置尚需推送后由 GitHub Actions 实际运行，本地 macOS 测试不能证明目标系统已经通过。
+`.github/workflows/platform-tests.yml` 提供 Windows Server 2022、Ubuntu 22.04/24.04 的针对性后端及真实 FFmpeg 测试，并运行前端测试与构建。它覆盖后端默认值、进程存活检测、任务恢复、媒体导入、Unicode/空格/百分号路径、软字幕/烧录字幕、原音保留、封面与长滤镜文件读取；转录后端单元测试使用替身，不下载模型或调用付费 AI。推送后可在仓库的 Actions → Platform compatibility 查看各平台结果；请以对应提交的运行结果为准，本地 macOS 测试不能证明目标系统已经通过。
 
 人工验收请在每个目标系统执行：
 
