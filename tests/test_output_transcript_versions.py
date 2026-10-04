@@ -1,3 +1,4 @@
+import asyncio
 import json
 import shutil
 import subprocess
@@ -7,13 +8,15 @@ from threading import Lock
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
+from minicut.api import create_app
 from minicut.application import TranscribeProjectUseCase, TranscribeRequest
 from minicut.errors import ProcessingError, UserInputError
-from minicut.highlight_brief import HighlightBrief, HighlightPreset
+from minicut.highlight_brief import HighlightBrief
+from minicut.highlight_selection import HighlightSelection
 from minicut.highlight_service import (
-    generate_highlights,
     manual_split_output,
     output_versions,
     read_highlights,
@@ -23,6 +26,7 @@ from minicut.highlight_service import (
     split_saved_output,
     translate_output_subtitles,
 )
+from minicut.llm_provider import TextModelRequest, TextModelResponse
 from minicut.media import MediaAsset, StreamInfo, StreamType
 from minicut.output_export import export_output, preview_output
 from minicut.output_plan import (
@@ -42,7 +46,7 @@ from minicut.project import ProjectManifest, ProjectRepository
 from minicut.render_profile import RenderProfile
 from minicut.sentence_boundaries import sentence_segments
 from minicut.transcript import Transcript, TranscriptSource, Word
-from minicut.transcription_task import CancellationToken
+from minicut.transcription_task import CancellationToken, TranscriptionCancelled
 
 
 @dataclass
@@ -251,25 +255,180 @@ def test_translation_uses_bound_source(
     assert translator.call_args.args[2] == workspace.old
 
 
-def test_generation_retry_retains_initial_transcript(
+@pytest.mark.parametrize("interrupted", ["failed", "cancelled"])
+def test_api_resume_inherits_transcript_and_reuses_successful_model_response(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch, interrupted: str
+) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-no-network")
+    model_inputs: list[list[str]] = []
+    refinement_inputs: list[Transcript] = []
+
+    class Provider:
+        async def generate(self, request: TextModelRequest) -> TextModelResponse:
+            payload = json.loads(request.user_prompt)
+            model_inputs.append([s["text"] for s in payload["segments"]])
+            candidate = payload["output_example"]["candidates"][0]
+            candidate.update(
+                segment_ids=[s["segment_id"] for s in payload["segments"]],
+                context_segment_ids=[],
+                hook_segment_ids=[],
+            )
+            return TextModelResponse(
+                json.dumps({"candidates": [candidate], "notes": []}), request.model
+            )
+
+    async def refine(
+        selection: HighlightSelection,
+        brief: HighlightBrief,
+        transcript: Transcript,
+        *args: object,
+    ) -> HighlightSelection:
+        refinement_inputs.append(transcript)
+        if len(refinement_inputs) <= 2:
+            if interrupted == "cancelled":
+                raise TranscriptionCancelled("interrupted")
+            raise ProcessingError("interrupted")
+        return selection
+
+    def provider_factory(*args: object, **kwargs: object) -> Provider:
+        return Provider()
+
+    monkeypatch.setattr("minicut.highlight_service.DeepSeekProvider", provider_factory)
+    monkeypatch.setattr("minicut.highlight_service.refine_boundaries", refine)
+
+    async def run() -> None:
+        app = create_app(workspace.project.parent, transcribe=workspace.use_case)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            base = f"/api/projects/{workspace.project.name}/tasks"
+            assert (
+                await client.post(
+                    base + "/highlights",
+                    json={
+                        "asset_id": "asset",
+                        "preset": "knowledge_digest",
+                        "count": 1,
+                    },
+                    headers={"Idempotency-Key": "original"},
+                )
+            ).status_code == 202
+            assert (await client.get(base + "/original")).json()[
+                "status"
+            ] == interrupted
+            assert model_inputs == [["Old speech.", "Still here."]]
+            original = OutputCollectionRepository(
+                workspace.project, "highlights-original"
+            )
+            binding = original.path.with_suffix(".transcript.json").read_bytes()
+            assert (
+                await client.post(
+                    base + "/transcribe",
+                    json={
+                        "asset_id": "asset",
+                        "provider": "mlx",
+                        "model": "small",
+                        "language": "zh",
+                    },
+                    headers={"Idempotency-Key": "retranscribe"},
+                )
+            ).status_code == 202
+            assert (await client.get(base + "/retranscribe")).json()[
+                "status"
+            ] == "succeeded"
+            assert (
+                TranscriptVersionRepository(workspace.project, "asset").latest()[1]
+                == workspace.new
+            )
+            first = await client.post(base + "/original/resume")
+            assert first.status_code == 202
+            first_id = first.json()["task_id"]
+            assert first_id != "original"
+            assert (await client.get(base + f"/{first_id}")).json()[
+                "status"
+            ] == interrupted
+            repeated = await client.post(base + "/original/resume")
+            assert repeated.json()["task_id"] == first_id
+            second = await client.post(base + f"/{first_id}/resume")
+            assert second.status_code == 202
+            second_id = second.json()["task_id"]
+            assert second_id != first_id
+            completed = (await client.get(base + f"/{second_id}")).json()
+            assert completed["status"] == "succeeded"
+            assert completed["result"]["model_requests"][0]["reused"] is True
+            assert model_inputs == [["Old speech.", "Still here."]]
+            assert refinement_inputs == [workspace.old] * 3
+            for identity in (first_id, second_id):
+                repository = OutputCollectionRepository(
+                    workspace.project, f"highlights-{identity}"
+                )
+                assert (
+                    repository.path.with_suffix(".transcript.json").read_bytes()
+                    == binding
+                )
+                assert repository.source_transcript("asset") == workspace.old
+            # A separate generation still starts from the newly transcribed data.
+            assert (
+                await client.post(
+                    base + "/highlights",
+                    json={
+                        "asset_id": "asset",
+                        "preset": "knowledge_digest",
+                        "count": 1,
+                    },
+                    headers={"Idempotency-Key": "fresh"},
+                )
+            ).status_code == 202
+            assert model_inputs[-1] == ["全新转录内容。"]
+
+    asyncio.run(run())
+
+
+def test_api_resume_rejects_missing_original_transcript_version(
     workspace: Workspace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-no-network")
     planner = AsyncMock(side_effect=ProcessingError("interrupted"))
     monkeypatch.setattr("minicut.highlight_service.plan_highlights", planner)
-    brief = HighlightBrief(HighlightPreset.KNOWLEDGE, 1, None, None)
-    with pytest.raises(ProcessingError, match="interrupted"):
-        generate_highlights(workspace.project, "asset", "pending", brief)
-    workspace.retranscribe()
-    with pytest.raises(ProcessingError, match="interrupted"):
-        generate_highlights(workspace.project, "asset", "pending", brief)
-    assert planner.call_args_list[0].args[2] == planner.call_args_list[1].args[2]
-    assert (
-        OutputCollectionRepository(workspace.project, "pending").source_transcript(
-            "asset"
-        )
-        == workspace.old
-    )
+
+    async def run() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(workspace.project.parent)),
+            base_url="http://test",
+        ) as client:
+            base = f"/api/projects/{workspace.project.name}/tasks"
+            assert (
+                await client.post(
+                    base + "/highlights",
+                    json={
+                        "asset_id": "asset",
+                        "preset": "knowledge_digest",
+                        "count": 1,
+                    },
+                    headers={"Idempotency-Key": "original"},
+                )
+            ).status_code == 202
+            workspace.retranscribe()
+            original = OutputCollectionRepository(
+                workspace.project, "highlights-original"
+            )
+            binding = json.loads(
+                original.path.with_suffix(".transcript.json").read_text()
+            )
+            TranscriptVersionRepository(workspace.project, "asset").version_path(
+                binding["transcript_version"]
+            ).unlink()
+            response = await client.post(base + "/original/resume")
+            assert response.status_code == 400
+            assert (
+                "Source transcript version is missing or invalid"
+                in response.json()["detail"]
+            )
+            assert planner.call_count == 1
+            assert not list((workspace.project / ".minicut/jobs").glob("resume-*.json"))
+
+    asyncio.run(run())
 
 
 def test_missing_bound_version_never_falls_back_to_latest(workspace: Workspace) -> None:

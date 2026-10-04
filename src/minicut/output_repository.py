@@ -57,6 +57,31 @@ class OutputCollectionRepository:
             )
             return transcript
 
+    def inherit_source_transcript(
+        self, asset_id: str, source_collection_id: str
+    ) -> None:
+        """Carry the original generation input into a resumed task's collection."""
+        sources = TranscriptVersionRepository(self.project_directory, asset_id)
+        original = OutputCollectionRepository(
+            self.project_directory, source_collection_id
+        )
+        original_path = original.path.with_suffix(".transcript.json")
+        binding_path = self.path.with_suffix(".transcript.json")
+        with sources.lock:
+            # Older tasks, or tasks stopped before generation started, may not
+            # have bound a transcript yet. Keep their existing recovery behavior.
+            if not original_path.is_file():
+                return
+            original.source_transcript(asset_id)
+            binding = json.loads(original_path.read_text(encoding="utf-8"))
+            if binding_path.is_file():
+                if json.loads(binding_path.read_text(encoding="utf-8")) != binding:
+                    raise UserInputError(
+                        "Resumed collection transcript binding differs"
+                    )
+                return
+            self.write_json(binding_path, binding)
+
     def write(
         self, collection: OutputCollection, segments: tuple[SemanticSegment, ...]
     ) -> None:
