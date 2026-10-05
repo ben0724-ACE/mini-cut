@@ -6,14 +6,10 @@ import mimetypes
 import os
 import shutil
 from collections.abc import AsyncGenerator, Callable, Iterator
-from concurrent.futures import CancelledError, Future
+from concurrent.futures import CancelledError
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
-from tempfile import NamedTemporaryFile
-from threading import Lock
-from time import monotonic
 from typing import Annotated, Self, cast
 from uuid import uuid4
 
@@ -86,14 +82,15 @@ from minicut.highlight_service import (
     translate_output_subtitles,
 )
 from minicut.importer import import_media
-from minicut.llm_provider import TextModelProviderError
+from minicut.job_repository import JobNotFound, JobRepository, read_job
+from minicut.job_repository import job_path as _job_path
+from minicut.job_repository import write_job as _write_job
 from minicut.media import classify_media
 from minicut.output_export import RENDER_ENGINE_VERSION, export_output, preview_output
 from minicut.output_repository import OutputCollectionRepository
 from minicut.platform_support import (
     default_transcription_model,
     default_transcription_provider,
-    process_alive,
     supports_mlx,
     valid_windows_filename,
 )
@@ -102,7 +99,9 @@ from minicut.project_deletion import ProjectDeletionGuard
 from minicut.render_profile import RenderProfile
 from minicut.subtitle_font import available_subtitle_fonts
 from minicut.subtitle_style import SubtitleStyle
-from minicut.task_workers import TaskQueueFull, TaskWorkerPool, wait_for_task
+from minicut.task_executor import TaskConflict, TaskExecutor
+from minicut.task_executor import TaskRunner as _TaskRunner
+from minicut.task_workers import TaskQueueFull, TaskWorkerPool
 from minicut.transcription_task import CancellationToken, TranscriptionCancelled
 from minicut.workflows import JsonObject, workflow_router
 
@@ -488,61 +487,11 @@ class JumpCutRiskResponse(BaseModel):
     explanation: str
 
 
-def _job_path(project_directory: Path, task_id: str) -> Path:
-    return project_directory / ".minicut" / "jobs" / f"{task_id}.json"
-
-
-def _write_job(path: Path, payload: dict[str, object], *, create: bool = False) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if create:
-        output = path.open("x", encoding="utf-8")
-        try:
-            with output:
-                json.dump(payload, output, ensure_ascii=False)
-                output.write("\n")
-        except Exception:
-            path.unlink(missing_ok=True)
-            raise
-        return
-    temporary_path: Path | None = None
-    try:
-        with NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}-",
-            suffix=".tmp",
-            delete=False,
-        ) as output:
-            json.dump(payload, output, ensure_ascii=False)
-            output.write("\n")
-            temporary_path = Path(output.name)
-        temporary_path.replace(path)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
-
-
 def _read_job(path: Path) -> dict[str, object]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(value, dict):
-            raise ValueError("job is not an object")
-        job = cast(dict[str, object], value)
-        if job.get("status") in ("running", "pending"):
-            pid = job.get("owner_pid")
-            alive = False
-            if type(pid) is int and pid > 0:
-                alive = process_alive(pid)
-            if not alive:
-                job.update(
-                    status="failed",
-                    error="服务已重启，任务已中断；可恢复已保存的阶段。",
-                    resumable=True,
-                )
-        return job
-    except (OSError, TypeError, UnicodeError, ValueError) as error:
-        raise HTTPException(status_code=404, detail="Task does not exist") from error
+        return read_job(path)
+    except JobNotFound as error:
+        raise HTTPException(404, str(error)) from error
 
 
 def _task_response(payload: dict[str, object]) -> TaskResponse:
@@ -557,16 +506,6 @@ def _task_response(payload: dict[str, object]) -> TaskResponse:
             },
         }
     return TaskResponse.model_validate(payload)
-
-
-@dataclass
-class _TaskRunner:
-    run: Callable[[], None]
-    fail_submission: Callable[[], None]
-    pool: TaskWorkerPool
-    settle: Callable[[Future[None]], None]
-    identity: tuple[str, str]
-    future: Future[None] | None = None
 
 
 def _plan_response(result: ReadPlanResult) -> PlanDetailResponse:
@@ -707,8 +646,8 @@ def create_app(
             yield
         finally:
             # Coordinators must finish their children before child queues close.
-            for pool in (workflow_workers, compute_workers, export_workers):
-                await asyncio.to_thread(pool.shutdown)
+            await asyncio.to_thread(workflow_workers.shutdown)
+            await asyncio.to_thread(executor.shutdown)
 
     api = FastAPI(title="MiniCut local API", version="0.1.0", lifespan=lifespan)
 
@@ -783,26 +722,28 @@ def create_app(
         except MiniCutError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
-    export_tokens: dict[tuple[str, str], CancellationToken] = {}
-    task_futures: dict[tuple[str, str], tuple[TaskWorkerPool, Future[None]]] = {}
-    resume_lock = Lock()
+    def write_task_job(
+        path: Path, payload: dict[str, object], *, create: bool = False
+    ) -> None:
+        _write_job(path, payload, create=create)
 
-    def progress(project_id: str, task_id: str, done: int, total: int) -> None:
-        path = _job_path(root / project_id, task_id)
-        job = _read_job(path)
-        job["progress"] = {"completed": done, "total": total, "phase": "transcription"}
-        _write_job(path, job)
+    executor = TaskExecutor(
+        JobRepository(root, reader=_read_job, writer=write_task_job),
+        compute_workers,
+        export_workers,
+    )
+    progress = executor.progress
+    fail_submissions = executor.abort
 
     def existing_task(
-        path: Path, kind: str, request_data: dict[str, object]
+        project_id: str, task_id: str, kind: str, request_data: dict[str, object]
     ) -> TaskResponse:
-        existing = _read_job(path)
-        if existing.get("kind") != kind or existing.get("request") != request_data:
-            raise HTTPException(
-                status_code=409,
-                detail="Idempotency key is already used by another request",
+        try:
+            return _task_response(
+                executor.existing(project_id, task_id, kind, request_data)
             )
-        return _task_response(existing)
+        except TaskConflict as error:
+            raise HTTPException(409, str(error)) from error
 
     def submit_task(
         project_id: str,
@@ -810,154 +751,45 @@ def create_app(
         kind: str,
         request_data: dict[str, object],
         background_tasks: BackgroundTasks,
-        operation: Callable[[], dict[str, object]],
+        operation: Callable[[CancellationToken], dict[str, object]],
         *,
         runners: list[_TaskRunner] | None = None,
         generation_config: dict[str, object] | None = None,
     ) -> TaskResponse:
-        project_directory = root / project_id
         inspect(project_id)
-        path = _job_path(project_directory, task_id)
-        pending: dict[str, object] = {
-            "task_id": task_id,
-            "owner_pid": os.getpid(),
-            "resumable": kind
-            in ("transcribe", "highlights", "output-export", "output-preview"),
-            "kind": kind,
-            "status": "pending",
-            "request": request_data,
-            "result": None,
-            "error": None,
-        }
-        if kind == "highlights":
-            pending["created_at"] = datetime.now(UTC).isoformat()
-            pending["generation_config"] = generation_config
         try:
-            _write_job(path, pending, create=True)
-        except FileExistsError:
-            return existing_task(path, kind, request_data)
-
-        token = export_tokens.setdefault((project_id, task_id), CancellationToken())
-
-        def fail_submission() -> None:
-            job = _read_job(path)
-            if job.get("status") == "pending":
-                _write_job(
-                    path,
-                    {
-                        **job,
-                        "status": "failed",
-                        "error": "任务提交或调度失败；可恢复已保存的任务。",
-                    },
-                )
-                export_tokens.pop((project_id, task_id), None)
-
-        def run() -> None:
-            started = monotonic()
-            running = {**pending, "status": "running"}
-            try:
-                _write_job(path, running)
-                token.raise_if_cancelled()
-                result = operation()
-                _write_job(
-                    path,
-                    {
-                        **running,
-                        "status": "succeeded",
-                        "result": result,
-                        "progress": {
-                            "phase": "completed",
-                            "elapsed_seconds": round(monotonic() - started, 2),
-                        },
-                    },
-                )
-            except TranscriptionCancelled:
-                _write_job(path, {**running, "status": "cancelled"})
-            except (
-                MiniCutError,
-                TextModelProviderError,
-                ValueError,
-                TimeoutError,
-            ) as error:
-                _write_job(
-                    path,
-                    {**running, "status": "failed", "error": str(error)},
-                )
-            except Exception:
-                _write_job(
-                    path,
-                    {
-                        **running,
-                        "status": "failed",
-                        "error": "Task failed; completed stages are retained for recovery",
-                    },
-                )
-            finally:
-                export_tokens.pop((project_id, task_id), None)
-
-        def settle(_future: Future[None]) -> None:
-            export_tokens.pop((project_id, task_id), None)
-            task_futures.pop((project_id, task_id), None)
-
+            pending, runner = executor.prepare(
+                project_id,
+                task_id,
+                kind,
+                request_data,
+                operation,
+                generation_config=generation_config,
+            )
+        except TaskConflict as error:
+            raise HTTPException(409, str(error)) from error
+        if runner is None:
+            return _task_response(pending)
         try:
             response = _task_response(pending)
-            runner = _TaskRunner(
-                run,
-                fail_submission,
-                export_workers
-                if kind in {"output-export", "output-preview", "render"}
-                else compute_workers,
-                settle,
-                (project_id, task_id),
-            )
             if runners is None:
                 schedule_runners([runner], background_tasks)
             else:
                 runners.append(runner)
             return response
         except Exception:
-            fail_submission()
+            executor.abort([runner])
             raise
-
-    def fail_submissions(runners: list[_TaskRunner]) -> None:
-        # Attempt every cleanup even if one task file cannot be updated.
-        first_error: Exception | None = None
-        try:
-            for runner in runners:
-                try:
-                    runner.fail_submission()
-                except Exception as error:
-                    if first_error is None:
-                        first_error = error
-        finally:
-            runners.clear()
-        if first_error is not None:
-            raise first_error
-
-    async def observe_runners(runners: list[_TaskRunner]) -> None:
-        # Keep graceful shutdown tracking without occupying HTTP worker threads.
-        await asyncio.gather(
-            *(wait_for_task(runner.future) for runner in runners if runner.future)
-        )
 
     def schedule_runners(
         runners: list[_TaskRunner], background: BackgroundTasks
     ) -> None:
-        if not runners:
-            return
         try:
-            background.add_task(observe_runners, runners)
-            futures = runners[0].pool.submit_many([runner.run for runner in runners])
-            for runner, future in zip(runners, futures, strict=True):
-                runner.future = future
-                task_futures[runner.identity] = (runner.pool, future)
-                future.add_done_callback(runner.settle)
+            executor.schedule(
+                runners, lambda entries: background.add_task(executor.observe, entries)
+            )
         except TaskQueueFull as error:
-            fail_submissions(runners)
             raise HTTPException(503, str(error)) from error
-        except Exception:
-            fail_submissions(runners)
-            raise
 
     @api.get("/api/projects/{project_id}/activity")
     def project_activity(project_id: ProjectId) -> dict[str, object]:  # pyright: ignore[reportUnusedFunction]
@@ -1166,7 +998,12 @@ def create_app(
             }
         )
         if existing_path.is_file():
-            existing_task(existing_path, "output-export", body.model_dump(mode="json"))
+            existing_task(
+                project_id,
+                idempotency_key,
+                "output-export",
+                body.model_dump(mode="json"),
+            )
         return body
 
     def enqueue_output_export(
@@ -1177,37 +1014,31 @@ def create_app(
         runners: list[_TaskRunner] | None = None,
     ) -> TaskResponse:
 
-        def operation() -> dict[str, object]:
-            token = export_tokens.setdefault(
-                (project_id, idempotency_key), CancellationToken()
+        def operation(token: CancellationToken) -> dict[str, object]:
+            return export_output(
+                root / project_id,
+                body.collection_id,
+                body.output_id,
+                idempotency_key,
+                body.revision,
+                body.subtitle_mode,
+                body.audio_fade_ms,
+                body.denoiser_id,
+                token,
+                RenderProfile(
+                    body.aspect_ratio,
+                    body.resolution,
+                    body.fit,
+                    body.crop_left,
+                    body.crop_right,
+                    body.crop_top,
+                    body.crop_bottom,
+                ),
+                False,
+                body.cover_snapshot,
+                body.cover_version,
+                body.subtitle_settings,
             )
-            try:
-                return export_output(
-                    root / project_id,
-                    body.collection_id,
-                    body.output_id,
-                    idempotency_key,
-                    body.revision,
-                    body.subtitle_mode,
-                    body.audio_fade_ms,
-                    body.denoiser_id,
-                    token,
-                    RenderProfile(
-                        body.aspect_ratio,
-                        body.resolution,
-                        body.fit,
-                        body.crop_left,
-                        body.crop_right,
-                        body.crop_top,
-                        body.crop_bottom,
-                    ),
-                    False,
-                    body.cover_snapshot,
-                    body.cover_version,
-                    body.subtitle_settings,
-                )
-            finally:
-                export_tokens.pop((project_id, idempotency_key), None)
 
         response = submit_task(
             project_id,
@@ -1218,8 +1049,6 @@ def create_app(
             operation,
             runners=runners,
         )
-        if response.status not in ("pending", "running"):
-            export_tokens.pop((project_id, idempotency_key), None)
         return response
 
     @api.post(
@@ -1289,24 +1118,18 @@ def create_app(
         background_tasks: BackgroundTasks,
         idempotency_key: Annotated[str, task_key_header],
     ) -> TaskResponse:
-        token = export_tokens.setdefault(
-            (project_id, idempotency_key), CancellationToken()
-        )
 
-        def operation() -> dict[str, object]:
-            try:
-                return preview_output(
-                    root / project_id,
-                    body.collection_id,
-                    body.output_id,
-                    body.revision,
-                    token,
-                    PreviewOptions.model_validate(
-                        body.model_dump(include=set(PreviewOptions.model_fields))
-                    ),
-                )
-            finally:
-                export_tokens.pop((project_id, idempotency_key), None)
+        def operation(token: CancellationToken) -> dict[str, object]:
+            return preview_output(
+                root / project_id,
+                body.collection_id,
+                body.output_id,
+                body.revision,
+                token,
+                PreviewOptions.model_validate(
+                    body.model_dump(include=set(PreviewOptions.model_fields))
+                ),
+            )
 
         response = submit_task(
             project_id,
@@ -1316,8 +1139,6 @@ def create_app(
             background_tasks,
             operation,
         )
-        if response.status not in ("pending", "running"):
-            export_tokens.pop((project_id, idempotency_key), None)
         return response
 
     @api.get(
@@ -1373,28 +1194,10 @@ def create_app(
         task_id: SafeFileName,
     ) -> TaskResponse:
         inspect(project_id)
-        job = _read_job(_job_path(root / project_id, task_id))
-        if job.get("status") not in ("pending", "running"):
-            return _task_response(job)
-        token = export_tokens.get((project_id, task_id))
-        if token is None:
-            raise HTTPException(
-                409,
-                "This task cannot be cancelled by this server; it may predate a restart",
-            )
-        token.cancel()
-        queued = task_futures.get((project_id, task_id))
-        if queued is not None:
-            pool, future = queued
-            if pool.cancel(
-                future,
-                on_cancel=lambda: _write_job(
-                    _job_path(root / project_id, task_id),
-                    {**job, "status": "cancelled"},
-                ),
-            ):
-                job = _read_job(_job_path(root / project_id, task_id))
-        return _task_response(job)
+        try:
+            return _task_response(executor.cancel(project_id, task_id))
+        except TaskConflict as error:
+            raise HTTPException(409, str(error)) from error
 
     @api.get(
         "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/export-task",
@@ -1452,7 +1255,7 @@ def create_app(
             source = asset.source_path
         assert source is not None
 
-        def operation() -> dict[str, object]:
+        def operation(token: CancellationToken) -> dict[str, object]:
             result = transcriber.execute(
                 TranscribeRequest(
                     root / project_id,
@@ -1460,9 +1263,7 @@ def create_app(
                     body.provider,
                     body.model,
                     body.language,
-                    export_tokens.setdefault(
-                        (project_id, idempotency_key), CancellationToken()
-                    ),
+                    token,
                     lambda done, total: progress(
                         project_id, idempotency_key, done, total
                     ),
@@ -1724,7 +1525,7 @@ def create_app(
             }
         ).brief()
 
-        def operation() -> dict[str, object]:
+        def operation(token: CancellationToken) -> dict[str, object]:
             collection = f"highlights-{idempotency_key}"
             if highlights is generate_highlights:
                 return generate_highlights(
@@ -1732,9 +1533,7 @@ def create_app(
                     body.asset_id,
                     collection,
                     resolved,
-                    cancellation=export_tokens.setdefault(
-                        (project_id, idempotency_key), CancellationToken()
-                    ),
+                    cancellation=token,
                 )
             return highlights(root / project_id, body.asset_id, collection, resolved)
 
@@ -1981,16 +1780,14 @@ def create_app(
     ) -> TaskResponse:
         inspect(project_id)
 
-        def operation() -> dict[str, object]:
+        def operation(token: CancellationToken) -> dict[str, object]:
             return translate_output_subtitles(
                 root / project_id,
                 body.collection_id,
                 body.output_id,
                 body.base_revision,
                 body.language,
-                export_tokens.setdefault(
-                    (project_id, idempotency_key), CancellationToken()
-                ),
+                token,
             )
 
         return submit_task(
@@ -2052,7 +1849,7 @@ def create_app(
     ) -> TaskResponse:
         request_data = body.model_dump(mode="json")
 
-        def operation() -> dict[str, object]:
+        def operation(token: CancellationToken) -> dict[str, object]:
             result = planner.execute(
                 PlanRequest(
                     root / project_id,
@@ -2096,7 +1893,7 @@ def create_app(
     ) -> TaskResponse:
         request_data = body.model_dump(mode="json")
 
-        def operation() -> dict[str, object]:
+        def operation(token: CancellationToken) -> dict[str, object]:
             output_path = root / project_id / "exports" / body.output_name
             output_path.parent.mkdir(parents=True, exist_ok=True)
             result = renderer.execute(
@@ -2105,6 +1902,7 @@ def create_app(
                     body.asset_id,
                     output_path,
                     body.timeout_seconds,
+                    cancellation=token,
                 )
             )
             return {
@@ -2132,19 +1930,18 @@ def create_app(
         project_id: ProjectId, task_id: SafeFileName, background_tasks: BackgroundTasks
     ) -> TaskResponse:  # pyright: ignore[reportUnusedFunction]
         inspect(project_id)
-        with resume_lock:
-            path = _job_path(root / project_id, task_id)
-            job = _read_job(path)
-            existing = job.get("resumed_task_id")
-            if isinstance(existing, str):
-                return _task_response(_read_job(_job_path(root / project_id, existing)))
-            if job.get("status") not in ("failed", "cancelled"):
-                raise HTTPException(
-                    409, "Only interrupted, failed or cancelled tasks can be resumed"
+        try:
+            return _task_response(
+                executor.resume(
+                    project_id,
+                    task_id,
+                    lambda job: dispatch_resume(
+                        project_id, job, background_tasks
+                    ).model_dump(),
                 )
-            response = dispatch_resume(project_id, job, background_tasks)
-            _write_job(path, {**job, "resumed_task_id": response.task_id})
-            return response
+            )
+        except TaskConflict as error:
+            raise HTTPException(409, str(error)) from error
 
     def dispatch_resume(
         project_id: str, job: dict[str, object], background_tasks: BackgroundTasks

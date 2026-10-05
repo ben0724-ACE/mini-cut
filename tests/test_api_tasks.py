@@ -2,6 +2,7 @@ import asyncio
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event
 
 import httpx
 
@@ -15,6 +16,46 @@ from minicut.application import (
     TranscribeResult,
 )
 from minicut.project import ProjectManifest, ProjectRepository
+
+
+def test_running_legacy_render_receives_cancellation(tmp_path: Path) -> None:
+    ProjectRepository(tmp_path / "demo").create(ProjectManifest("demo"))
+    started, release = Event(), Event()
+
+    class Renderer:
+        def execute(self, request: RenderRequest) -> RenderResult:
+            started.set()
+            assert release.wait(5)
+            assert request.cancellation is not None
+            request.cancellation.raise_if_cancelled()
+            return RenderResult(
+                request.output_path, request.output_path.with_suffix(".srt"), 1000
+            )
+
+    async def run() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(tmp_path, render=Renderer())),
+            base_url="http://test",
+        ) as client:
+            submission = asyncio.create_task(
+                client.post(
+                    "/api/projects/demo/tasks/render",
+                    headers={"Idempotency-Key": "render"},
+                    json={"asset_id": "asset", "output_name": "result.mp4"},
+                )
+            )
+            try:
+                assert await asyncio.to_thread(started.wait, 3)
+                cancelled = await client.post("/api/projects/demo/tasks/render/cancel")
+                assert cancelled.status_code == 200
+            finally:
+                release.set()
+            assert (await submission).status_code == 202
+            assert (await client.get("/api/projects/demo/tasks/render")).json()[
+                "status"
+            ] == "cancelled"
+
+    asyncio.run(run())
 
 
 class FakeTranscribe:
