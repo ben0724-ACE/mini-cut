@@ -106,6 +106,23 @@ class ExportSettings:
     def save(
         self, mode: str, collection: str, output: str, draft: ExportDraft
     ) -> dict[str, object]:
+        return self._save(mode, collection, output, draft, replace_existing=True)
+
+    def initialize(
+        self, mode: str, collection: str, output: str, draft: ExportDraft
+    ) -> dict[str, object]:
+        """Save a workflow default only if this output has no saved settings."""
+        return self._save(mode, collection, output, draft, replace_existing=False)
+
+    def _save(
+        self,
+        mode: str,
+        collection: str,
+        output: str,
+        draft: ExportDraft,
+        *,
+        replace_existing: bool,
+    ) -> dict[str, object]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         now = datetime.now(UTC).isoformat()
         with sqlite3.connect(self.path, timeout=30) as db:
@@ -115,13 +132,22 @@ class ExportSettings:
                 PRIMARY KEY (mode,collection_id,output_id)
             )""")
             db.execute(
-                "INSERT INTO drafts VALUES (?,?,?,?,?) ON CONFLICT(mode,collection_id,output_id) DO UPDATE SET draft=excluded.draft,updated_at=excluded.updated_at",
+                "INSERT INTO drafts VALUES (?,?,?,?,?) ON CONFLICT(mode,collection_id,output_id) "
+                + (
+                    "DO UPDATE SET draft=excluded.draft,updated_at=excluded.updated_at"
+                    if replace_existing
+                    else "DO NOTHING"
+                ),
                 (mode, collection, output, draft.model_dump_json(), now),
             )
+            row = db.execute(
+                "SELECT draft,updated_at FROM drafts WHERE mode=? AND collection_id=? AND output_id=?",
+                (mode, collection, output),
+            ).fetchone()
         return {
             "source": "saved",
-            "draft": draft.model_dump(mode="json"),
-            "updated_at": now,
+            "draft": json.loads(row[0]),
+            "updated_at": row[1],
         }
 
 

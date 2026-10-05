@@ -126,6 +126,15 @@ class CoverStore:
         return (row[0], CoverDesign.model_validate_json(row[1])) if row else None
 
     def save(self, design: CoverDesign, base_version: int) -> int:
+        return self._save(design, base_version)
+
+    def initialize(self, design: CoverDesign) -> int:
+        """Initialize a workflow cover without replacing a saved design."""
+        return self._save(design, 0, if_missing=True)
+
+    def _save(
+        self, design: CoverDesign, base_version: int, *, if_missing: bool = False
+    ) -> int:
         self.directory.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.directory / "designs.sqlite3") as db:
             db.execute(
@@ -135,6 +144,8 @@ class CoverStore:
             current = db.execute(
                 "SELECT COALESCE(MAX(version),0) FROM designs"
             ).fetchone()[0]
+            if if_missing and current:
+                return current
             if current != base_version:
                 raise UserInputError("封面已在其他页面修改，请重新载入后保存")
             version = current + 1

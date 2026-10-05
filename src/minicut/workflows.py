@@ -21,7 +21,7 @@ from minicut.cover_design import (
     validate_design,
 )
 from minicut.cover_templates import CoverTemplateLibrary
-from minicut.errors import MiniCutError
+from minicut.errors import MiniCutError, UserInputError
 from minicut.export_settings import (
     ExportDraft,
     ExportOptions,
@@ -30,9 +30,9 @@ from minicut.export_settings import (
 )
 from minicut.generation_presets import GenerationPresetBody, PresetRenameBody
 from minicut.generation_settings import GenerationDraft, GenerationSettings
-from minicut.highlight_service import read_highlights, source_segments
+from minicut.highlight_service import read_highlights
 from minicut.output_plan import OutputPlan
-from minicut.output_repository import OutputCollectionRepository
+from minicut.output_reader import OutputReader
 from minicut.platform_support import (
     default_transcription_model,
     default_transcription_provider,
@@ -237,30 +237,32 @@ def configure_outputs(
     collection_id = result["collection_id"]
     if not result["outputs"]:
         return result
-    segments = source_segments(project, result["asset_id"], collection_id)
-    repository = OutputCollectionRepository(project, collection_id)
-    collection = repository.read(segments)
-    saved_layout = WorkflowLayout.model_validate(definition["layout"])
-    layout = saved_layout.model_dump(exclude_none=True)
-    if saved_layout.subtitle_style is not None:
-        layout["subtitle_style"] = saved_layout.subtitle_style
-    options = ExportOptions.model_validate(definition["export_options"])
-    if options.subtitle_settings is not None:
-        layout.update(options.subtitle_settings.plan_changes())
-    changed = False
-    plans: list[OutputPlan] = []
-    for plan in collection.plans:
-        if any(getattr(plan, key) != value for key, value in layout.items()):
-            plan = replace(plan, revision=plan.revision + 1, **layout)
-            changed = True
-        plans.append(plan)
-    if changed:
-        repository.write(replace(collection, plans=tuple(plans)), segments)
-    settings = ExportSettings(project)
-    for plan in plans:
-        # A resumed run does not reapply configuration to an already saved output.
-        if settings.read("single", collection_id, plan.output_id)["source"] != "saved":
-            settings.save(
+    reader = OutputReader(project, collection_id)
+    with reader.repository.mutation():
+        source = reader.read()
+        collection, segments = source.collection, source.segments
+        if collection.asset_id != result["asset_id"]:
+            raise UserInputError("工作流结果与作品来源素材不一致")
+        saved_layout = WorkflowLayout.model_validate(definition["layout"])
+        layout = saved_layout.model_dump(exclude_none=True)
+        if saved_layout.subtitle_style is not None:
+            layout["subtitle_style"] = saved_layout.subtitle_style
+        options = ExportOptions.model_validate(definition["export_options"])
+        if options.subtitle_settings is not None:
+            layout.update(options.subtitle_settings.plan_changes())
+        changed = False
+        plans: list[OutputPlan] = []
+        for plan in collection.plans:
+            if any(getattr(plan, key) != value for key, value in layout.items()):
+                plan = replace(plan, revision=plan.revision + 1, **layout)
+                changed = True
+            plans.append(plan)
+        if changed:
+            reader.repository.write(replace(collection, plans=tuple(plans)), segments)
+        settings = ExportSettings(project)
+        for plan in plans:
+            # Initial defaults never replace an output's saved settings or cover.
+            settings.initialize(
                 "single",
                 collection_id,
                 plan.output_id,
@@ -268,29 +270,31 @@ def configure_outputs(
                     options=options.model_copy(update={"subtitle_settings": None})
                 ),
             )
-        if definition.get("cover_style"):
-            store = CoverStore(project, collection_id, plan.output_id)
-            if store.read() is None:
-                design = CoverDesign.model_validate(
-                    {
-                        **definition["cover_style"],
-                        "title": plan.title,
-                        "template_id": definition["cover_template_id"],
-                        "template_name": definition["cover_template_name"],
-                    }
-                )
-                if definition.get("cover_png"):
-                    directory = design_directory(project, collection_id, plan.output_id)
-                    directory.mkdir(parents=True, exist_ok=True)
-                    design.background_image = uuid4().hex
-                    (directory / f"{design.background_image}.png").write_bytes(
-                        base64.b64decode(definition["cover_png"])
+            if definition.get("cover_style"):
+                store = CoverStore(project, collection_id, plan.output_id)
+                if store.read() is None:
+                    design = CoverDesign.model_validate(
+                        {
+                            **definition["cover_style"],
+                            "title": plan.title,
+                            "template_id": definition["cover_template_id"],
+                            "template_name": definition["cover_template_name"],
+                        }
                     )
-                validate_design(
-                    project, collection_id, plan.output_id, plan.revision, design
-                )
-                store.save(design, 0)
-    return read_highlights(project, collection_id)
+                    if definition.get("cover_png"):
+                        directory = design_directory(
+                            project, collection_id, plan.output_id
+                        )
+                        directory.mkdir(parents=True, exist_ok=True)
+                        design.background_image = uuid4().hex
+                        (directory / f"{design.background_image}.png").write_bytes(
+                            base64.b64decode(definition["cover_png"])
+                        )
+                    validate_design(
+                        project, collection_id, plan.output_id, plan.revision, design
+                    )
+                    store.initialize(design)
+        return read_highlights(project, collection_id)
 
 
 class WorkflowRunBody(BaseModel):

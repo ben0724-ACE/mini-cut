@@ -2,7 +2,9 @@ import asyncio
 import io
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from typing import Literal
 
 import httpx
@@ -190,6 +192,29 @@ def test_validation_background_and_version_conflicts(tmp_path: Path) -> None:
     assert old and old[1].title == "旧标题"
     with pytest.raises(UserInputError, match="其他页面"):
         store.save(CoverDesign(), 1)
+
+
+def test_cover_initialization_creates_one_version_and_keeps_saved_edits(
+    tmp_path: Path,
+) -> None:
+    started = Barrier(2)
+
+    def initialize(title: str) -> int:
+        started.wait(timeout=3)
+        return CoverStore(tmp_path, "collection", "o").initialize(
+            CoverDesign(title=title)
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        first = workers.submit(initialize, "First default")
+        second = workers.submit(initialize, "Second default")
+        assert first.result(timeout=3) == second.result(timeout=3) == 1
+    store = CoverStore(tmp_path, "collection", "o")
+    assert store.save(CoverDesign(title="Saved edit"), 1) == 2
+    assert store.initialize(CoverDesign(title="Workflow default")) == 2
+    current = store.read()
+    assert current is not None and current[1].title == "Saved edit"
+    assert store.read(3) is None
 
 
 def test_frame_provenance_actual_ffmpeg_and_cache(

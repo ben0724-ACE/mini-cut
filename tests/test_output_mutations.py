@@ -20,10 +20,13 @@ from minicut.output_plan import (
     OutputPlan,
     OutputRole,
 )
+from minicut.output_reader import OutputReader
 from minicut.output_repository import OutputCollectionRepository
 from minicut.project import ProjectManifest, ProjectRepository
 from minicut.semantic_segment import SemanticSegment
 from minicut.transcript import Transcript, TranscriptSource, Word
+from minicut.workflows import WorkflowBody, configure_outputs
+from tests.test_workflows import definition
 
 
 @pytest.fixture
@@ -193,3 +196,62 @@ def test_translation_rechecks_revision_without_blocking_edits(
     assert plans["v"]["items"][0]["translation_text"] == (
         None if changed_output == "v" else "译文"
     )
+
+
+def test_workflow_configuration_and_subtitle_edit_share_the_mutation_boundary(
+    repository: OutputCollectionRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writing, release, editing = (Event() for _ in range(3))
+    original_write = OutputCollectionRepository.write
+    paused = False
+
+    def pause_write(
+        repo: OutputCollectionRepository,
+        collection: OutputCollection,
+        segments: tuple[SemanticSegment, ...],
+    ) -> None:
+        nonlocal paused
+        if not paused:
+            paused = True
+            writing.set()
+            assert release.wait(5)
+        original_write(repo, collection, segments)
+
+    monkeypatch.setattr(OutputCollectionRepository, "write", pause_write)
+    project = repository.project_directory
+    result = {
+        "collection_id": "c",
+        "asset_id": "asset",
+        "outputs": [{"output_id": "v"}],
+    }
+    body = WorkflowBody.model_validate(definition())
+
+    def edit() -> dict[str, object]:
+        editing.set()
+        return edit_output_item(
+            project / ".." / project.name, "c", "v", "i1", display_text="Correction"
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        configuration = workers.submit(
+            configure_outputs, project, result, body.model_dump()
+        )
+        try:
+            assert writing.wait(3)
+            correction = workers.submit(edit)
+            assert editing.wait(3)
+            with pytest.raises(TimeoutError):
+                correction.result(timeout=0.2)
+        finally:
+            release.set()
+        configured = configuration.result(timeout=3)
+        correction.result(timeout=3)
+
+    history = OutputReader(project, "c").history("v")
+    assert [plan.revision for plan in history.plans] == [1, 2, 3]
+    original, layout, corrected = history.plans
+    assert original.subtitle_source_scale == 1
+    assert layout.subtitle_source_scale == corrected.subtitle_source_scale == 1.2
+    assert layout.items[0].display_text is None
+    assert corrected.items[0].display_text == "Correction"
+    assert configured["outputs"][0]["revision"] == 2

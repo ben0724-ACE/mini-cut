@@ -1,6 +1,9 @@
 import asyncio
 import json
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event, current_thread
 from typing import cast
 
 import httpx
@@ -9,6 +12,63 @@ import pytest
 from minicut.api import create_app
 from minicut.export_settings import ExportDraft, ExportOptions, ExportSettings
 from minicut.project import ProjectManifest, ProjectRepository
+
+
+def test_workflow_default_does_not_overwrite_a_concurrent_saved_draft(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = ExportSettings(tmp_path)
+    # Prepare the schema while leaving the target output without saved settings.
+    store.save("single", "c", "other", ExportDraft())
+    inserting, release = Event(), Event()
+    connect = sqlite3.connect
+
+    def pause_insert(sql: str) -> None:
+        if sql.startswith("INSERT INTO drafts") and current_thread().name.startswith(
+            "workflow-default"
+        ):
+            inserting.set()
+            release.wait(5)
+
+    def traced_connect(
+        database: str | Path, *, timeout: float = 5
+    ) -> sqlite3.Connection:
+        db = connect(database, timeout=timeout)
+        db.set_trace_callback(pause_insert)
+        return db
+
+    monkeypatch.setattr(sqlite3, "connect", traced_connect)
+    workflow_default = ExportDraft(options=ExportOptions(aspect_ratio="9:16"))
+    manual = ExportDraft(options=ExportOptions(aspect_ratio="1:1", resolution=720))
+    with ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="workflow-default"
+    ) as workers:
+        initialized = workers.submit(
+            store.initialize, "single", "c", "a", workflow_default
+        )
+        try:
+            assert inserting.wait(3)
+            saved = store.save("single", "c", "a", manual)
+            assert not initialized.done()
+        finally:
+            release.set()
+        assert initialized.result(timeout=3) == saved
+    assert store.read("single", "c", "a") == saved
+    assert store.initialize("single", "c", "a", workflow_default) == saved
+
+
+def test_workflow_default_is_saved_for_its_output_instead_of_inheriting_another(
+    tmp_path: Path,
+) -> None:
+    store = ExportSettings(tmp_path)
+    store.save(
+        "single", "c", "other", ExportDraft(options=ExportOptions(aspect_ratio="1:1"))
+    )
+    default = ExportDraft(options=ExportOptions(aspect_ratio="9:16"))
+    initialized = store.initialize("single", "c", "a", default)
+    assert initialized["source"] == "saved"
+    assert initialized["draft"] == default.model_dump(mode="json")
+    assert store.read("single", "c", "a") == initialized
 
 
 def setup_projects(root: Path) -> None:
