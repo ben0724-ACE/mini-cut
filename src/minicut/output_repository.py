@@ -3,6 +3,7 @@
 import json
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import cast
@@ -11,6 +12,7 @@ from uuid import uuid4
 from minicut.errors import ProcessingError, UserInputError
 from minicut.output_plan import (
     OutputCollection,
+    OutputPlan,
     validate_output_collection,
     validate_output_id,
 )
@@ -188,6 +190,64 @@ class OutputCollectionRepository:
             return collection
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
             raise UserInputError("Output collection is missing or invalid") from error
+
+    def read_plan(
+        self,
+        collection: OutputCollection,
+        segments: tuple[SemanticSegment, ...],
+        output_id: str,
+        revision: int | None = None,
+        *,
+        require_current: bool = False,
+    ) -> OutputPlan:
+        """Resolve a saved revision and validate its identity and source references.
+
+        Callers hold mutation() across reading the collection and its history.
+        """
+        validate_output_id(output_id)
+        current = next((p for p in collection.plans if p.output_id == output_id), None)
+        if current is None:
+            raise UserInputError("Output plan does not exist")
+        if revision is not None and (type(revision) is not int or revision < 1):
+            raise UserInputError("Output revision must be positive")
+        if revision is None or revision == current.revision:
+            return current
+        if require_current:
+            raise UserInputError("作品版本已变更，请刷新后重试")
+        if revision > current.revision:
+            raise UserInputError("Requested output version is missing or invalid")
+        try:
+            plan = OutputPlan.from_dict(
+                json.loads(
+                    self.version_path(output_id, revision).read_text(encoding="utf-8")
+                )
+            )
+            if plan.output_id != output_id or plan.revision != revision:
+                raise ValueError("output version identity mismatch")
+            validate_output_collection(replace(collection, plans=(plan,)), segments)
+            return plan
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            raise UserInputError(
+                "Requested output version is missing or invalid"
+            ) from error
+
+    def read_versions(
+        self,
+        collection: OutputCollection,
+        segments: tuple[SemanticSegment, ...],
+        output_id: str,
+    ) -> tuple[OutputPlan, ...]:
+        """Read history under the caller's mutation boundary using the same checks."""
+        current = self.read_plan(collection, segments, output_id)
+        plans: list[OutputPlan] = []
+        for path in sorted(self.version_path(output_id, 1).parent.glob("v*.json")):
+            try:
+                revision = int(path.stem[1:])
+            except ValueError as error:
+                raise UserInputError("Output history filename is invalid") from error
+            if revision < current.revision:
+                plans.append(self.read_plan(collection, segments, output_id, revision))
+        return tuple(sorted((*plans, current), key=lambda plan: plan.revision))
 
 
 class TranscriptVersionRepository:

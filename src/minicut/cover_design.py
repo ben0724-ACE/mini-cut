@@ -1,7 +1,6 @@
 """Local cover layouts, immutable versions and deterministic image composition."""
 
 import io
-import json
 import os
 import sqlite3
 from pathlib import Path
@@ -13,9 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from minicut.errors import UserInputError
 from minicut.ffmpeg_paths import ffmpeg_file
-from minicut.highlight_service import source_segments
 from minicut.output_plan import OutputPlan, validate_output_id
-from minicut.output_repository import OutputCollectionRepository
+from minicut.output_reader import OutputReader
 from minicut.project import ProjectRepository
 from minicut.renderer import FfmpegRenderer
 from minicut.subtitle_font import resolve_subtitle_font
@@ -149,13 +147,13 @@ class CoverStore:
 def cover_context(
     project: Path, collection: str, output: str, revision: int
 ) -> tuple[OutputPlan, Path, list[tuple[int, int]]]:
-    repository = OutputCollectionRepository(project, collection)
+    snapshot = OutputReader(project, collection).output(
+        output, revision, require_current=True
+    )
+    plan = snapshot.plan
+    asset_id = snapshot.source.collection.asset_id
+    segments = snapshot.source.segments
     try:
-        asset_id = json.loads(repository.path.read_text(encoding="utf-8"))["asset_id"]
-        segments = source_segments(project, asset_id, collection)
-        plan = next(p for p in repository.read(segments).plans if p.output_id == output)
-        if plan.revision != revision:
-            raise UserInputError("作品版本已变更，请刷新后设计封面")
         lookup = {s.segment_id: s for s in segments}
         ranges = [
             (

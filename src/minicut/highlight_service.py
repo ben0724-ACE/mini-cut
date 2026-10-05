@@ -14,23 +14,20 @@ from minicut.deepseek_provider import DeepSeekProvider
 from minicut.errors import UserInputError
 from minicut.highlight_brief import HighlightBrief
 from minicut.highlight_planner import HighlightPlanner
-from minicut.highlight_workflow import attach_continuation_context, plan_highlights
+from minicut.highlight_workflow import plan_highlights
 from minicut.model_journal import ModelJournal, RecordedProvider
 from minicut.output_plan import OutputItem, OutputRole
+from minicut.output_reader import OutputReader, source_segments
+from minicut.output_reader import source_transcript as _source_transcript
 from minicut.output_repository import OutputCollectionRepository
 from minicut.output_sentences import split_output_sentences
 from minicut.output_timeline import compile_output_timeline
 from minicut.project import ProjectRepository
-from minicut.segmentation import build_utterances
 from minicut.semantic_segment import SemanticSegment
-from minicut.semantic_segmentation import (
-    build_rule_based_segments,
-    mark_segment_candidates,
-)
 from minicut.sentence_boundaries import sentence_segments
 from minicut.subtitle_font import resolve_selected_subtitle_font
 from minicut.subtitle_style import SubtitleStyle
-from minicut.text_normalization import normalize_text, normalize_transcript_words
+from minicut.text_normalization import normalize_text
 from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
 
@@ -211,10 +208,16 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
             if duration is not None:
                 result["source_duration_ms"] = duration
         if repository.path.is_file():
-            segments = source_segments(
-                project, cast(str, result["asset_id"]), collection_id
+            source = OutputReader(project, collection_id).read()
+            collection, segments, transcript = (
+                source.collection,
+                source.segments,
+                source.transcript,
             )
-            collection = repository.read(segments)
+            if result["asset_id"] != collection.asset_id:
+                raise UserInputError(
+                    "Highlight result source does not match saved collection"
+                )
             by_id = {segment.segment_id: segment for segment in segments}
             rows = {
                 row["output_id"]: row
@@ -247,9 +250,6 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
                 row["duration_ms"] = compile_output_timeline(
                     plan, segments, collection.asset_id
                 ).estimated_duration_ms
-                transcript = _source_transcript(
-                    project, collection.asset_id, collection_id
-                )
                 row["clips"] = [
                     {
                         "instance_id": item.instance_id,
@@ -278,30 +278,6 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
         return result
     except (OSError, ValueError) as error:
         raise UserInputError("Highlight result is missing or invalid") from error
-
-
-def source_segments(
-    project: Path, asset: str, collection_id: str | None = None
-) -> tuple[SemanticSegment, ...]:
-    try:
-        if collection_id is not None:
-            snapshot = OutputCollectionRepository(
-                project, collection_id
-            ).path.with_suffix(".segments.json")
-            if snapshot.is_file():
-                return tuple(
-                    SemanticSegment.from_dict(row)
-                    for row in json.loads(snapshot.read_text(encoding="utf-8"))
-                )
-        transcript = _source_transcript(project, asset, collection_id)
-        utterances = transcript.utterances or build_utterances(
-            transcript, normalize_transcript_words(transcript)
-        )
-        return attach_continuation_context(
-            mark_segment_candidates(build_rule_based_segments(transcript, utterances))
-        )
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        raise UserInputError("Source transcript is missing or invalid") from error
 
 
 @_atomic_output_edit
@@ -603,30 +579,9 @@ def reorder_output(
 def output_versions(
     project: Path, collection_id: str, output_id: str
 ) -> list[dict[str, object]]:
-    result = read_highlights(project, collection_id)
-    segments = source_segments(project, cast(str, result["asset_id"]), collection_id)
-    repository = OutputCollectionRepository(project, collection_id)
-    current = next(
-        (
-            plan
-            for plan in repository.read(segments).plans
-            if plan.output_id == output_id
-        ),
-        None,
-    )
-    if current is None:
-        raise UserInputError("Output does not exist")
-    from minicut.output_plan import OutputPlan
-
-    plans = [
-        OutputPlan.from_dict(json.loads(path.read_text(encoding="utf-8")))
-        for path in repository.version_path(output_id, 1).parent.glob("*.json")
-    ]
-    plans = [plan for plan in plans if plan.revision < current.revision] + [current]
+    history = OutputReader(project, collection_id).history(output_id)
+    segments, transcript = history.source.segments, history.source.transcript
     by_id = {segment.segment_id: segment for segment in segments}
-    transcript = _source_transcript(
-        project, cast(str, result["asset_id"]), collection_id
-    )
     return [
         {
             "revision": plan.revision,
@@ -647,7 +602,7 @@ def output_versions(
                 )
             },
             "duration_ms": compile_output_timeline(
-                plan, segments, cast(str, result["asset_id"])
+                plan, segments, history.source.collection.asset_id
             ).estimated_duration_ms,
             "clips": [
                 {
@@ -671,23 +626,8 @@ def output_versions(
                 for item in plan.items
             ],
         }
-        for plan in sorted(plans, key=lambda plan: plan.revision)
+        for plan in history.plans
     ]
-
-
-def _source_transcript(
-    project: Path, asset_id: str, collection_id: str | None = None
-) -> Transcript:
-    if collection_id is not None:
-        return OutputCollectionRepository(project, collection_id).source_transcript(
-            asset_id
-        )
-    data = json.loads(
-        (project / ".minicut/transcripts" / f"{asset_id}.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    return Transcript.from_dict(data["transcript"])
 
 
 def item_source_text(

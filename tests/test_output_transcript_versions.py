@@ -12,6 +12,7 @@ import pytest
 
 from minicut.api import create_app
 from minicut.application import TranscribeProjectUseCase, TranscribeRequest
+from minicut.cover_design import cover_context
 from minicut.errors import ProcessingError, UserInputError
 from minicut.highlight_brief import HighlightBrief
 from minicut.highlight_selection import HighlightSelection
@@ -35,6 +36,8 @@ from minicut.output_plan import (
     OutputPlan,
     OutputRole,
 )
+from minicut.output_reader import OutputReader
+from minicut.output_render import OutputRenderRequest, RenderOutputUseCase
 from minicut.output_repository import (
     OutputCollectionRepository,
     TranscriptVersionRepository,
@@ -428,7 +431,12 @@ def test_api_resume_rejects_missing_original_transcript_version(
     asyncio.run(run())
 
 
-def test_missing_bound_version_never_falls_back_to_latest(workspace: Workspace) -> None:
+@pytest.mark.parametrize(
+    "consumer", ["display", "history", "preview", "cover", "export"]
+)
+def test_missing_bound_version_never_falls_back_to_latest(
+    workspace: Workspace, consumer: str
+) -> None:
     workspace.retranscribe()
     binding = json.loads(
         workspace.repository.path.with_suffix(".transcript.json").read_text()
@@ -437,7 +445,88 @@ def test_missing_bound_version_never_falls_back_to_latest(workspace: Workspace) 
         binding["transcript_version"]
     ).unlink()
     with pytest.raises(UserInputError, match="version is missing or invalid"):
-        read_highlights(workspace.project, "collection")
+        if consumer == "display":
+            read_highlights(workspace.project, "collection")
+        elif consumer == "history":
+            output_versions(workspace.project, "collection", "range")
+        elif consumer == "preview":
+            preview_output(
+                workspace.project, "collection", "range", 1, CancellationToken()
+            )
+        elif consumer == "cover":
+            cover_context(workspace.project, "collection", "range", 1)
+        else:
+            export_output(
+                workspace.project,
+                "collection",
+                "range",
+                "failed",
+                1,
+                "soft",
+                0,
+                "none",
+                CancellationToken(),
+            )
+
+
+def test_reader_returns_saved_revision_with_its_full_original_source(
+    workspace: Workspace,
+) -> None:
+    original = OutputReader(workspace.project, "collection").output("range", 1)
+    rename_output(workspace.project, "collection", "range", 1, "Changed title")
+    workspace.retranscribe()
+    sources = TranscriptVersionRepository(workspace.project, "asset")
+    sources.cache_path.unlink()
+    reader = OutputReader(workspace.project, "collection")
+    historical = reader.output("range", 1)
+    current = reader.output("range")
+    assert historical.plan == original.plan
+    assert historical.source.transcript == current.source.transcript == workspace.old
+    assert historical.source.segments == original.source.segments
+    assert current.plan.revision == 2 and current.plan.title == "Changed title"
+    assert [p.revision for p in reader.history("range").plans] == [1, 2]
+    with pytest.raises(UserInputError, match="版本已变更"):
+        reader.output("range", 1, require_current=True)
+
+
+@pytest.mark.parametrize(
+    "field", ["output_id", "revision", "candidate_id", "segment_id"]
+)
+@pytest.mark.parametrize("consumer", ["history", "preview", "render"])
+def test_all_version_readers_reject_corrupt_history(
+    workspace: Workspace, field: str, consumer: str
+) -> None:
+    rename_output(workspace.project, "collection", "range", 1, "New title")
+    path = workspace.repository.version_path("range", 1)
+    data = json.loads(path.read_text())
+    if field == "segment_id":
+        data["items"][0]["segment_id"] = "unknown-source"
+    elif field == "revision":
+        data[field] = 2
+    else:
+        data[field] = "other"
+    path.write_text(json.dumps(data))
+    with pytest.raises(
+        UserInputError, match="Requested output version is missing or invalid"
+    ):
+        if consumer == "history":
+            output_versions(workspace.project, "collection", "range")
+        elif consumer == "preview":
+            preview_output(
+                workspace.project, "collection", "range", 1, CancellationToken()
+            )
+        else:
+            source = OutputReader(workspace.project, "collection").read()
+            RenderOutputUseCase().execute(
+                OutputRenderRequest(
+                    workspace.project,
+                    "collection",
+                    "range",
+                    source.segments,
+                    source.transcript,
+                    plan_revision=1,
+                )
+            )
 
 
 def test_failed_legacy_binding_does_not_replace_current_transcript(

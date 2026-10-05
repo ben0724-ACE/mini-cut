@@ -7,15 +7,14 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from minicut.cover_design import CoverDesign, render_cover, validate_design
-from minicut.errors import UserInputError
 from minicut.export_settings import (
     ExportOptions,
     ExportSubtitleSettings,
     PreviewOptions,
 )
 from minicut.ffmpeg_paths import ffmpeg_file
-from minicut.highlight_service import source_segments
 from minicut.output_plan import OutputPlan
+from minicut.output_reader import OutputReader
 from minicut.output_render import OutputRenderRequest, RenderOutputUseCase
 from minicut.output_repository import OutputCollectionRepository
 from minicut.output_timeline import compile_output_timeline
@@ -76,30 +75,12 @@ def export_output(
     cover_version: int | None = None,
     subtitle_settings: ExportSubtitleSettings | None = None,
 ) -> dict[str, object]:
-    repository = OutputCollectionRepository(project, collection)
-    try:
-        asset_id = json.loads(repository.path.read_text(encoding="utf-8"))["asset_id"]
-        transcript = repository.source_transcript(asset_id)
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        raise UserInputError(
-            "Output and transcription are required for export"
-        ) from error
-    segments = source_segments(project, asset_id, collection)
-    plans = repository.read(segments).plans
-    plan = next((plan for plan in plans if plan.output_id == output), None)
-    if preview and plan is not None and plan.revision != revision:
-        try:
-            plan = OutputPlan.from_dict(
-                json.loads(
-                    repository.version_path(output, revision).read_text(
-                        encoding="utf-8"
-                    )
-                )
-            )
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            raise UserInputError("Requested preview version is unavailable") from error
-    if plan is None or plan.revision != revision:
-        raise UserInputError("Output version changed; refresh before exporting")
+    snapshot = OutputReader(project, collection).output(
+        output, revision, require_current=not preview
+    )
+    plan = snapshot.plan
+    segments, transcript = snapshot.source.segments, snapshot.source.transcript
+    asset_id = snapshot.source.collection.asset_id
     if not preview and cover_design is not None:
         validate_design(project, collection, output, revision, cover_design)
     cancellation.raise_if_cancelled()
@@ -191,24 +172,9 @@ def preview_output(
         **options.model_dump(include=set(RenderProfile.__dataclass_fields__))
     )
     repository = OutputCollectionRepository(project, collection)
-    try:
-        asset_id = json.loads(repository.path.read_text(encoding="utf-8"))["asset_id"]
-        segments = source_segments(project, asset_id, collection)
-        plan = next(
-            plan for plan in repository.read(segments).plans if plan.output_id == output
-        )
-        if plan.revision != revision:
-            plan = OutputPlan.from_dict(
-                json.loads(
-                    repository.version_path(output, revision).read_text(
-                        encoding="utf-8"
-                    )
-                )
-            )
-        if plan.output_id != output or plan.revision != revision:
-            raise ValueError("Preview version does not match")
-    except (OSError, ValueError, KeyError, TypeError, StopIteration) as error:
-        raise UserInputError("Requested preview version is unavailable") from error
+    snapshot = OutputReader(project, collection).output(output, revision)
+    plan, segments = snapshot.plan, snapshot.source.segments
+    asset_id = snapshot.source.collection.asset_id
     if options.subtitle_settings is not None:
         plan = replace(plan, **options.subtitle_settings.plan_changes())
     cancellation.raise_if_cancelled()

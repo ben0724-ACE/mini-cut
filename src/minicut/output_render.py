@@ -101,31 +101,11 @@ class RenderOutputUseCase:
         repository = OutputCollectionRepository(
             request.project_directory, request.collection_id
         )
-        collection = repository.read(request.segments)
-        matches = [
-            plan for plan in collection.plans if plan.output_id == request.output_id
-        ]
-        if not matches:
-            raise UserInputError("Output plan does not exist")
-        plan = matches[0]
-        if request.plan_revision is not None and plan.revision != request.plan_revision:
-            try:
-                plan = OutputPlan.from_dict(
-                    json.loads(
-                        repository.version_path(
-                            request.output_id, request.plan_revision
-                        ).read_text(encoding="utf-8")
-                    )
-                )
-            except (OSError, ValueError, KeyError, TypeError) as error:
-                raise UserInputError(
-                    "Requested output version is unavailable"
-                ) from error
-            if (
-                plan.output_id != request.output_id
-                or plan.revision != request.plan_revision
-            ):
-                raise UserInputError("Requested output version does not match")
+        with repository.mutation():
+            collection = repository.read(request.segments)
+            plan = repository.read_plan(
+                collection, request.segments, request.output_id, request.plan_revision
+            )
         if request.subtitle_settings is not None:
             plan = replace(plan, **request.subtitle_settings.plan_changes())
         manifest = ProjectRepository(request.project_directory).read()
