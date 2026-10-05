@@ -3,11 +3,12 @@
 import asyncio
 import os
 from collections.abc import Callable
-from concurrent.futures import Future
+from concurrent.futures import CancelledError, Future
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import RLock
 from time import monotonic
+from typing import cast
 
 from minicut.errors import MiniCutError
 from minicut.job_repository import Job, JobRepository
@@ -31,9 +32,14 @@ class TaskRunner:
 
 class TaskExecutor:
     def __init__(
-        self, jobs: JobRepository, compute: TaskWorkerPool, exports: TaskWorkerPool
+        self,
+        jobs: JobRepository,
+        compute: TaskWorkerPool,
+        exports: TaskWorkerPool,
+        workflows: TaskWorkerPool | None = None,
     ) -> None:
         self.jobs, self.compute, self.exports = jobs, compute, exports
+        self.workflows = workflows
         self._lock = RLock()
         self._active: dict[tuple[str, str], TaskRunner] = {}
 
@@ -52,14 +58,24 @@ class TaskExecutor:
         operation: Callable[[CancellationToken], Job],
         *,
         generation_config: Job | None = None,
+        metadata: Job | None = None,
     ) -> tuple[Job, TaskRunner | None]:
         """Create an owned pending record; repeated requests never own a new runner."""
         with self._lock:
+            if kind == "workflow" and self.workflows is None:
+                raise ValueError("Workflow worker queue is not configured")
             pending: Job = {
+                **(metadata or {}),
                 "task_id": task,
                 "owner_pid": os.getpid(),
                 "resumable": kind
-                in {"transcribe", "highlights", "output-export", "output-preview"},
+                in {
+                    "transcribe",
+                    "highlights",
+                    "output-export",
+                    "output-preview",
+                    "workflow",
+                },
                 "kind": kind,
                 "status": "pending",
                 "request": request,
@@ -75,17 +91,72 @@ class TaskExecutor:
                 self.jobs.create(project, task, pending)
             except FileExistsError:
                 return self.existing(project, task, kind, request), None
-            token = CancellationToken()
-            runner = TaskRunner(
-                (project, task),
-                self.exports
-                if kind in {"output-export", "output-preview", "render"}
-                else self.compute,
-                token,
-                lambda: self._run(project, task, token, operation),
-            )
-            self._active[runner.identity] = runner
+            runner = self._runner(project, task, kind, operation)
             return pending, runner
+
+    def _runner(
+        self,
+        project: str,
+        task: str,
+        kind: str,
+        operation: Callable[[CancellationToken], Job],
+    ) -> TaskRunner:
+        pool = (
+            self.exports
+            if kind in {"output-export", "output-preview", "render"}
+            else self.compute
+        )
+        if kind == "workflow":
+            if self.workflows is None:
+                raise ValueError("Workflow worker queue is not configured")
+            pool = self.workflows
+        token = CancellationToken()
+        runner = TaskRunner(
+            (project, task),
+            pool,
+            token,
+            lambda: self._run(project, task, token, operation),
+        )
+        self._active[runner.identity] = runner
+        return runner
+
+    def restart_workflow(
+        self, project: str, task: str, operation: Callable[[CancellationToken], Job]
+    ) -> tuple[Job, TaskRunner | None]:
+        """Reuse the coordinator identity and its saved stages, with one owner."""
+        with self._lock:
+            job = self.jobs.read(project, task)
+            if job.get("kind") != "workflow":
+                raise TaskConflict("工作流任务不存在")
+            active = self._active.get((project, task))
+            if active is not None:
+                if active.future is None or not active.future.done():
+                    return job, None
+                self._settle(active)
+            if job.get("status") not in {"failed", "cancelled"}:
+                raise TaskConflict("只有失败或取消的工作流可以继续")
+            pending = self.jobs.update(
+                project,
+                task,
+                lambda _: {
+                    "status": "pending",
+                    "error": None,
+                    "cancel_requested": False,
+                    "owner_pid": os.getpid(),
+                },
+            )
+            return pending, self._runner(project, task, "workflow", operation)
+
+    def _terminal(self, project: str, task: str, changes: Job) -> None:
+        def patch(job: Job) -> Job:
+            fields = dict(changes)
+            if job.get("kind") == "workflow":
+                fields["child_task_ids"] = []
+                if fields["status"] == "succeeded":
+                    fields["phase"] = "completed"
+            return fields
+
+        self.jobs.update(project, task, patch)
 
     def _run(
         self,
@@ -99,10 +170,10 @@ class TaskExecutor:
             self.jobs.update(project, task, lambda _: {"status": "running"})
             token.raise_if_cancelled()
             result = operation(token)
-            self.jobs.update(
+            self._terminal(
                 project,
                 task,
-                lambda _: {
+                {
                     "status": "succeeded",
                     "result": result,
                     "progress": {
@@ -112,7 +183,7 @@ class TaskExecutor:
                 },
             )
         except TranscriptionCancelled:
-            self.jobs.update(project, task, lambda _: {"status": "cancelled"})
+            self._terminal(project, task, {"status": "cancelled"})
         except (
             MiniCutError,
             TextModelProviderError,
@@ -120,14 +191,12 @@ class TaskExecutor:
             TimeoutError,
         ) as error:
             message = str(error)
-            self.jobs.update(
-                project, task, lambda _: {"status": "failed", "error": message}
-            )
+            self._terminal(project, task, {"status": "failed", "error": message})
         except Exception:
-            self.jobs.update(
+            self._terminal(
                 project,
                 task,
-                lambda _: {
+                {
                     "status": "failed",
                     "error": "Task failed; completed stages are retained for recovery",
                 },
@@ -137,6 +206,16 @@ class TaskExecutor:
         with self._lock:
             if self._active.get(runner.identity) is runner:
                 self._active.pop(runner.identity)
+
+    def is_active(self, project: str, task: str) -> bool:
+        with self._lock:
+            runner = self._active.get((project, task))
+            if runner is None:
+                return False
+            if runner.future is not None and runner.future.done():
+                self._settle(runner)
+                return False
+            return True
 
     def abort(self, runners: list[TaskRunner]) -> None:
         """Settle every newly prepared task even when another cleanup fails."""
@@ -224,15 +303,25 @@ class TaskExecutor:
                 raise TaskConflict(
                     "This task cannot be cancelled by this server; it may predate a restart"
                 )
+            if job.get("kind") == "workflow":
+                job = self.jobs.update(
+                    project, task, lambda _: {"cancel_requested": True}
+                )
             runner.token.cancel()
 
             def cancelled() -> None:
-                self.jobs.update(project, task, lambda _: {"status": "cancelled"})
+                self._terminal(project, task, {"status": "cancelled"})
 
             if runner.future is None:
                 cancelled()
             else:
                 runner.pool.cancel(runner.future, on_cancel=cancelled)
+            if job.get("kind") == "workflow":
+                children = job.get("child_task_ids", [])
+                if isinstance(children, list):
+                    for child in cast(list[object], children):
+                        if isinstance(child, str):
+                            self.cancel(project, child)
             return self.jobs.read(project, task)
 
     def progress(self, project: str, task: str, done: int, total: int) -> None:
@@ -269,5 +358,23 @@ class TaskExecutor:
             return response
 
     def shutdown(self) -> None:
+        # Coordinators finish their children before the child queues close.
+        if self.workflows is not None:
+            self.workflows.shutdown()
         for pool in (self.compute, self.exports):
             pool.shutdown()
+
+    def wait(self, project: str, tasks: list[str]) -> None:
+        """Only dedicated coordinators wait synchronously; release ownership first."""
+        with self._lock:
+            futures = [
+                runner.future
+                for task in tasks
+                if (runner := self._active.get((project, task))) is not None
+                and runner.future is not None
+            ]
+        for future in futures:
+            try:
+                future.result()
+            except CancelledError:
+                pass

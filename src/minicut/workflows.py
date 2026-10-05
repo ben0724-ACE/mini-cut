@@ -2,15 +2,13 @@
 
 import base64
 import json
-import os
 import sqlite3
 from collections.abc import Callable
-from concurrent.futures import Future
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
-from typing import Annotated, Any, Literal, Protocol
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
@@ -40,18 +38,13 @@ from minicut.platform_support import (
     default_transcription_provider,
 )
 from minicut.project import ProjectRepository
-from minicut.task_workers import TaskQueueFull, TaskWorkerPool, wait_for_task
-from minicut.transcription_task import TranscriptionCancelled
+from minicut.task_executor import TaskConflict, TaskExecutor, TaskRunner
+from minicut.task_workers import TaskQueueFull
+from minicut.transcription_task import CancellationToken
 
 # SQLite and task journals contain heterogeneous JSON; models below validate
 # user-facing configuration before it enters the workflow.
 JsonObject = dict[str, Any]
-
-
-class JobWriter(Protocol):
-    def __call__(
-        self, path: Path, payload: JsonObject, *, create: bool = False
-    ) -> None: ...
 
 
 WorkflowChild = Callable[
@@ -308,40 +301,21 @@ class WorkflowRunBody(BaseModel):
 
 def workflow_router(
     root: Path,
-    read_job: Callable[[Path], JsonObject],
-    write_job: JobWriter,
+    executor: TaskExecutor,
     child_task: WorkflowChild,
-    cancel_child: Callable[[str, str], None],
-    workers: TaskWorkerPool,
 ) -> APIRouter:
     router = APIRouter()
     library = WorkflowLibrary(root)
     lock = Lock()
-    active: set[tuple[str, str]] = set()
-    scheduled_runs: dict[tuple[str, str], Future[None]] = {}
+    jobs_store = executor.jobs
 
-    def schedule_run(background: BackgroundTasks, project: str, identity: str) -> None:
-        # Register an async observer before admitting work; registration failure
-        # must leave a resumable record rather than an unscheduled pending job.
-        futures: list[Future[None]] = []
-
-        async def observe() -> None:
-            for future in futures:
-                await wait_for_task(future)
-
+    def schedule_run(background: BackgroundTasks, runner: TaskRunner) -> None:
         try:
-            background.add_task(observe)
-            future = workers.submit(lambda: run(project, identity))
-            futures.append(future)
-            scheduled_runs[project, identity] = future
-        except Exception as error:
-            job = read_job(path(project, identity))
-            job.update(status="failed", error=str(error))
-            write_job(path(project, identity), job)
-            active.discard((project, identity))
-            if isinstance(error, TaskQueueFull):
-                raise HTTPException(503, str(error)) from error
-            raise
+            executor.schedule(
+                [runner], lambda entries: background.add_task(executor.observe, entries)
+            )
+        except TaskQueueFull as error:
+            raise HTTPException(503, str(error)) from error
 
     def path(project: str, identity: str) -> Path:
         return root / project / ".minicut/jobs" / f"{identity}.json"
@@ -361,7 +335,8 @@ def workflow_router(
 
     def jobs(project: str) -> list[JsonObject]:
         return [
-            read_job(item) for item in (root / project / ".minicut/jobs").glob("*.json")
+            jobs_store.read(project, item.stem)
+            for item in (root / project / ".minicut/jobs").glob("*.json")
         ]
 
     @router.get("/api/workflows")
@@ -394,8 +369,8 @@ def workflow_router(
         library.delete(identity)
         return {"deleted": True}
 
-    def run(project: str, identity: str) -> None:
-        job = read_job(path(project, identity))
+    def run(project: str, identity: str, token: CancellationToken) -> JsonObject:
+        job: JsonObject = jobs_store.read(project, identity)
         request = job["request"]
         definition = request["definition"]
         body = WorkflowBody.model_validate(
@@ -403,16 +378,10 @@ def workflow_router(
         )
 
         def save(**changes: object) -> None:
-            with lock:
-                cancellation = read_job(path(project, identity)).get(
-                    "cancel_requested", False
-                )
-                job.update(changes, cancel_requested=cancellation)
-                write_job(path(project, identity), job)
+            job.update(jobs_store.update(project, identity, lambda _: changes))
 
         def check_cancel() -> None:
-            if read_job(path(project, identity)).get("cancel_requested"):
-                raise TranscriptionCancelled()
+            token.raise_if_cancelled()
 
         def child(kind: str, data: JsonObject, suffix: str) -> JsonObject:
             check_cancel()
@@ -429,16 +398,15 @@ def workflow_router(
                             )
                         ]
                     )
-                if read_job(path(project, identity)).get("cancel_requested"):
+                if token.is_cancelled:
                     for task_id in task_ids:
-                        cancel_child(project, task_id)
+                        executor.cancel(project, task_id)
 
             result = child_task(project, kind, data, f"{identity}-{suffix}", started)
             check_cancel()
             return result
 
         try:
-            save(status="running", error=None, owner_pid=os.getpid())
             child(
                 "transcribe",
                 {"asset_id": request["asset_id"], **body.transcription.model_dump()},
@@ -477,20 +445,11 @@ def workflow_router(
                 exports = child("export", {"outputs": outputs}, "export")
                 save(exports=exports["entries"])
             check_cancel()
-            save(status="succeeded", phase="completed", child_task_ids=[])
-        except TranscriptionCancelled:
-            save(status="cancelled", child_task_ids=[])
-        except Exception as error:
-            detail = error.detail if isinstance(error, HTTPException) else str(error)
-            save(
-                status="failed",
-                error=detail or "工作流执行失败，可继续已保存的阶段",
-                child_task_ids=[],
-            )
-        finally:
-            with lock:
-                active.discard((project, identity))
-                scheduled_runs.pop((project, identity), None)
+            return job["result"]
+        except HTTPException as error:
+            raise ValueError(
+                error.detail or "工作流执行失败，可继续已保存的阶段"
+            ) from error
 
     @router.get("/api/projects/{project}/workflow-run")
     def latest_run(  # pyright: ignore[reportUnusedFunction]
@@ -519,7 +478,7 @@ def workflow_router(
             identity = f"workflow-run-{key}"
             existing = path(project, identity)
             if existing.exists():
-                job = read_job(existing)
+                job: JsonObject = jobs_store.read(project, identity)
                 if (
                     job["request"]["asset_id"] != body.asset_id
                     or job["request"]["workflow_id"] != body.workflow_id
@@ -535,28 +494,26 @@ def workflow_router(
                 for item in jobs(project)
             ):
                 raise HTTPException(409, "项目已有正在执行的任务，请等待完成或取消")
-            job: JsonObject = {
-                "task_id": identity,
-                "kind": "workflow",
-                "status": "pending",
-                "owner_pid": os.getpid(),
-                "created_at": datetime.now(UTC).isoformat(),
-                "phase": "pending",
-                "resumable": True,
-                "request": {
+            job, runner = executor.prepare(
+                project,
+                identity,
+                "workflow",
+                {
                     **body.model_dump(),
                     "definition": library.get(body.workflow_id),
                     "cleanup_version": 2,
                     "boundary_version": 3,
                 },
-                "result": None,
-                "error": None,
-                "exports": [],
-                "child_task_ids": [],
-            }
-            write_job(existing, job, create=True)
-            active.add((project, identity))
-            schedule_run(background, project, identity)
+                lambda token: run(project, identity, token),
+                metadata={
+                    "created_at": datetime.now(UTC).isoformat(),
+                    "phase": "pending",
+                    "exports": [],
+                    "child_task_ids": [],
+                },
+            )
+            if runner is not None:
+                schedule_run(background, runner)
             return response(job)
 
     @router.post(
@@ -567,10 +524,10 @@ def workflow_router(
     ) -> JsonObject:
         project_path(project)
         with lock:
-            job = read_job(path(project, identity))
+            job: JsonObject = jobs_store.read(project, identity)
             if job.get("kind") != "workflow":
                 raise HTTPException(404, "工作流任务不存在")
-            if (project, identity) in active:
+            if executor.is_active(project, identity):
                 return response(job)
             if job["status"] not in {"failed", "cancelled"}:
                 raise HTTPException(409, "只有失败或取消的工作流可以继续")
@@ -578,10 +535,14 @@ def workflow_router(
                 item.get("status") in {"pending", "running"} for item in jobs(project)
             ):
                 raise HTTPException(409, "项目已有正在执行的任务")
-            job.update(status="pending", cancel_requested=False, owner_pid=os.getpid())
-            write_job(path(project, identity), job)
-            active.add((project, identity))
-            schedule_run(background, project, identity)
+            try:
+                job, runner = executor.restart_workflow(
+                    project, identity, lambda token: run(project, identity, token)
+                )
+            except TaskConflict as error:
+                raise HTTPException(409, str(error)) from error
+            if runner is not None:
+                schedule_run(background, runner)
             return response(job)
 
     @router.post("/api/projects/{project}/workflow-runs/{identity}/cancel")
@@ -589,25 +550,13 @@ def workflow_router(
         project: SafeId, identity: SafeId
     ) -> JsonObject:
         project_path(project)
-        with lock:
-            job = read_job(path(project, identity))
-            if job.get("kind") != "workflow":
-                raise HTTPException(404, "工作流任务不存在")
-            if job["status"] in {"pending", "running"}:
-                job["cancel_requested"] = True
-                write_job(path(project, identity), job)
-                future = scheduled_runs.get((project, identity))
-                if future is not None:
-
-                    def cancelled() -> None:
-                        job["status"] = "cancelled"
-                        write_job(path(project, identity), job)
-
-                    if workers.cancel(future, on_cancel=cancelled):
-                        active.discard((project, identity))
-                        scheduled_runs.pop((project, identity), None)
-                for task_id in job.get("child_task_ids", []):
-                    cancel_child(project, task_id)
-            return response(job)
+        job: JsonObject = jobs_store.read(project, identity)
+        if job.get("kind") != "workflow":
+            raise HTTPException(404, "工作流任务不存在")
+        try:
+            job = executor.cancel(project, identity)
+        except TaskConflict as error:
+            raise HTTPException(409, str(error)) from error
+        return response(job)
 
     return router

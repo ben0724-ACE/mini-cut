@@ -6,7 +6,6 @@ import mimetypes
 import os
 import shutil
 from collections.abc import AsyncGenerator, Callable, Iterator
-from concurrent.futures import CancelledError
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -645,8 +644,6 @@ def create_app(
         try:
             yield
         finally:
-            # Coordinators must finish their children before child queues close.
-            await asyncio.to_thread(workflow_workers.shutdown)
             await asyncio.to_thread(executor.shutdown)
 
     api = FastAPI(title="MiniCut local API", version="0.1.0", lifespan=lifespan)
@@ -731,6 +728,7 @@ def create_app(
         JobRepository(root, reader=_read_job, writer=write_task_job),
         compute_workers,
         export_workers,
+        workflow_workers,
     )
     progress = executor.progress
     fail_submissions = executor.abort
@@ -2241,13 +2239,7 @@ def create_app(
                 raise
         started([response.task_id for response in responses])
         # Only dedicated workflow workers wait synchronously for child completion.
-        for scheduled in background.tasks:
-            for runner in cast(list[_TaskRunner], scheduled.args[0]):
-                if runner.future is not None:
-                    try:
-                        runner.future.result()
-                    except CancelledError:
-                        pass
+        executor.wait(project_id, [response.task_id for response in responses])
         completed = [
             _read_job(_job_path(root / project_id, response.task_id))
             for response in responses
@@ -2269,21 +2261,11 @@ def create_app(
             }
         return cast(JsonObject, completed[0]["result"])
 
-    def cancel_workflow_child(project_id: str, task_id: str) -> None:
-        if _read_job(_job_path(root / project_id, task_id)).get("status") in {
-            "pending",
-            "running",
-        }:
-            cancel_export(project_id, task_id)
-
     api.include_router(
         workflow_router(
             root,
-            _read_job,
-            _write_job,
+            executor,
             workflow_child,
-            cancel_workflow_child,
-            workflow_workers,
         )
     )
     return api
