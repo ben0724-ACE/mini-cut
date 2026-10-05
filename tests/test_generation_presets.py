@@ -295,7 +295,9 @@ def test_template_changes_never_rewrite_applied_drafts_or_generation_history(
     ],
 )
 def test_legacy_builtin_request_still_matches_existing_idempotency_record(
-    tmp_path: Path, preset: str, versions: dict[str, int],
+    tmp_path: Path,
+    preset: str,
+    versions: dict[str, int],
 ) -> None:
     import json
 
@@ -334,7 +336,9 @@ def test_legacy_builtin_request_still_matches_existing_idempotency_record(
         ) as client:
             response = await client.post(
                 "/api/projects/one/tasks/highlights",
-                json={key: value for key, value in request.items() if key not in versions},
+                json={
+                    key: value for key, value in request.items() if key not in versions
+                },
                 headers={"Idempotency-Key": "old"},
             )
             assert response.status_code == 202

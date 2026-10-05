@@ -505,7 +505,10 @@ class SubtitleOutputCommandTest(unittest.TestCase):
 
     def test_styled_ass_keeps_its_own_language_styles(self) -> None:
         command = RenderCommandBuilder().build_subtitle_output(
-            "/base.mp4", "/text.ass", "/burned.mp4", SubtitleMode.BURNED,
+            "/base.mp4",
+            "/text.ass",
+            "/burned.mp4",
+            SubtitleMode.BURNED,
             subtitle_font=SubtitleFont("Noto Sans CJK SC", Path("/fonts/cjk.otf")),
             styled_subtitles=True,
         )

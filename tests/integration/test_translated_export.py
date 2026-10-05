@@ -57,7 +57,15 @@ def test_translated_subtitle_export_keeps_audio_and_time(
     c, s, t = fixture()
     c = replace(c, plans=(replace(c.plans[0], items=(c.plans[0].items[1],)),))
     translated = asyncio.run(
-        translate_collection(c, s, t, Translator(), "test", "zh", "bilingual" if mode == "source" else mode)
+        translate_collection(
+            c,
+            s,
+            t,
+            Translator(),
+            "test",
+            "zh",
+            "bilingual" if mode == "source" else mode,
+        )
     )
     translated = replace(
         translated,

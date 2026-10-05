@@ -98,7 +98,11 @@ def test_preview_uses_target_dimensions_and_reuses_only_matching_version_and_set
     second = preview_output(tmp_path, "collection", "v", 1, CancellationToken())
     assert first["revision"] == second["revision"] == 1
     assert second["reused"] is True and len(calls) == 1
-    assert first["subtitle_warnings"] == second["subtitle_warnings"] == ["译文分页需人工复核。"]
+    assert (
+        first["subtitle_warnings"]
+        == second["subtitle_warnings"]
+        == ["译文分页需人工复核。"]
+    )
     from minicut.export_settings import PreviewOptions
 
     options = PreviewOptions(

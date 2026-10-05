@@ -55,7 +55,9 @@ class FailingReplacer:
         raise OSError("simulated raw filesystem failure")
 
 
-@pytest.mark.parametrize("case", ["different_content", "same_content", "conflicting_id"])
+@pytest.mark.parametrize(
+    "case", ["different_content", "same_content", "conflicting_id"]
+)
 def test_concurrent_asset_registration_shares_lock_across_repositories(
     tmp_path: Path, case: str
 ) -> None:

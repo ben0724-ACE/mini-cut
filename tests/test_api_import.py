@@ -33,7 +33,9 @@ def test_concurrent_real_wav_uploads_preserve_successful_imports(
     add_asset = ProjectRepository.add_asset
     write = ProjectRepository._write  # pyright: ignore[reportPrivateUsage]
 
-    def synchronized_add(repository: ProjectRepository, asset: MediaAsset) -> MediaAsset:
+    def synchronized_add(
+        repository: ProjectRepository, asset: MediaAsset
+    ) -> MediaAsset:
         registrations.wait(timeout=5)
         return add_asset(repository, asset)
 
@@ -84,7 +86,9 @@ def test_concurrent_real_wav_uploads_preserve_successful_imports(
             assert manifest.name == "并发导入"
             assert len(manifest.assets) == expected_count
             assert all(Path(asset.source_path).is_file() for asset in manifest.assets)
-            assert len(list((root / "demo/.minicut/media").glob("*/*"))) == expected_count
+            assert (
+                len(list((root / "demo/.minicut/media").glob("*/*"))) == expected_count
+            )
             for asset_id in returned_ids:
                 assert (
                     await client.get(f"/api/projects/demo/media/source/{asset_id}")
