@@ -786,7 +786,6 @@ def create_app(
     export_tokens: dict[tuple[str, str], CancellationToken] = {}
     task_futures: dict[tuple[str, str], tuple[TaskWorkerPool, Future[None]]] = {}
     resume_lock = Lock()
-    output_edit_lock = Lock()
 
     def progress(project_id: str, task_id: str, done: int, total: int) -> None:
         path = _job_path(root / project_id, task_id)
@@ -1833,16 +1832,15 @@ def create_app(
     ) -> dict[str, object]:
         from minicut.highlight_service import split_saved_output
 
-        with output_edit_lock:
-            try:
-                return split_saved_output(
-                    root / project_id, collection_id, output_id, base_revision
-                )
-            except UserInputError as error:
-                raise HTTPException(
-                    status_code=409 if "版本冲突" in str(error) else 400,
-                    detail=str(error),
-                ) from error
+        try:
+            return split_saved_output(
+                root / project_id, collection_id, output_id, base_revision
+            )
+        except UserInputError as error:
+            raise HTTPException(
+                status_code=409 if "版本冲突" in str(error) else 400,
+                detail=str(error),
+            ) from error
 
     @api.post(
         "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/items/{instance_id}/split"
@@ -1856,22 +1854,21 @@ def create_app(
     ) -> dict[str, object]:
         from minicut.highlight_service import manual_split_output
 
-        with output_edit_lock:
-            try:
-                return manual_split_output(
-                    root / project_id,
-                    collection_id,
-                    output_id,
-                    instance_id,
-                    body.base_revision,
-                    body.lines,
-                    body.apply,
-                )
-            except (UserInputError, ValueError) as error:
-                raise HTTPException(
-                    status_code=409 if "版本冲突" in str(error) else 400,
-                    detail=str(error),
-                ) from error
+        try:
+            return manual_split_output(
+                root / project_id,
+                collection_id,
+                output_id,
+                instance_id,
+                body.base_revision,
+                body.lines,
+                body.apply,
+            )
+        except (UserInputError, ValueError) as error:
+            raise HTTPException(
+                status_code=409 if "版本冲突" in str(error) else 400,
+                detail=str(error),
+            ) from error
 
     @api.put(
         "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/ranges"
@@ -1884,14 +1881,13 @@ def create_app(
     ) -> dict[str, object]:  # pyright: ignore[reportUnusedFunction]
         inspect(project_id)
         try:
-            with output_edit_lock:
-                return save_output_ranges(
-                    root / project_id,
-                    collection_id,
-                    output_id,
-                    body.base_revision,
-                    [row.model_dump() for row in body.ranges],
-                )
+            return save_output_ranges(
+                root / project_id,
+                collection_id,
+                output_id,
+                body.base_revision,
+                [row.model_dump() for row in body.ranges],
+            )
         except RevisionConflict as error:
             raise HTTPException(409, str(error)) from error
         except (MiniCutError, ValueError) as error:
@@ -1910,14 +1906,13 @@ def create_app(
 
         inspect(project_id)
         try:
-            with output_edit_lock:
-                return rename_output(
-                    root / project_id,
-                    collection_id,
-                    output_id,
-                    body.base_revision,
-                    body.title,
-                )
+            return rename_output(
+                root / project_id,
+                collection_id,
+                output_id,
+                body.base_revision,
+                body.title,
+            )
         except RevisionConflict as error:
             raise HTTPException(409, str(error)) from error
         except (MiniCutError, ValueError) as error:
@@ -1935,19 +1930,18 @@ def create_app(
     ) -> dict[str, object]:
         inspect(project_id)
         try:
-            with output_edit_lock:
-                return edit_output_item(
-                    root / project_id,
-                    collection_id,
-                    output_id,
-                    instance_id,
-                    deleted=body.deleted,
-                    display_text=body.display_text,
-                    translation_text=body.translation_text,
-                    subtitle_mode=body.subtitle_mode,
-                    source_start_ms=body.source_start_ms,
-                    source_end_ms=body.source_end_ms,
-                )
+            return edit_output_item(
+                root / project_id,
+                collection_id,
+                output_id,
+                instance_id,
+                deleted=body.deleted,
+                display_text=body.display_text,
+                translation_text=body.translation_text,
+                subtitle_mode=body.subtitle_mode,
+                source_start_ms=body.source_start_ms,
+                source_end_ms=body.source_end_ms,
+            )
         except (MiniCutError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
 
@@ -1962,14 +1956,13 @@ def create_app(
     ) -> dict[str, object]:
         inspect(project_id)
         try:
-            with output_edit_lock:
-                return save_output_subtitle_settings(
-                    root / project_id,
-                    collection_id,
-                    output_id,
-                    **body.model_dump(),
-                    replace_subtitle_style="subtitle_style" in body.model_fields_set,
-                )
+            return save_output_subtitle_settings(
+                root / project_id,
+                collection_id,
+                output_id,
+                **body.model_dump(),
+                replace_subtitle_style="subtitle_style" in body.model_fields_set,
+            )
         except RevisionConflict as error:
             raise HTTPException(409, str(error)) from error
         except (MiniCutError, ValueError) as error:
@@ -1995,7 +1988,6 @@ def create_app(
                 body.output_id,
                 body.base_revision,
                 body.language,
-                output_edit_lock,
                 export_tokens.setdefault(
                     (project_id, idempotency_key), CancellationToken()
                 ),
@@ -2021,16 +2013,15 @@ def create_app(
     ) -> dict[str, object]:
         inspect(project_id)
         try:
-            with output_edit_lock:
-                return reorder_output(
-                    root / project_id,
-                    collection_id,
-                    output_id,
-                    body.order,
-                    body.roles,
-                    body.hook_transition_ms,
-                    body.hook_transition_kind,
-                )
+            return reorder_output(
+                root / project_id,
+                collection_id,
+                output_id,
+                body.order,
+                body.roles,
+                body.hook_transition_ms,
+                body.hook_transition_kind,
+            )
         except (MiniCutError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
 

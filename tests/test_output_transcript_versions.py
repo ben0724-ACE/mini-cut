@@ -4,7 +4,6 @@ import shutil
 import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path
-from threading import Lock
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
@@ -249,9 +248,7 @@ def test_translation_uses_bound_source(
         return_value=replace(collection, plans=(collection.plans[0],))
     )
     monkeypatch.setattr("minicut.subtitle_translation.translate_collection", translator)
-    translate_output_subtitles(
-        workspace.project, "collection", "range", 1, "zh", Lock()
-    )
+    translate_output_subtitles(workspace.project, "collection", "range", 1, "zh")
     assert translator.call_args.args[2] == workspace.old
 
 

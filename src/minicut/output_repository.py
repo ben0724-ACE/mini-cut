@@ -1,10 +1,10 @@
 """Atomic local persistence separate from legacy edit-plan artifacts."""
 
 import json
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from threading import RLock
 from typing import cast
 from uuid import uuid4
 
@@ -14,11 +14,10 @@ from minicut.output_plan import (
     validate_output_collection,
     validate_output_id,
 )
+from minicut.project_mutation import project_mutation_lock
 from minicut.semantic_segment import SemanticSegment
 from minicut.transcript import Transcript
 from minicut.transcription_cache import TranscriptionCacheKey
-
-_transcript_locks: dict[Path, RLock] = {}
 
 
 class OutputCollectionRepository:
@@ -29,6 +28,13 @@ class OutputCollectionRepository:
         self.path = (
             project_directory / ".minicut/output-collections" / f"{collection_id}.json"
         )
+        self._mutation_lock = project_mutation_lock(project_directory)
+
+    @contextmanager
+    def mutation(self) -> Generator[None, None, None]:
+        """Serialize a complete read/validate/write edit across repositories."""
+        with self._mutation_lock:
+            yield
 
     def write_segments(self, segments: tuple[SemanticSegment, ...]) -> None:
         self.write_json(
@@ -83,6 +89,12 @@ class OutputCollectionRepository:
             self.write_json(binding_path, binding)
 
     def write(
+        self, collection: OutputCollection, segments: tuple[SemanticSegment, ...]
+    ) -> None:
+        with self.mutation():
+            self._write(collection, segments)
+
+    def _write(
         self, collection: OutputCollection, segments: tuple[SemanticSegment, ...]
     ) -> None:
         validate_output_collection(collection, segments)
@@ -188,7 +200,7 @@ class TranscriptVersionRepository:
         self.cache_path = (
             project_directory / ".minicut/transcripts" / f"{asset_id}.json"
         )
-        self.lock = _transcript_locks.setdefault(project_directory.resolve(), RLock())
+        self.lock = project_mutation_lock(project_directory)
 
     def version_path(self, version: str) -> Path:
         validate_output_id(version)

@@ -3,10 +3,11 @@
 import asyncio
 import json
 import os
-from contextlib import AbstractContextManager
+from collections.abc import Callable
 from dataclasses import asdict, replace
+from functools import wraps
 from pathlib import Path
-from typing import cast
+from typing import ParamSpec, TypeVar, cast
 
 from minicut.boundary_refinement import refine_boundaries
 from minicut.deepseek_provider import DeepSeekProvider
@@ -32,6 +33,27 @@ from minicut.subtitle_style import SubtitleStyle
 from minicut.text_normalization import normalize_text, normalize_transcript_words
 from minicut.transcript import Transcript
 from minicut.transcription_task import CancellationToken
+
+_EditArgs = ParamSpec("_EditArgs")
+_EditResult = TypeVar("_EditResult")
+
+
+def _atomic_output_edit(
+    operation: Callable[_EditArgs, _EditResult],
+) -> Callable[_EditArgs, _EditResult]:
+    """Keep source reads, revision checks, history and response in one boundary."""
+
+    @wraps(operation)
+    def edit(
+        *args: _EditArgs.args,
+        **kwargs: _EditArgs.kwargs,
+    ) -> _EditResult:
+        project = cast(Path, args[0] if args else kwargs["project"])
+        collection_id = cast(str, args[1] if len(args) > 1 else kwargs["collection_id"])
+        with OutputCollectionRepository(project, collection_id).mutation():
+            return operation(*args, **kwargs)
+
+    return edit
 
 
 def generate_highlights(
@@ -282,6 +304,7 @@ def source_segments(
         raise UserInputError("Source transcript is missing or invalid") from error
 
 
+@_atomic_output_edit
 def edit_output_item(
     project: Path,
     collection_id: str,
@@ -361,6 +384,7 @@ def edit_output_item(
     return read_highlights(project, collection_id)
 
 
+@_atomic_output_edit
 def save_output_subtitle_settings(
     project: Path,
     collection_id: str,
@@ -421,15 +445,18 @@ def translate_output_subtitles(
     output_id: str,
     base_revision: int,
     language: str,
-    save_lock: AbstractContextManager[object],
     cancellation: CancellationToken | None = None,
 ) -> dict[str, object]:
     from minicut.subtitle_translation import translate_collection
 
-    result = read_highlights(project, collection_id)
-    segments = source_segments(project, cast(str, result["asset_id"]), collection_id)
     repository = OutputCollectionRepository(project, collection_id)
-    collection = repository.read(segments)
+    with repository.mutation():
+        result = read_highlights(project, collection_id)
+        segments = source_segments(
+            project, cast(str, result["asset_id"]), collection_id
+        )
+        collection = repository.read(segments)
+        transcript = _source_transcript(project, collection.asset_id, collection_id)
     plan = next((p for p in collection.plans if p.output_id == output_id), None)
     if plan is None:
         raise UserInputError("Output does not exist")
@@ -458,7 +485,7 @@ def translate_output_subtitles(
         translate_collection(
             replace(collection, plans=(plan,)),
             segments,
-            _source_transcript(project, collection.asset_id, collection_id),
+            transcript,
             recorded,
             os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
             language,
@@ -466,7 +493,7 @@ def translate_output_subtitles(
             only_missing=True,
         )
     ).plans[0]
-    with save_lock:
+    with repository.mutation():
         current = repository.read(segments)
         latest = next((p for p in current.plans if p.output_id == output_id), None)
         if latest is None or latest.revision != base_revision:
@@ -485,9 +512,10 @@ def translate_output_subtitles(
             ),
             segments,
         )
-    return read_highlights(project, collection_id)
+        return read_highlights(project, collection_id)
 
 
+@_atomic_output_edit
 def reorder_output(
     project: Path,
     collection_id: str,
@@ -683,6 +711,7 @@ class RevisionConflict(UserInputError):
     """The editor must reload before overwriting a newer revision."""
 
 
+@_atomic_output_edit
 def save_output_ranges(
     project: Path,
     collection_id: str,
@@ -690,7 +719,6 @@ def save_output_ranges(
     base_revision: int,
     ranges: list[dict[str, object]],
 ) -> dict[str, object]:
-    # Serialize with other edits in the API; replace the collection only once.
     result = read_highlights(project, collection_id)
     asset_id = cast(str, result["asset_id"])
     segments = source_segments(project, asset_id, collection_id)
@@ -746,6 +774,7 @@ def save_output_ranges(
     return read_highlights(project, collection_id)
 
 
+@_atomic_output_edit
 def split_saved_output(
     project: Path, collection_id: str, output_id: str, base_revision: int
 ) -> dict[str, object]:
@@ -776,6 +805,7 @@ def split_saved_output(
     return read_highlights(project, collection_id)
 
 
+@_atomic_output_edit
 def manual_split_output(
     project: Path,
     collection_id: str,
@@ -840,6 +870,7 @@ def manual_split_output(
     return read_highlights(project, collection_id)
 
 
+@_atomic_output_edit
 def rename_output(
     project: Path, collection_id: str, output_id: str, base_revision: int, title: str
 ) -> dict[str, object]:

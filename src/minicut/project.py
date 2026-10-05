@@ -5,29 +5,13 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from threading import Lock, RLock
 from typing import cast
-from weakref import WeakValueDictionary
 
 from minicut.errors import ProcessingError, UserInputError
 from minicut.media import MediaAsset
+from minicut.project_mutation import project_mutation_lock
 
 MANIFEST_SCHEMA_VERSION = 1
-
-# Repositories are created per request. Share a lock for each canonical project
-# path within this process; inactive projects need not stay in the registry.
-_project_locks: WeakValueDictionary[Path, RLock] = WeakValueDictionary()
-_project_locks_guard = Lock()
-
-
-def _project_lock(directory: Path) -> RLock:
-    key = directory.resolve()
-    with _project_locks_guard:
-        lock = _project_locks.get(key)
-        if lock is None:
-            lock = RLock()
-            _project_locks[key] = lock
-        return lock
 
 
 @dataclass(slots=True)
@@ -93,7 +77,7 @@ class ProjectRepository:
         self.project_directory = Path(project_directory)
         self.manifest_path = self.project_directory / "manifest.json"
         self._replace_file = replace_file
-        self._mutation_lock = _project_lock(self.project_directory)
+        self._mutation_lock = project_mutation_lock(self.project_directory)
 
     def create(self, manifest: ProjectManifest) -> None:
         """Create a new manifest without replacing an existing project."""
@@ -104,7 +88,9 @@ class ProjectRepository:
             try:
                 self._write(manifest)
             except OSError as error:
-                raise ProcessingError("Project manifest could not be created") from error
+                raise ProcessingError(
+                    "Project manifest could not be created"
+                ) from error
 
     def read(self) -> ProjectManifest:
         """Read the current project manifest."""
@@ -129,7 +115,9 @@ class ProjectRepository:
             try:
                 self._write(manifest)
             except OSError as error:
-                raise ProcessingError("Project manifest could not be updated") from error
+                raise ProcessingError(
+                    "Project manifest could not be updated"
+                ) from error
 
     def add_asset(self, asset: MediaAsset) -> MediaAsset:
         """Register new content or return the matching existing asset."""

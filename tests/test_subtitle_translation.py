@@ -2,7 +2,6 @@ import asyncio
 import json
 from dataclasses import replace
 from pathlib import Path
-from threading import Lock
 from typing import cast
 
 import pytest
@@ -184,12 +183,12 @@ def test_post_generation_translation_saves_one_version_without_paid_provider(
     monkeypatch.setattr(
         "minicut.highlight_service.DeepSeekProvider", translator_provider
     )
-    result = translate_output_subtitles(tmp_path, "c", "v", 1, "zh", Lock())
+    result = translate_output_subtitles(tmp_path, "c", "v", 1, "zh")
     assert cast(list[dict[str, object]], result["outputs"])[0]["revision"] == 2
     saved = repository.read(segments).plans[0]
     assert [item.translation_text for item in saved.items] == ["您好", "你好"]
     with pytest.raises(UserInputError, match="新版本"):
-        translate_output_subtitles(tmp_path, "c", "v", 1, "zh", Lock())
+        translate_output_subtitles(tmp_path, "c", "v", 1, "zh")
 
 
 def test_bilingual_sentence_stays_together_when_languages_wrap_differently() -> None:
