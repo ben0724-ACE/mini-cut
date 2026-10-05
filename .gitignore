@@ -1,6 +1,7 @@
 # Keep the public repository free of internal Markdown working notes.
 *.md
 !/README.md
+!/docs/user-guide.md
 
 # macOS
 .DS_Store
