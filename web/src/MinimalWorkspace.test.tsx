@@ -3,18 +3,19 @@ import {act,render,screen,waitFor,within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {MinimalWorkspace} from "./MinimalWorkspace";
 import {defaultGenerationDraft} from "./generationDraft";
-import {defaultExportOptions} from "./exportSettingsApi";
+import {defaultExportOptions,getExportDraft} from "./exportSettingsApi";
 import * as api from "./api";
 import * as workflows from "./workflowApi";
 
-vi.mock("./api",async original=>({...await original<typeof import("./api")>(),listAssets:vi.fn(),uploadAsset:vi.fn(),recoverHighlights:vi.fn(),recoverOutputExport:vi.fn(),getHighlights:vi.fn(),saveHighlightSelection:vi.fn(),startOutputExportBatch:vi.fn(),readHighlightTask:vi.fn()}));
+vi.mock("./api",async original=>({...await original<typeof import("./api")>(),listAssets:vi.fn(),uploadAsset:vi.fn(),recoverHighlights:vi.fn(),recoverOutputExport:vi.fn(),getHighlights:vi.fn(),saveHighlightSelection:vi.fn(),startOutputExportBatch:vi.fn(),readHighlightTask:vi.fn(),recoverOutputPreview:vi.fn(),startOutputPreview:vi.fn()}));
+vi.mock("./exportSettingsApi",async original=>({...await original<typeof import("./exportSettingsApi")>(),getExportDraft:vi.fn()}));
 vi.mock("./workflowApi",async original=>({...await original<typeof import("./workflowApi")>(),listWorkflows:vi.fn(),latestWorkflowRun:vi.fn(),startWorkflowRun:vi.fn(),workflowAction:vi.fn()}));
 vi.mock("./QuickPreview",()=>({QuickPreview:({title}:{title:string})=><div>试听 {title}</div>}));
 vi.mock("./WorkflowManager",()=>({WorkflowManager:()=> <div>管理我的工作流</div>}));
 const workflow:workflows.Workflow={workflow_id:"podcast",name:"AI 播客",generation:defaultGenerationDraft(),transcription:{provider:"mlx",model:"large-v3-turbo",language:"en"},export_options:defaultExportOptions(),layout:{},auto_export:false,cover_template_id:null,created_at:"",updated_at:""};
 const result:api.HighlightResult={collection_id:"c",asset_id:"a",brief:{preset:"podcast_highlights",count:1,min_ms:1000,max_ms:2000,hook_ms:null,max_source_overlap:1},notes:[],outputs:[{output_id:"o",title:"AI 的未来",reason:"主题完整",revision:2,duration_ms:1800,clips:[]}],selected_output_ids:["o"]};
 const completed:workflows.WorkflowRun={task_id:"run",asset_id:"a",workflow_name:"AI 播客",status:"succeeded",phase:"completed",error:null,result,exports:[],child_task_ids:[]};
-beforeEach(()=>{vi.clearAllMocks();localStorage.clear();vi.mocked(workflows.listWorkflows).mockResolvedValue([workflow]);vi.mocked(workflows.latestWorkflowRun).mockResolvedValue(null);vi.mocked(api.listAssets).mockResolvedValue([]);vi.mocked(api.getHighlights).mockResolvedValue(result);vi.mocked(api.recoverHighlights).mockResolvedValue(null);vi.mocked(api.recoverOutputExport).mockResolvedValue(null);});
+beforeEach(()=>{vi.clearAllMocks();localStorage.clear();vi.mocked(workflows.listWorkflows).mockResolvedValue([workflow]);vi.mocked(workflows.latestWorkflowRun).mockResolvedValue(null);vi.mocked(api.listAssets).mockResolvedValue([]);vi.mocked(api.getHighlights).mockResolvedValue(result);vi.mocked(api.recoverHighlights).mockResolvedValue(null);vi.mocked(api.recoverOutputExport).mockResolvedValue(null);vi.mocked(api.recoverOutputPreview).mockResolvedValue(null);vi.mocked(getExportDraft).mockResolvedValue({source:"saved",draft:{options:defaultExportOptions(),overrides:{},preset_id:null,preset_name:null}});});
 afterEach(()=>{localStorage.clear();window.history.replaceState({},"","/");});
 it("选择视频并点击一次就上传和启动工作流，快速重复点击只提交一次",async()=>{
   const user=userEvent.setup();vi.mocked(api.uploadAsset).mockResolvedValue({asset_id:"a"});vi.mocked(workflows.startWorkflowRun).mockResolvedValue({...completed,status:"pending",result:null,phase:"pending"});
@@ -40,6 +41,19 @@ it("生成详情点击一次直接展示内容，关闭弹窗后恢复焦点",as
   expect(within(dialog).getByText(/已生成 1 \/ 1 条候选/)).toBeVisible();
   expect(dialog.querySelector("summary")).toBeNull();
   await user.keyboard("{Escape}");expect(screen.queryByRole("dialog")).not.toBeInTheDocument();expect(trigger).toHaveFocus();
+});
+it("切换候选会离开上一条的成片画面，只为显式选择的作品生成预览",async()=>{
+  const user=userEvent.setup();const other={...result.outputs[0],output_id:"other",title:"另一条作品",revision:4};
+  vi.mocked(workflows.latestWorkflowRun).mockResolvedValue(completed);vi.mocked(api.getHighlights).mockResolvedValue({...result,outputs:[...result.outputs,other]});
+  vi.mocked(api.startOutputPreview).mockImplementation(async(_project,_collection,output,revision)=>({task_id:`preview-${output}`,status:"succeeded",error:null,result:{output_id:output,revision,media_url:`/${output}.mp4`,subtitle_url:"/subtitle.srt",duration_ms:1800}}));
+  render(<MinimalWorkspace project="p" onRefine={vi.fn()}/>);
+  await screen.findByRole("region",{name:"极简模式结果"});await user.click(screen.getByRole("button",{name:"成片预览"}));
+  expect(await screen.findByLabelText("成片预览 · AI 的未来")).toHaveAttribute("src","/o.mp4");
+  await user.click(screen.getByRole("button",{name:"另一条作品"}));
+  expect(screen.queryByLabelText("成片预览 · AI 的未来")).not.toBeInTheDocument();expect(screen.getByText("试听 另一条作品")).toBeInTheDocument();expect(api.startOutputPreview).toHaveBeenCalledTimes(1);
+  await user.click(screen.getByRole("button",{name:"成片预览"}));
+  expect(await screen.findByLabelText("成片预览 · 另一条作品")).toHaveAttribute("src","/other.mp4");
+  expect(api.startOutputPreview).toHaveBeenLastCalledWith("p","c","other",4,expect.any(String),defaultExportOptions());
 });
 it("没有工作流运行记录也可恢复手动导出，一次点击进入现有结果页",async()=>{
   const user=userEvent.setup();
@@ -87,6 +101,36 @@ it("自动导出任务稍后产生时也显示结果入口",async()=>{
     await act(async()=>{await vi.advanceTimersByTimeAsync(1500);});
     expect(screen.getByRole("button",{name:"查看导出结果"})).toBeInTheDocument();
     expect(api.recoverOutputExport).toHaveBeenCalledTimes(2);
+  }finally{vi.useRealTimers();}
+});
+it("工作流完成后，延迟返回的候选请求不会被完成状态中止",async()=>{
+  vi.useFakeTimers();
+  try{
+    vi.mocked(workflows.latestWorkflowRun).mockResolvedValueOnce({...completed,status:"running",phase:"highlights",result:null}).mockResolvedValue(completed);
+    let finish:((value:api.HighlightResult)=>void)|undefined;
+    vi.mocked(api.getHighlights).mockImplementation((_project,_collection,signal)=>new Promise((resolve,reject)=>{
+      finish=resolve;signal?.addEventListener("abort",()=>reject(new DOMException("请求已中止","AbortError")),{once:true});
+    }));
+    await act(async()=>{render(<MinimalWorkspace project="p" onRefine={vi.fn()}/>);});
+    await act(async()=>{await vi.advanceTimersByTimeAsync(1500);});
+    expect(api.getHighlights).toHaveBeenCalledTimes(1);
+    await act(async()=>{finish?.(result);});
+    expect(screen.getByRole("region",{name:"极简模式结果"})).toBeInTheDocument();
+    expect(screen.getByRole("button",{name:"AI 的未来"})).toBeInTheDocument();
+    expect(workflows.startWorkflowRun).not.toHaveBeenCalled();
+  }finally{vi.useRealTimers();}
+});
+it("完成后的候选读取暂时失败，会自动重试并显示作品",async()=>{
+  vi.useFakeTimers();
+  try{
+    vi.mocked(workflows.latestWorkflowRun).mockResolvedValueOnce({...completed,status:"running",phase:"highlights",result:null}).mockResolvedValue(completed);
+    vi.mocked(api.getHighlights).mockRejectedValueOnce(new Error("临时读取失败")).mockResolvedValue(result);
+    await act(async()=>{render(<MinimalWorkspace project="p" onRefine={vi.fn()}/>);});
+    await act(async()=>{await vi.advanceTimersByTimeAsync(1500);});
+    await act(async()=>{await vi.advanceTimersByTimeAsync(1500);});
+    expect(screen.getByRole("region",{name:"极简模式结果"})).toBeInTheDocument();
+    expect(api.getHighlights).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("临时读取失败")).not.toBeInTheDocument();
   }finally{vi.useRealTimers();}
 });
 it("失败后提供继续工作流，使用同一个运行记录",async()=>{

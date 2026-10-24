@@ -1,8 +1,8 @@
 import {useEffect,useRef,useState} from "react";
-import {getHighlights,listAssets,recoverHighlights,recoverOutputExport,readHighlightTask,saveHighlightSelection,startOutputExportBatch,uploadAsset,type AssetDetail,type HighlightResult,type HighlightOutput} from "./api";
+import {getHighlights,listAssets,recoverHighlights,recoverOutputExport,readHighlightTask,saveHighlightSelection,startOutputExportBatch,uploadAsset,type AssetDetail,type HighlightResult} from "./api";
 import {exportSettingsRoute,getExportDraft,type ExportOptions} from "./exportSettingsApi";
 import {navigateToExportResults,type ExportLocationEntry} from "./exportNavigation";
-import {QuickPreview} from "./QuickPreview";
+import {MinimalPreview} from "./MinimalPreview";
 import {WorkflowManager} from "./WorkflowManager";
 import {GenerationDetails} from "./GenerationDetails";
 import {WorkspaceDialog} from "./WorkspaceDialog";
@@ -43,11 +43,27 @@ export function MinimalWorkspace({project,onRefine}:{project:string;onRefine:(co
     }).catch(reason=>{if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"无法恢复导出结果");});
     return()=>controller.abort();
   },[project,collection,outputIds,workflowExports,retry]);
-  useEffect(()=>{if(!active||!run)return;const controller=new AbortController();const timer=setTimeout(async()=>{try{
-    const latest=await latestWorkflowRun(project,controller.signal);if(controller.signal.aborted)return;setRun(latest);
-    if(latest?.result&&(latest.result.collection_id!==result?.collection_id||latest.status!==run.status||latest.phase!==run.phase)){const current=await getHighlights(project,latest.result.collection_id,controller.signal);if(!controller.signal.aborted)applyResult(current);}
-    if(latest?.child_task_ids.length&&latest.phase==="transcribe"){const task=await readHighlightTask(project,latest.child_task_ids[0],controller.signal);if(!controller.signal.aborted)setStatus(task.progress?.total?`已完成 ${task.progress.completed??0} / ${task.progress.total} 个转录块`:"");}
-  }catch(reason){if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"查询失败");}},1500);return()=>{clearTimeout(timer);controller.abort();};},[project,run,active]);
+  const runId=run?.task_id;
+  useEffect(()=>{
+    if(!active||!run)return;const controller=new AbortController();let previous=run;let previousCollection=result?.collection_id;let pollingError="";
+    let timer:ReturnType<typeof setTimeout>;
+    async function poll(){
+      try{
+        const latest=await latestWorkflowRun(project,controller.signal);if(controller.signal.aborted)return;
+        let current:HighlightResult|undefined;
+        if(latest?.result&&(latest.result.collection_id!==previousCollection||latest.status!==previous.status||latest.phase!==previous.phase))current=await getHighlights(project,latest.result.collection_id,controller.signal);
+        let progress="";
+        if(latest?.child_task_ids.length&&latest.phase==="transcribe"){const task=await readHighlightTask(project,latest.child_task_ids[0],controller.signal);if(task.progress?.total)progress=`已完成 ${task.progress.completed??0} / ${task.progress.total} 个转录块`;}
+        if(controller.signal.aborted)return;
+        // Publish the result before a terminal status can stop polling and abort its request.
+        if(current){applyResult(current);previousCollection=current.collection_id;}
+        setRun(latest);setStatus(progress);
+        if(pollingError){const recoveredError=pollingError;setError(value=>value===recoveredError?"":value);pollingError="";}
+        if(latest){previous=latest;if(latest.status==="pending"||latest.status==="running")timer=setTimeout(()=>void poll(),1500);}
+      }catch(reason){if(!controller.signal.aborted){pollingError=reason instanceof Error?reason.message:"查询失败";setError(pollingError);timer=setTimeout(()=>void poll(),1500);}}
+    }
+    timer=setTimeout(()=>void poll(),1500);return()=>{clearTimeout(timer);controller.abort();};
+  },[project,runId,active,retry]);
   async function action(operation:()=>Promise<void>){if(lock.current)return;lock.current=true;setBusy(true);setError("");try{await operation();}catch(reason){setError(reason instanceof Error?reason.message:"操作失败");}finally{lock.current=false;setBusy(false);setStatus("");}}
   async function start(){if(!workflow||active)return;let asset=assetId;
     if(file&&!uploaded.current){setStatus("正在导入视频…");const imported=await uploadAsset(project,file);uploaded.current=imported.asset_id;asset=imported.asset_id;setAssetId(asset);setAssets(await listAssets(project));}
@@ -94,11 +110,8 @@ export function MinimalWorkspace({project,onRefine}:{project:string;onRefine:(co
       {result.outputs.length?<div className="minimal-result-layout"><div className="minimal-candidates" aria-label="候选列表">{result.outputs.map(o=><article className={`minimal-candidate ${output?.output_id===o.output_id?"is-current":""}`} key={o.output_id}>
         <button className="candidate-title" type="button" title={o.title} aria-pressed={output?.output_id===o.output_id} onClick={()=>setFocused(o.output_id)}>{o.title}</button><p className="muted">{(o.duration_ms/1000).toFixed(1)} 秒</p>
         <div className="minimal-candidate-actions"><label className="checkbox-field"><input type="checkbox" aria-label={`选择${o.title}`} disabled={blocked} checked={selected.includes(o.output_id)} onChange={event=>void action(()=>toggleSelected(o.output_id,event.target.checked))}/>选择导出</label><button type="button" disabled={active} onClick={()=>onRefine(result.collection_id,o.output_id)}>精修</button></div>
-      </article>)}</div>{output&&<MinimalPreview key={`${result.collection_id}:${output.output_id}`} project={project} result={result} output={output}/>}</div>:<div className="minimal-empty"><p>没有符合要求的候选，请在完整模式调整选材要求。</p></div>}
+      </article>)}</div>{output&&<MinimalPreview key={`${result.collection_id}:${output.output_id}`} project={project} result={result} output={output} disabled={blocked}/>}</div>:<div className="minimal-empty"><p>没有符合要求的候选，请在完整模式调整选材要求。</p></div>}
     </section>:<div className="minimal-empty"><h2>准备好下一条作品</h2><p>{loaded?"选择视频和工作流，点击一键生成。":"正在恢复素材与作品…"}</p></div>}
     <WorkspaceDialog open={detailsOpen} title="生成详情" onClose={()=>setDetailsOpen(false)}>{result&&<GenerationDetails expanded assetName={assets.find(a=>a.asset_id===result.asset_id)?.name??"当前素材"} result={result}/>}</WorkspaceDialog>
   </section>;
-}
-function MinimalPreview({project,result,output}:{project:string;result:HighlightResult;output:HighlightOutput}){
-  return <section className="minimal-preview" aria-label="作品试听"><h3 title={output.title}>{output.title}</h3><div className="minimal-media"><QuickPreview compact sourceUrl={`/api/projects/${encodeURIComponent(project)}/media/source/${encodeURIComponent(result.asset_id)}`} title={output.title} clips={output.clips} onDuration={()=>{}}/></div><p className="helper-text minimal-preview-hint">源视频试听 · 成片字幕与转场以导出为准</p>{output.workflow==="speech_cleanup"?<p>此流程不生成文案</p>:<details className="minimal-reason"><summary>选材理由</summary><p className="helper-text">{output.reason}</p></details>}</section>;
 }
