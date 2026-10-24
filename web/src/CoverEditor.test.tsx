@@ -1,5 +1,5 @@
 import {beforeEach,expect,it,vi} from "vitest";
-import {fireEvent,render,screen,waitFor} from "@testing-library/react";
+import {fireEvent,render,screen,waitFor,within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {CoverEditor} from "./CoverEditor";
 import * as api from "./coverApi";
@@ -30,8 +30,13 @@ it("保留片段选帧与位置微调写入预览配置",async()=>{
   render(<CoverEditor {...props}/>);await screen.findByLabelText("封面模式");
   fireEvent.change(screen.getByLabelText("封面模式"),{target:{value:"design"}});
   expect(screen.queryByRole("option",{name:/已删除/})).not.toBeInTheDocument();
+  const preview=within(screen.getByRole("group",{name:"封面预览与选帧"}));
+  expect(preview.getByLabelText("封面画布")).toBeInTheDocument();
+  expect(preview.getByLabelText("选择视频帧时间")).toBeVisible();
   fireEvent.change(screen.getByLabelText("选择保留片段"),{target:{value:"b"}});
-  fireEvent.change(screen.getByLabelText("帧时间（源视频秒数）"),{target:{value:"4.5"}});
+  fireEvent.change(preview.getByLabelText("选择视频帧时间"),{target:{value:"4500"}});
+  expect(preview.getByLabelText("帧时间（源视频秒数）")).toHaveValue(4.5);
+  expect(preview.getByLabelText("选择视频帧时间")).toHaveAttribute("aria-valuetext","源视频 4.500 秒");
   fireEvent.keyDown(screen.getByRole("button",{name:"视频帧位置"}),{key:"ArrowRight",shiftKey:true});
   await waitFor(()=>expect(api.previewCover).toHaveBeenCalledWith(expect.any(String),1,expect.objectContaining({frame_ms:4500,frame:expect.objectContaining({x:.1})}),expect.any(AbortSignal)));
 });
