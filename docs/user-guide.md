@@ -14,6 +14,22 @@
 - **渲染并发**：单条导出、批量导出和成片预览共用 FFmpeg worker，默认并发 2，可用 `MINICUT_EXPORT_CONCURRENCY` 调整为 1–4。并发越高，CPU、内存和磁盘占用越大。
 - **运行方式**：同一个项目根目录只启动一个 API 进程；不要同时通过 CLI 或其他进程写入同一项目。默认服务面向本机使用，没有面向公网的账户与权限系统。
 
+### 烧录字幕失败排查
+
+预览和导出若提示 `No such filter: 'subtitles'`、`No such filter: 'ass'` 或缺少 libass，说明后端调用的 FFmpeg 没有字幕烧录滤镜。只安装 libass 不会给已经编译的 FFmpeg 增加滤镜，需要使用编译时启用了 libass 的 FFmpeg。
+
+macOS 使用 Homebrew 时，可以安装 `ffmpeg-full`；机器上已安装时跳过安装：
+
+```bash
+brew install ffmpeg-full
+export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"
+ffmpeg -hide_banner -filters 2>/dev/null | grep -E ' (subtitles|ass) '
+```
+
+最后一行应列出 `subtitles` 和 `ass`。在**同一终端**中按 README 的命令启动后端；已有后端需先停止再启动，正在运行的进程不会继承新终端的 PATH。随后在作品页面重试成片预览或导出即可，已有转录和 AI 生成结果可以继续使用。
+
+Windows/Linux 同样需要将包含 libass 的 FFmpeg 放在后端启动环境的 PATH 前面；安装和字体说明见下节。
+
 ### Windows 与 Linux 安装补充
 
 兼容目标为 Windows 11 x64、Ubuntu 22.04/24.04 x64，使用 Python 3.11 和 CPU PyTorch Whisper；GPU 加速及其他发行版不在当前兼容验证范围。自动化配置使用 Windows Server 2022 和 Ubuntu runner，不能替代 Windows 11 的人工验收。macOS Apple Silicon 继续使用 MLX。具体验证状态见下方「跨平台验证」。

@@ -268,6 +268,15 @@ class FfmpegRenderer:
                 raise RenderFailed(
                     "FFmpeg 被信号 9 终止，可能是系统内存不足或进程被手动结束。请关闭并行渲染后重试。"
                 )
+            if any(
+                re.search(r"No such filter:\s*['\"](?:subtitles|ass)['\"]", line)
+                for line in stderr_lines
+            ):
+                raise RenderFailed(
+                    "当前 FFmpeg 缺少字幕烧录滤镜（libass），无法生成烧录字幕的预览或导出。"
+                    "请将包含 libass 的 FFmpeg 放在 PATH 前面，并重启后端后重试。"
+                    "macOS Homebrew 用户可使用 ffmpeg-full。"
+                )
             raise RenderFailed(
                 f"FFmpeg render failed (exit {return_code}): {_error_summary(stderr_lines)}"
             )

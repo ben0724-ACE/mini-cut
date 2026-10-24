@@ -150,6 +150,33 @@ class FfmpegRendererTest(unittest.TestCase):
                 timeout_seconds=5,
             )
 
+    def test_missing_subtitle_filter_reports_the_required_runtime_fix(self) -> None:
+        for name in ("subtitles", "ass"):
+            with self.subTest(filter=name):
+                process = FakeProcess(
+                    return_code=8,
+                    stderr=f"[AVFilterGraph] No such filter: '{name}'\n"
+                    "Error opening output files: Filter not found\n",
+                )
+                with self.assertRaises(RenderFailed) as raised:
+                    FfmpegRenderer(launcher=CapturingLauncher(process)).execute(
+                        ("ffmpeg", "file:///output.mp4"), timeout_seconds=5
+                    )
+                self.assertIn("libass", str(raised.exception))
+                self.assertIn("PATH", str(raised.exception))
+                self.assertIn("重启后端", str(raised.exception))
+                self.assertIn("ffmpeg-full", str(raised.exception))
+                self.assertEqual(process.wait_calls, [None])
+
+    def test_other_missing_filters_keep_the_actual_error(self) -> None:
+        process = FakeProcess(
+            return_code=8, stderr="No such filter: 'unknown_filter'\n"
+        )
+        with self.assertRaisesRegex(RenderFailed, "unknown_filter"):
+            FfmpegRenderer(launcher=CapturingLauncher(process)).execute(
+                ("ffmpeg", "file:///output.mp4"), timeout_seconds=5
+            )
+
 
 class AtomicRenderPublicationTest(unittest.TestCase):
     def test_renders_in_destination_directory_then_atomically_replaces_output(
