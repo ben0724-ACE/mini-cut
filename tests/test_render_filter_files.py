@@ -38,3 +38,22 @@ def test_long_filter_files_exist_during_render_and_are_cleaned(
             renderer.execute(command, timeout_seconds=5)
     assert len(script_paths) == 2
     assert all(not path.exists() for path in script_paths)
+
+
+def test_version_detection_and_process_launch_use_the_same_configured_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configured = str(tmp_path / "custom ffmpeg")
+    monkeypatch.setenv("MINICUT_FFMPEG", configured)
+    graph = "null" + " " * 18000
+    with (
+        patch("minicut.renderer._modern_filter_files", return_value=True) as version,
+        patch(
+            "minicut.renderer.subprocess.Popen", return_value=FakeProcess()
+        ) as launch,
+    ):
+        FfmpegRenderer().execute(
+            ("ffmpeg", "-vf", graph, "output.mp4"), timeout_seconds=5
+        )
+    version.assert_called_once_with(configured)
+    assert launch.call_args.args[0][0] == configured

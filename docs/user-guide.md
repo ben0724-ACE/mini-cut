@@ -22,13 +22,19 @@ macOS 使用 Homebrew 时，可以安装 `ffmpeg-full`；机器上已安装时�
 
 ```bash
 brew install ffmpeg-full
-export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"
-ffmpeg -hide_banner -filters 2>/dev/null | grep -E ' (subtitles|ass) '
 ```
 
-最后一行应列出 `subtitles` 和 `ass`。在**同一终端**中按 README 的命令启动后端；已有后端需先停止再启动，正在运行的进程不会继承新终端的 PATH。随后在作品页面重试成片预览或导出即可，已有转录和 AI 生成结果可以继续使用。
+MiniCut 在 macOS 上遇到默认 Homebrew 普通版时，会自动选择同一 Homebrew 安装中的 `ffmpeg-full`；自定义 PATH 中的其他 FFmpeg 保持原样。
 
-Windows/Linux 同样需要将包含 libass 的 FFmpeg 放在后端启动环境的 PATH 前面；安装和字体说明见下节。
+推荐在项目 `.env` 中固定渲染及封面截帧使用的程序，这项配置优先于自动选择和 PATH：
+
+```dotenv
+MINICUT_FFMPEG=/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg
+```
+
+Intel Mac 通常使用 `/usr/local/opt/ffmpeg-full/bin/ffmpeg`。Windows/Linux 可以设置本机包含 libass 的 FFmpeg 完整路径；路径含空格时使用引号。显式配置的路径无效时会报错，不会悄悄改用其他版本。
+
+保存 `.env` 后按 README 的普通命令重启后端，然后在作品页面重试预览或导出。以后无需每次在终端临时修改 PATH，已有转录和 AI 生成结果可以继续使用。`ffprobe` 等媒体检测工具仍需可从 PATH 调用；安装和字体说明见下节。
 
 ### Windows 与 Linux 安装补充
 

@@ -17,6 +17,7 @@ from urllib.parse import unquote
 
 from minicut.errors import ProcessingError
 from minicut.ffmpeg_paths import ffmpeg_file
+from minicut.ffmpeg_runtime import ffmpeg_executable
 from minicut.render_progress import FfmpegProgressEvent, FfmpegProgressParser
 from minicut.transcription_task import CancellationToken
 
@@ -57,7 +58,7 @@ def _launch_process(command: tuple[str, ...]) -> RenderProcess:
     return cast(
         RenderProcess,
         subprocess.Popen(
-            command,
+            (ffmpeg_executable(command[0]), *command[1:]),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -95,7 +96,7 @@ def _filter_files(command: tuple[str, ...]) -> Generator[tuple[str, ...], None, 
     if not any(option in filters for option in command):
         yield command
         return
-    modern = _modern_filter_files(command[0])
+    modern = _modern_filter_files(ffmpeg_executable(command[0]))
     with TemporaryDirectory(prefix="minicut-filters-") as directory:
         prepared: list[str] = []
         arguments = iter(command)
@@ -274,7 +275,8 @@ class FfmpegRenderer:
             ):
                 raise RenderFailed(
                     "当前 FFmpeg 缺少字幕烧录滤镜（libass），无法生成烧录字幕的预览或导出。"
-                    "请将包含 libass 的 FFmpeg 放在 PATH 前面，并重启后端后重试。"
+                    "请在 .env 中用 MINICUT_FFMPEG 指定包含 libass 的 FFmpeg 完整路径，"
+                    "或将它放在 PATH 前面，并重启后端后重试。"
                     "macOS Homebrew 用户可使用 ffmpeg-full。"
                 )
             raise RenderFailed(

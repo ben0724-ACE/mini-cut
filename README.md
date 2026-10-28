@@ -63,14 +63,13 @@ MiniCut 是面向讲座、教程、访谈、播客和口播的视频剪辑工作
 
 **准备环境**：Python 3.11+、[uv](https://docs.astral.sh/uv/getting-started/installation/)、[Node.js](https://nodejs.org/en/download) 22.12+ 和 npm，以及可从终端调用的 [FFmpeg / ffprobe](https://ffmpeg.org/download.html)。FFmpeg 需包含 `libx264`；烧录字幕还需 libass 和中文字体。
 
-macOS Homebrew 用户：若 `ffmpeg -hide_banner -filters` 中没有 `subtitles`，请安装 `ffmpeg-full`，并在启动后端的终端中将其放在 PATH 前面：
+macOS Homebrew 用户：烧录字幕请安装 `ffmpeg-full`：
 
 ```bash
 brew install ffmpeg-full
-export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"
 ```
 
-已安装时只需执行第二行，再启动或重启后端。详见[烧录字幕失败排查](docs/user-guide.md#烧录字幕失败排查)。
+默认 PATH 指向 Homebrew 普通版时，MiniCut 会自动优先使用已安装的完整版。也可在 `.env` 中用 `MINICUT_FFMPEG` 固定渲染程序的完整路径，例如 `/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg`（Intel Mac 通常为 `/usr/local/opt/ffmpeg-full/bin/ffmpeg`）。修改后重启后端；无需每次启动前临时修改 PATH。详见[烧录字幕失败排查](docs/user-guide.md#烧录字幕失败排查)。
 
 ### 1. 安装依赖
 
