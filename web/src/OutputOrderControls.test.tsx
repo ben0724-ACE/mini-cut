@@ -16,5 +16,5 @@ it("转场时长提交当前片段顺序并支持关闭", async () => {
   const select = screen.getByRole("combobox", {name: /开场预告转场时长/});
   expect(select).toHaveValue("500");
   await userEvent.selectOptions(select, "0");
-  expect(save).toHaveBeenCalledWith(["a"], {}, 0, "fade");
+  expect(save).toHaveBeenCalledWith(["a"], {}, 0);
 });

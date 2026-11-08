@@ -18,6 +18,5 @@ export function GeometrySettings({value,onChange,disabled=false,label="导出",s
       <div className="crop-outline" style={{left:`${left}%`,right:`${right}%`,top:`${top}%`,bottom:`${bottom}%`}} />
     </div><p className="helper-text">亮框为保留区域，暗区将被裁掉。保留宽 {(100-left-right).toFixed(1)}% × 高 {(100-top-bottom).toFixed(1)}%。{sourceUrl?'':'示意图不代表素材实际比例。'}裁剪不改变视频时长或声音；源画面已有字幕也会一起裁剪。</p></details>
     <p className="helper-text">居中裁切可能裁掉边缘人物或源字幕。</p>
-    <details><summary>画幅说明</summary><p className="helper-text">保持比例，不拉伸、不追踪人物。原始比例不放大；720 / 1080 档最长边上限为 1280 / 1920。</p></details>
   </fieldset>;
 }

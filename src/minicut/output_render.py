@@ -13,10 +13,7 @@ from minicut.audio_denoise import build_denoiser_registry, resolve_denoiser
 from minicut.cleanup_render import can_stream_cleanup, render_cleanup
 from minicut.errors import ProcessingError, UserInputError
 from minicut.export_settings import ExportSubtitleSettings
-from minicut.intro import intro_frame_ms
-from minicut.intro_library import IntroStyle, apply_intro_style, intro_audio_path
-from minicut.intro_render import prepare_intro
-from minicut.media import StreamType, TimeRange
+from minicut.media import StreamType
 from minicut.output_plan import OutputPlan, validate_output_id
 from minicut.output_repository import OutputCollectionRepository
 from minicut.output_timeline import (
@@ -32,7 +29,6 @@ from minicut.probe import ProbeResult, probe_media
 from minicut.project import ProjectRepository
 from minicut.render_command import (
     AudioFade,
-    IntroMedia,
     RenderCommandBuilder,
     SubtitleMode,
     VideoOutputMetadata,
@@ -69,7 +65,6 @@ class OutputRenderRequest:
     denoiser_id: str = "none"
     plan_revision: int | None = None
     subtitle_settings: ExportSubtitleSettings | None = None
-    intro_settings: IntroStyle | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +108,6 @@ class RenderOutputUseCase:
             )
         if request.subtitle_settings is not None:
             plan = replace(plan, **request.subtitle_settings.plan_changes())
-        plan = apply_intro_style(plan, request.intro_settings)
         manifest = ProjectRepository(request.project_directory).read()
         assets = tuple(
             asset for asset in manifest.assets if asset.asset_id == collection.asset_id
@@ -170,30 +164,6 @@ class RenderOutputUseCase:
             portrait=request.video_metadata.width < request.video_metadata.height,
             geometry=geometry,
         )
-        intro_duration = plan.intro_duration_ms
-        selected_frame = intro_frame_ms(plan, request.segments) if plan.intro else None
-        if intro_duration:
-            pages = tuple(
-                replace(
-                    page,
-                    start_ms=page.start_ms + intro_duration,
-                    end_ms=page.end_ms + intro_duration,
-                )
-                for page in pages
-            )
-        rendered_timeline = Timeline(
-            tuple(
-                replace(
-                    clip,
-                    output_range=TimeRange(
-                        clip.output_range.start_ms + intro_duration,
-                        clip.output_range.end_ms + intro_duration,
-                    ),
-                )
-                for clip in timeline.clips
-            ),
-            timeline.estimated_duration_ms + intro_duration,
-        )
         warning_times: dict[str, int] = {}
         for page in pages:
             for reason in page.review_reasons:
@@ -204,7 +174,7 @@ class RenderOutputUseCase:
         )
         subtitle_text = render_srt(
             tuple(SubtitleCue(page.start_ms, page.end_ms, page.text) for page in pages),
-            rendered_timeline.estimated_duration_ms,
+            timeline.estimated_duration_ms,
         )
         destination_directory = (
             request.project_directory
@@ -327,37 +297,6 @@ class RenderOutputUseCase:
                                 fonts_path / f"font-{index}{selected_path.suffix}",
                             )
                         fonts_directory = str(fonts_path)
-                intro_media: IntroMedia | None = None
-                if plan.intro is not None:
-                    assert selected_frame is not None
-                    image, music, title_layer, text_layer = prepare_intro(
-                        Path(assets[0].source_path),
-                        selected_frame,
-                        Path(staging),
-                        plan.intro,
-                        request.video_metadata,
-                        resolve_selected_subtitle_font(plan.intro.font_id)
-                        if plan.intro.font_id
-                        else font or self._font_resolver(),
-                        request.cancellation or CancellationToken(),
-                        intro_audio_path(
-                            request.project_directory.parent, plan.intro.audio_id
-                        )
-                        if plan.intro.audio_id and plan.intro.music
-                        else None,
-                    )
-                    intro_media = IntroMedia(
-                        str(image),
-                        str(music),
-                        intro_duration,
-                        timeline.estimated_duration_ms,
-                        requirements.require_audio,
-                        str(title_layer) if title_layer else None,
-                        str(text_layer) if text_layer else None,
-                        plan.intro.motion_style,
-                        plan.intro.motion_strength,
-                        plan.intro.transition_ms,
-                    )
                 command = self._builder.build_subtitle_output(
                     str(staged_video),
                     str(subtitle_input),
@@ -368,7 +307,6 @@ class RenderOutputUseCase:
                     styled_subtitles=styled_subtitles,
                     subtitle_fonts_directory=fonts_directory,
                     worker_threads=2 if stream_cleanup else None,
-                    intro_media=intro_media,
                 )
                 self._renderer.render_to_path(
                     command,
@@ -394,9 +332,7 @@ class RenderOutputUseCase:
                 plan.revision,
                 {
                     "plan": plan.to_dict(),
-                    "timeline": rendered_timeline.to_dict(),
-                    "intro_duration_ms": intro_duration,
-                    "intro_frame_ms": selected_frame,
+                    "timeline": timeline.to_dict(),
                     "asset_id": collection.asset_id,
                     "transcript_id": request.transcript.transcript_id,
                     "output_path": str(output.absolute()),
@@ -422,7 +358,7 @@ class RenderOutputUseCase:
             output.absolute(),
             subtitle.absolute(),
             record_path.absolute(),
-            rendered_timeline,
+            timeline,
             issues,
             subtitle_warnings,
         )

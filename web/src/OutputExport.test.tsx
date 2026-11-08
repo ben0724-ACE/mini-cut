@@ -8,7 +8,7 @@ beforeEach(()=>localStorage.clear());
 
 it("音频处理默认关闭，失败不显示下载", async () => {
   render(<OutputExport project="p" collection="c" output="o" revision={1} />);
-  expect(await screen.findByText("淡入淡出 0 毫秒 · 降噪关闭")).toBeInTheDocument();
+  expect(await screen.findByText("关闭")).toBeInTheDocument();
   expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", {name:"导出当前作品"}));
   expect(await screen.findByRole("alert")).toHaveTextContent("导出失败");

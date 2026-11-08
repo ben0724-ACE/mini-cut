@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 from fractions import Fraction
-from math import ceil, isfinite
+from math import isfinite
 from pathlib import Path
 
 from minicut.ffmpeg_paths import ffmpeg_file
@@ -144,20 +144,6 @@ class SubtitleMode(StrEnum):
     BURNED = "burned"
 
 
-@dataclass(frozen=True, slots=True)
-class IntroMedia:
-    image_path: str
-    audio_path: str
-    duration_ms: int
-    body_duration_ms: int
-    has_body_audio: bool
-    title_path: str | None = None
-    text_path: str | None = None
-    motion_style: str = "fade"
-    motion_strength: float = 1.0
-    transition_ms: int = 0
-
-
 def _subtitle_filter_path(path: str) -> str:
     value = Path(path).absolute().as_posix()
     # Escape the option parser, then the enclosing filtergraph parser. A single
@@ -168,29 +154,6 @@ def _subtitle_filter_path(path: str) -> str:
     return "".join(
         ("\\" if character in "\\'[],;" else "") + character
         for character in option_value
-    )
-
-
-def _burned_subtitle_filter(
-    subtitle_path: str,
-    font: SubtitleFont,
-    metadata: VideoOutputMetadata | None,
-    styled: bool,
-    fonts_directory: str | None,
-) -> str:
-    return (
-        f"subtitles=filename={_subtitle_filter_path(subtitle_path)}"
-        f":fontsdir={_subtitle_filter_path(fonts_directory or str(font.path.parent))}"
-        + (
-            ""
-            if styled
-            else f":force_style='FontName={font.family}"
-            + (
-                "'"
-                if metadata is None
-                else f",FontSize={max(10, round(18 * min(1, metadata.width / metadata.height)))},MarginL=20,MarginR=20,MarginV=12'"
-            )
-        )
     )
 
 
@@ -257,33 +220,15 @@ class RenderCommandBuilder:
         styled_subtitles: bool = False,
         subtitle_fonts_directory: str | None = None,
         worker_threads: int | None = None,
-        intro_media: IntroMedia | None = None,
     ) -> tuple[str, ...]:
         """Attach a selectable track or render subtitle text into video frames."""
         input_url = _local_file_url(input_path, label="subtitle video input")
         subtitle_url = _local_file_url(subtitle_path, label="subtitle input")
         output_url = _local_file_url(output_path, label="subtitle video output")
-        if worker_threads is not None and worker_threads < 1:
-            raise ValueError("render worker threads must be positive")
-        if intro_media is not None:
-            if video_metadata is None:
-                raise ValueError("Intro cards require output video dimensions")
-            return self._build_intro_subtitles(
-                input_url,
-                subtitle_url,
-                output_url,
-                subtitle_path,
-                mode,
-                encoding,
-                intro_media,
-                video_metadata,
-                subtitle_font,
-                styled_subtitles,
-                subtitle_fonts_directory,
-                worker_threads,
-            )
         command = [self.executable, "-nostdin", "-y"]
         if worker_threads is not None:
+            if worker_threads < 1:
+                raise ValueError("render worker threads must be positive")
             command.extend(
                 (
                     "-filter_threads",
@@ -317,12 +262,19 @@ class RenderCommandBuilder:
         elif mode is SubtitleMode.BURNED:
             if subtitle_font is None:
                 raise ValueError("Burned subtitles require an explicit CJK font")
-            subtitle_filter = _burned_subtitle_filter(
-                subtitle_path,
-                subtitle_font,
-                video_metadata,
-                styled_subtitles,
-                subtitle_fonts_directory,
+            subtitle_filter = (
+                f"subtitles=filename={_subtitle_filter_path(subtitle_path)}"
+                f":fontsdir={_subtitle_filter_path(subtitle_fonts_directory or str(subtitle_font.path.parent))}"
+                + (
+                    ""
+                    if styled_subtitles
+                    else f":force_style='FontName={subtitle_font.family}"
+                    + (
+                        "'"
+                        if video_metadata is None
+                        else f",FontSize={max(10, round(18 * min(1, video_metadata.width / video_metadata.height)))},MarginL=20,MarginR=20,MarginV=12'"
+                    )
+                )
             )
             command.extend(
                 (
@@ -347,169 +299,6 @@ class RenderCommandBuilder:
             if encoding.video_codec == "libx264":
                 command.extend(("-preset", "veryfast"))
         command.append(output_url)
-        return tuple(command)
-
-    def _build_intro_subtitles(
-        self,
-        input_url: str,
-        subtitle_url: str,
-        output_url: str,
-        subtitle_path: str,
-        mode: SubtitleMode,
-        encoding: RenderEncoding,
-        intro: IntroMedia,
-        metadata: VideoOutputMetadata,
-        font: SubtitleFont | None,
-        styled: bool,
-        fonts_directory: str | None,
-        worker_threads: int | None,
-    ) -> tuple[str, ...]:
-        """Prepend the card during the existing subtitle pass, with one audio clock."""
-        duration, body = _seconds(intro.duration_ms), _seconds(intro.body_duration_ms)
-        command = [
-            self.executable,
-            "-nostdin",
-            "-y",
-            "-filter_complex_threads",
-            "2",
-            "-i",
-            input_url,
-            "-loop",
-            "1",
-            "-framerate",
-            metadata.frame_rate,
-            "-t",
-            duration,
-            "-i",
-            _local_file_url(intro.image_path, label="intro image"),
-            "-i",
-            _local_file_url(intro.audio_path, label="intro audio"),
-        ]
-        if mode is SubtitleMode.SOFT:
-            command.extend(("-i", subtitle_url))
-        layers: list[tuple[int, str]] = []
-        next_input = 4 if mode is SubtitleMode.SOFT else 3
-        for layer_path, delay in ((intro.title_path, "0"), (intro.text_path, "0.2")):
-            if layer_path is not None:
-                command.extend(
-                    (
-                        "-loop",
-                        "1",
-                        "-framerate",
-                        metadata.frame_rate,
-                        "-t",
-                        duration,
-                        "-i",
-                        _local_file_url(layer_path, label="intro text layer"),
-                    )
-                )
-                layers.append((next_input, delay))
-                next_input += 1
-        background_effect = ""
-        if layers:
-            frames = max(
-                2, ceil(intro.duration_ms / 1000 * float(Fraction(metadata.frame_rate)))
-            )
-            zoom = f"1+{0.02 * intro.motion_strength:g}*on/{frames - 1}"
-            camera_x = "iw/2-iw/zoom/2"
-            if intro.motion_style == "rise":
-                zoom = f"1+{0.045 * intro.motion_strength:g}*(1-cos(3.141592654*on/{frames - 1}))/2"
-                camera_x += f"+(iw-iw/zoom)*0.2*sin(3.141592654*on/{frames - 1})"
-            background_effect = (
-                f"scale={metadata.width * 2}:{metadata.height * 2},"
-                f"zoompan=z='{zoom}':x='{camera_x}':y='ih/2-ih/zoom/2':"
-                f"d=1:s={metadata.width}x{metadata.height}:fps={metadata.frame_rate},"
-            )
-        graph = [
-            f"[1:v]{background_effect}fps={metadata.frame_rate},trim=duration={duration},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[ibg]",
-            f"[0:v]trim=duration={body},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[bv]",
-            f"[2:a]atrim=duration={duration},asetpts=PTS-STARTPTS,aformat=sample_rates=48000:channel_layouts=stereo[ia]",
-            (
-                "[0:a:0]aresample=48000,aformat=channel_layouts=stereo,apad,"
-                if intro.has_body_audio
-                else "anullsrc=r=48000:cl=stereo,"
-            )
-            + f"atrim=duration={body},asetpts=PTS-STARTPTS[ba]",
-        ]
-        background_label = "ibg"
-        for ordinal, (input_index, delay) in enumerate(layers):
-            position = "0"
-            fade_in = "0.35"
-            if intro.motion_style == "rise":
-                travel = max(
-                    6,
-                    round(
-                        min(metadata.width, metadata.height)
-                        * (0.035 if ordinal == 0 else 0.025)
-                    ),
-                )
-                travel *= intro.motion_strength
-                position = f"{travel}*pow(1-min(1,max(0,(t-{delay})/0.65)),3)"
-                fade_in = "0.5"
-            graph.extend(
-                (
-                    f"[{input_index}:v]format=rgba,setpts=PTS-STARTPTS,"
-                    f"fade=t=in:st={delay}:d={fade_in}:alpha=1,"
-                    f"fade=t=out:st={_seconds(intro.duration_ms - 300)}:d=0.3:alpha=1[itext{ordinal}]",
-                    f"[{background_label}][itext{ordinal}]overlay=x=0:y='{position}':shortest=1:format=auto[ilayer{ordinal}]",
-                )
-            )
-            background_label = f"ilayer{ordinal}"
-        graph.extend(
-            (
-                f"[{background_label}]format=yuv420p[iv]",
-                "[iv][ia][bv][ba]concat=n=2:v=1:a=1[v][a]",
-            )
-        )
-        video_label = "[v]"
-        if mode is SubtitleMode.BURNED:
-            if font is None:
-                raise ValueError("Burned subtitles require an explicit CJK font")
-            graph.append(
-                "[v]"
-                + _burned_subtitle_filter(
-                    subtitle_path, font, metadata, styled, fonts_directory
-                )
-                + "[outv]"
-            )
-            video_label = "[outv]"
-        if intro.transition_ms:
-            half = min(intro.transition_ms // 2, intro.body_duration_ms // 2)
-            if half:
-                out_start = _seconds(intro.duration_ms - half)
-                fade_length = _seconds(half)
-                in_end = _seconds(intro.duration_ms + half)
-                graph.append(
-                    f"{video_label}fade=t=out:st={out_start}:d={fade_length}:enable='between(t,{out_start},{duration})',"
-                    f"fade=t=in:st={duration}:d={fade_length}:enable='between(t,{duration},{in_end})'[intro_transition]"
-                )
-                video_label = "[intro_transition]"
-        command.extend(
-            ("-filter_complex", ";".join(graph), "-map", video_label, "-map", "[a]")
-        )
-        if mode is SubtitleMode.SOFT:
-            command.extend(
-                ("-map", "3:0", "-c:s", "mov_text", "-metadata:s:s:0", "language=zho")
-            )
-        command.extend(
-            (
-                "-c:v",
-                encoding.video_codec,
-                "-pix_fmt",
-                encoding.pixel_format,
-                "-c:a",
-                encoding.audio_codec,
-                "-ar",
-                "48000",
-                "-ac",
-                "2",
-            )
-        )
-        if worker_threads is not None:
-            command.extend(("-threads", str(worker_threads)))
-            if encoding.video_codec == "libx264":
-                command.extend(("-preset", "veryfast"))
-        command.extend(("-movflags", "+faststart", output_url))
         return tuple(command)
 
     def build_single_clip(

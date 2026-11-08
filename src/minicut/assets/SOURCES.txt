@@ -5,11 +5,3 @@ Public domain (PD-ineligible / PD-self on the source page).
 Modified: first second, grayscale, contrast increased, nearest-neighbor resize to 320x240, original noise audio removed.
 Audio: locally synthesized 1000 Hz sine tone, reduced level, no third-party recording.
 Bundled asset is used only when the TV-static transition is selected.
-
-Layered intro score (music_version=2)
-intro-studio.ogg is an original, locally composed 16-second stereo score.
-Rebuild with: .venv/bin/python tools/generate_intro_score.py
-Layered extended chords, FM glass-key melody, rounded bass, quiet percussion,
-filtered-noise entrance textures and stereo room taps. No external samples,
-recordings, downloads, or paid generation API are used. Licensed with this project.
-Each render trims to the saved card duration and fades out before original speech.

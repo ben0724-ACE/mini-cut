@@ -1,4 +1,3 @@
-import {SaveStatus} from "./SaveStatus";
 import {CoverTemplateControls} from "./CoverTemplateControls";
 import {useEffect,useRef,useState,type CSSProperties,type PointerEvent} from "react";
 import {coversSaved,coverRoute,loadCover,saveCover,uploadCoverBackground,type CoverDesign,type CoverBox,type CoverRecord} from "./coverApi";
@@ -9,7 +8,7 @@ import {registerDraftGuard} from "./draftNavigation";
 const sizes={"9:16":[1080,1920],"16:9":[1920,1080],"1:1":[1080,1080],"3:4":[1080,1440]} as const;
 function layout(ratio:CoverDesign["aspect_ratio"]){return ratio==="16:9"?{frame:{x:.08,y:.06,width:.84,height:.64},title_box:{x:.08,y:.74,width:.84,height:.22},font_size:76}:{frame:{x:.08,y:.14,width:.84,height:.46},title_box:{x:.08,y:.66,width:.84,height:.25},font_size:88};}
 const clamp=(value:number,min:number,max:number)=>Math.min(max,Math.max(min,value));
-export function CoverEditor({project,collection,output,revision,clips,onDirty,onSaving,onSaved}:{project:string;collection:string;output:string;revision:number;clips:HighlightClip[];onDirty:(value:boolean)=>void;onSaving?:(value:boolean)=>void;onSaved:(version:number|undefined)=>void}){
+export function CoverEditor({project,collection,output,revision,clips,onDirty,onSaved}:{project:string;collection:string;output:string;revision:number;clips:HighlightClip[];onDirty:(value:boolean)=>void;onSaved:(version:number|undefined)=>void}){
   const route=coverRoute(project,collection,output);const storageKey=`minicut-cover-draft:${project}:${collection}:${output}`;
   const [saved,setSaved]=useState<CoverRecord>();const [design,setDesign]=useState<CoverDesign>();
   const [fonts,setFonts]=useState<{id:string;name:string}[]>([]);const [error,setError]=useState("");
@@ -20,7 +19,6 @@ export function CoverEditor({project,collection,output,revision,clips,onDirty,on
   const drag=useRef<{x:number;y:number;box:CoverBox;resize:boolean;target:"frame"|"title_box";width:number;height:number}|undefined>(undefined);
   const dirty=!!design&&!!saved&&JSON.stringify(design)!==JSON.stringify(saved.design);
   const retained=clips.filter(c=>!c.deleted);
-  useEffect(()=>{onSaving?.(busy);return()=>onSaving?.(false);},[busy,onSaving]);
   useEffect(()=>()=>onDirty(false),[onDirty]);
   useEffect(()=>{onDirty(dirty||busy);},[saved,dirty,busy,onDirty]);
   useEffect(()=>{const refresh=(event:Event)=>{const detail=(event as CustomEvent<{project:string;collection:string;outputs:string[]}>).detail;if(detail?.project===project&&detail.collection===collection&&detail.outputs.includes(output))setRetry(value=>value+1);};window.addEventListener(coversSaved,refresh);return()=>window.removeEventListener(coversSaved,refresh);},[project,collection,output]);
@@ -42,7 +40,7 @@ export function CoverEditor({project,collection,output,revision,clips,onDirty,on
   if(!design||!saved)return <section aria-label="封面设计"><h2>封面设计</h2>{error?<><p role="alert">{error}</p><button onClick={()=>setRetry(v=>v+1)}>重新载入封面</button></>:<p role="status">正在读取封面设置…</p>}</section>;
   const [width,height]=sizes[design.aspect_ratio];const box=design[target];const frameMs=design.frame_ms??retained[0]?.start_ms??0;
   const selectedClip=retained.find(c=>c.start_ms<=frameMs&&frameMs<c.end_ms);
-  return <section className="cover-editor" aria-label="封面设计"><h2>封面设计 <SaveStatus dirty={dirty} saving={busy}/></h2><p className="helper-text">封面独立保存，不重新渲染视频。</p>
+  return <section className="cover-editor" aria-label="封面设计"><h2>封面设计</h2><p className="helper-text">封面独立保存，不重新渲染视频。</p>
     <CoverTemplateControls project={project} collection={collection} output={output} revision={revision} design={design} onChange={setDesign} disabled={working} onBusy={setTemplateBusy}/>
     <fieldset disabled={busy}><label>封面模式<select value={design.mode} onChange={e=>change({mode:e.target.value as CoverDesign["mode"]})}><option value="first_frame">直接使用成片第一帧</option><option value="design">自定义封面</option></select></label>
     {design.mode==="design"&&<>

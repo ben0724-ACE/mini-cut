@@ -260,7 +260,7 @@ def test_edit_preserves_source_and_other_output_and_rejects_empty_body(
             assert repository.path.read_bytes() == before_invalid
             fonts = await client.get("/api/subtitle-fonts")
             assert fonts.status_code == 200
-            assert all(set(font) == {"id", "name", "family", "supports_chinese"} for font in fonts.json())
+            assert all(set(font) == {"id", "name"} for font in fonts.json())
             text_save = await client.patch(
                 base + "i-0",
                 json={

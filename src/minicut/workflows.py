@@ -31,7 +31,6 @@ from minicut.export_settings import (
 from minicut.generation_presets import GenerationPresetBody, PresetRenameBody
 from minicut.generation_settings import GenerationDraft, GenerationSettings
 from minicut.highlight_service import read_highlights
-from minicut.intro_library import IntroStyle, apply_intro_style, validate_intro_style
 from minicut.output_plan import OutputPlan
 from minicut.output_reader import OutputReader
 from minicut.platform_support import (
@@ -78,7 +77,6 @@ class WorkflowBody(PresetRenameBody):
     layout: WorkflowLayout = Field(default_factory=WorkflowLayout)
     cover_template_id: SafeId | None = None
     auto_export: bool = False
-    intro: IntroStyle | None = None
 
     @model_validator(mode="after")
     def valid_generation(self) -> "WorkflowBody":
@@ -163,9 +161,6 @@ class WorkflowLibrary:
         raise HTTPException(404, "工作流已删除或不存在")
 
     def save(self, body: WorkflowBody, identity: str | None = None) -> JsonObject:
-        intro = body.export_options.intro_settings or body.intro
-        if intro is not None:
-            validate_intro_style(self.root, intro)
         previous = self.get(identity) if identity else None
         definition = body.model_dump(mode="json")
         definition.update(cover_style=None, cover_png=None, cover_template_name=None)
@@ -257,17 +252,9 @@ def configure_outputs(
             layout.update(options.subtitle_settings.plan_changes())
         changed = False
         plans: list[OutputPlan] = []
-        intro_style = options.intro_settings or (
-            IntroStyle.model_validate(definition["intro"])
-            if definition.get("intro") is not None
-            else None
-        )
         for plan in collection.plans:
-            changes = dict(layout)
-            if intro_style is not None and plan.intro is None:
-                changes["intro"] = apply_intro_style(plan, intro_style).intro
-            if any(getattr(plan, key) != value for key, value in changes.items()):
-                plan = replace(plan, revision=plan.revision + 1, **changes)
+            if any(getattr(plan, key) != value for key, value in layout.items()):
+                plan = replace(plan, revision=plan.revision + 1, **layout)
                 changed = True
             plans.append(plan)
         if changed:
@@ -280,9 +267,7 @@ def configure_outputs(
                 collection_id,
                 plan.output_id,
                 ExportDraft(
-                    options=options.model_copy(
-                        update={"subtitle_settings": None, "intro_settings": None}
-                    )
+                    options=options.model_copy(update={"subtitle_settings": None})
                 ),
             )
             if definition.get("cover_style"):
@@ -442,7 +427,6 @@ def workflow_router(
                         **body.brief(),
                         "cleanup_version": request.get("cleanup_version"),
                         "boundary_version": request.get("boundary_version"),
-                        "publication_version": request.get("publication_version"),
                     },
                     "generate",
                 )
@@ -523,7 +507,6 @@ def workflow_router(
                     "definition": library.get(body.workflow_id),
                     "cleanup_version": 2,
                     "boundary_version": 3,
-                    "publication_version": 2,
                 },
                 lambda token: run(project, identity, token),
                 metadata={

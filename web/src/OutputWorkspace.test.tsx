@@ -34,7 +34,6 @@ function subtitleCard(id:string) {
   return within(screen.getByLabelText(`编辑字幕 ${id}`).closest("li")!);
 }
 
-
 it("独立作品入口只显示指定计划，不串其他作品", async () => {
   const view = render(<OutputWorkspace project="demo" collection="one" output="video-1" />);
   expect(await screen.findByRole("heading",{name:"作品A"})).toBeInTheDocument();
@@ -170,12 +169,12 @@ it("上层导出预设保存字幕新版本，后续独立编辑沿用作品设�
   const api=await import("./api");const exports=await import("./exportSettingsApi");const {defaultSubtitleSettings}=await import("./SubtitleAppearanceControls");const layout=defaultSubtitleSettings();layout.subtitle_style={...layout.subtitle_style!,source_size:82,translation_size:46,text_color:"#ffcc00"};
   const data={asset_id:"a",collection_id:"full",notes:[],brief:{} as import("./api").HighlightResult["brief"],outputs:[{output_id:"o",title:"预设作品",reason:"完整",revision:1,duration_ms:2000,clips:[]}]};
   vi.mocked(api.getHighlights).mockResolvedValue(data);vi.mocked(exports.listExportPresets).mockResolvedValue([{preset_id:"full",name:"完整成片",options:{...exports.defaultExportOptions(),aspect_ratio:"9:16",subtitle_mode:"burned",subtitle_settings:layout},created_at:"",updated_at:""}]);
-  const save=vi.spyOn(api,"saveOutputAppearance").mockResolvedValue({...data,outputs:[{...data.outputs[0],revision:2,...layout}]});
+  const save=vi.spyOn(api,"saveOutputSubtitleSettings").mockResolvedValue({...data,outputs:[{...data.outputs[0],revision:2,...layout}]});
   const preview=vi.spyOn(api,"startOutputPreview");
   render(<OutputWorkspace project="preset-project" collection="full" output="o"/>);await screen.findByRole("option",{name:"完整成片"});
   expect(screen.getByRole("region",{name:"成片导出预设"}).querySelector('[role="tabpanel"]')).toBeNull();
   fireEvent.click(screen.getByRole("tab",{name:"字幕设置"}));fireEvent.change(screen.getByLabelText("导出预设"),{target:{value:"full"}});await waitFor(()=>expect(screen.getByText("应用预设")).toBeEnabled());fireEvent.click(screen.getByText("应用预设"));
-  await waitFor(()=>expect(save).toHaveBeenCalledWith("preset-project","full","o",1,expect.objectContaining({subtitle_settings:layout})));await screen.findByText(/已应用.*包含完整字幕设置/);
+  await waitFor(()=>expect(save).toHaveBeenCalledWith("preset-project","full","o",1,layout));await screen.findByText(/已应用.*包含完整字幕设置/);
   expect(screen.getByLabelText("原文字号")).toHaveValue(82);expect(screen.getByLabelText("译文字号")).toHaveValue(46);
   expect(exports.saveExportDraft).toHaveBeenCalledWith(expect.stringContaining("preset-project"),expect.objectContaining({options:expect.objectContaining({subtitle_settings:null,aspect_ratio:"9:16",subtitle_mode:"burned"})}));
   expect(preview).not.toHaveBeenCalled();fireEvent.change(screen.getByLabelText("原文字号"),{target:{value:"84"}});await waitFor(()=>expect(screen.getByText("应用预设")).toBeDisabled());expect(screen.getByText("另存为预设")).toBeDisabled();
@@ -370,69 +369,4 @@ it("取消开场预告导致编辑器换区域时保留该实例的字幕草稿"
   expect(screen.getByLabelText("译文 first")).toHaveValue("预告译文草稿");
   fireEvent.click(screen.getByLabelText("编辑字幕 first"));
   expect(subtitleCard("first").getByRole("button",{name:"保存字幕"})).toBeEnabled();
-});
-
-it("导读草稿阻止成片预览，保存只创建新版本且切换面板不丢草稿",async()=>{
-  const api=await import("./api");
-  const data=subtitleFixture();
-  vi.mocked(api.getHighlights).mockResolvedValue(data);
-  const save=vi.spyOn(api,"saveOutputIntro").mockImplementation(async(_project,_collection,_output,_revision,intro)=>({...data,outputs:[{...data.outputs[0],revision:2,intro}]}));
-  const preview=vi.spyOn(api,"startOutputPreview");
-  const dirty=vi.fn();
-  render(<OutputWorkspace project="intro-test" collection="c" output="o" onDirty={dirty}/>);
-  await screen.findByLabelText("快速预览 · 字幕草稿");
-  fireEvent.click(screen.getByRole("tab",{name:"开场导读"}));
-  fireEvent.click(screen.getByLabelText("启用开场导读"));
-  fireEvent.change(screen.getByLabelText("导读介绍"),{target:{value:"本次导读"}});
-  expect(screen.getByRole("button",{name:"生成成片预览"})).toBeDisabled();
-  expect(dirty).toHaveBeenLastCalledWith(true);
-  fireEvent.click(screen.getByRole("tab",{name:"画面设置"}));
-  fireEvent.click(screen.getByRole("tab",{name:/开场导读/}));
-  expect(screen.getByLabelText("导读介绍")).toHaveValue("本次导读");
-  fireEvent.click(screen.getByRole("button",{name:"保存导读"}));
-  await waitFor(()=>expect(save).toHaveBeenCalledWith("intro-test","c","o",1,expect.objectContaining({text:"本次导读"})));
-  await waitFor(()=>expect(screen.getByRole("button",{name:"生成成片预览"})).toBeEnabled());
-  expect(preview).not.toHaveBeenCalled();
-  expect(screen.getByText(/快速预览只播放原视频/)).toBeInTheDocument();
-});
-
-it("黄色提示只标记修改的区域，字幕和范围恢复原值后清除",async()=>{
-  const api=await import("./api");
-  const data={...subtitleFixture(),outputs:[{...subtitleFixture().outputs[0],subtitle_style:api.defaultSubtitleStyle()}]};
-  vi.mocked(api.getHighlights).mockResolvedValue(data);
-  render(<OutputWorkspace project="status-project" collection="c" output="o"/>);
-  await screen.findByRole("heading",{name:data.outputs[0].title});
-  fireEvent.click(screen.getByRole("tab",{name:"字幕设置"}));
-  const font=screen.getByLabelText("原文字号");
-  fireEvent.change(font,{target:{value:"80"}});
-  expect(screen.getByRole("tab",{name:"字幕设置 未保存"})).toBeInTheDocument();
-  expect(screen.getByRole("tab",{name:"开场预告"})).toBeInTheDocument();
-  fireEvent.change(font,{target:{value:String(api.defaultSubtitleStyle().source_size)}});
-  expect(screen.getByRole("tab",{name:"字幕设置"})).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("tab",{name:"逐句编辑"}));
-  fireEvent.click(screen.getByLabelText("编辑字幕 first"));
-  const card=within(screen.getByLabelText("编辑字幕 first").closest("li")!);
-  fireEvent.click(card.getByText("开始 ＋"));
-  expect(screen.getByRole("tab",{name:"逐句编辑 未保存"})).toBeInTheDocument();
-  expect(screen.getByRole("tab",{name:"开场预告"})).toBeInTheDocument();
-  fireEvent.change(card.getByLabelText("开始 first"),{target:{value:"0"}});
-  expect(screen.getByRole("tab",{name:"逐句编辑"})).toBeInTheDocument();
-});
-
-it("画面自动保存等待时标记保存中，失败保留未保存，重试成功清除",async()=>{
-  const api=await import("./api");const exports=await import("./exportSettingsApi");
-  vi.mocked(api.getHighlights).mockResolvedValue(subtitleFixture());
-  vi.mocked(exports.getExportDraft).mockResolvedValue({source:"saved",draft:exports.defaultExportDraft()});
-  let fail!:(error:Error)=>void;
-  vi.mocked(exports.saveExportDraft).mockImplementationOnce(()=>new Promise((_resolve,reject)=>{fail=reject;})).mockImplementation(async(_route,draft)=>({source:"saved",draft}));
-  render(<OutputWorkspace project="auto-status-project" collection="c" output="o"/>);
-  await screen.findByRole("heading",{name:subtitleFixture().outputs[0].title});
-  await waitFor(()=>expect(screen.getByLabelText("作品比例")).toBeEnabled());
-  fireEvent.change(screen.getByLabelText("作品比例"),{target:{value:"9:16"}});
-  expect(screen.getByRole("tab",{name:"画面设置 保存中"})).toBeInTheDocument();
-  expect(screen.getByRole("tab",{name:"字幕设置"})).toBeInTheDocument();
-  fail(new Error("暂时保存失败"));
-  await screen.findByRole("tab",{name:"画面设置 未保存"});
-  fireEvent.click(screen.getAllByRole("button",{name:"重试保存导出设置"})[0]);
-  await screen.findByRole("tab",{name:"画面设置"});
 });

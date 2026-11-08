@@ -22,7 +22,7 @@ from fastapi import (
     Request,
     status,
 )
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
@@ -58,11 +58,7 @@ from minicut.cover_api import cover_router
 from minicut.cover_design import CoverDesign, CoverStore
 from minicut.edit_plan import EditIntensity
 from minicut.errors import MiniCutError, UserInputError
-from minicut.export_settings import (
-    ExportOptions,
-    ExportSubtitleSettings,
-    PreviewOptions,
-)
+from minicut.export_settings import ExportSubtitleSettings, PreviewOptions
 from minicut.export_settings_api import export_settings_router
 from minicut.generation_presets import (
     GenerationPresetBody,
@@ -85,8 +81,6 @@ from minicut.highlight_service import (
     translate_output_subtitles,
 )
 from minicut.importer import import_media
-from minicut.intro import IntroSettings
-from minicut.intro_library import IntroStyle, intro_router
 from minicut.job_repository import JobNotFound, JobRepository, read_job
 from minicut.job_repository import job_path as _job_path
 from minicut.job_repository import write_job as _write_job
@@ -102,7 +96,7 @@ from minicut.platform_support import (
 from minicut.project import ProjectRepository
 from minicut.project_deletion import ProjectDeletionGuard
 from minicut.render_profile import RenderProfile
-from minicut.subtitle_font import available_subtitle_fonts, supports_chinese
+from minicut.subtitle_font import available_subtitle_fonts
 from minicut.subtitle_style import SubtitleStyle
 from minicut.task_executor import TaskConflict, TaskExecutor
 from minicut.task_executor import TaskRunner as _TaskRunner
@@ -195,7 +189,6 @@ class HighlightTaskBody(BaseModel):
     preset: HighlightPreset
     cleanup_version: int | None = Field(default=2, ge=1, le=2)
     boundary_version: int | None = Field(default=3, ge=2, le=3)
-    publication_version: int | None = Field(default=2, ge=1, le=2)
     custom_preset_id: str | None = Field(default=None, max_length=80)
     custom_preset_name: str | None = Field(default=None, max_length=80)
     body_mode: str = Field(default="continuous", pattern=r"^(continuous|compact)$")
@@ -223,7 +216,6 @@ class HighlightTaskBody(BaseModel):
                 body_mode="compact",
                 max_source_overlap=1,
                 boundary_version=None,
-                publication_version=None,
             )
         else:
             values["cleanup_version"] = None
@@ -290,18 +282,6 @@ class OutputRangesBody(BaseModel):
     ranges: list[OutputRangeBody] = Field(min_length=1)
 
 
-class OutputIntroBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    base_revision: int = Field(ge=1, strict=True)
-    intro: IntroSettings | None
-
-
-class OutputAppearanceBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    base_revision: int = Field(ge=1, strict=True)
-    options: ExportOptions
-
-
 class OutputOrderBody(BaseModel):
     order: list[str]
     roles: dict[str, str] = Field(default_factory=dict)
@@ -363,13 +343,10 @@ class OutputPreviewQuery(PreviewOptions):
     def parse_subtitle_query(cls, value: object) -> object:
         if isinstance(value, dict):
             data = cast(dict[str, object], value)
-            data = data.copy()
-            for key in ("subtitle_settings", "intro_settings"):
-                raw = data.get(key)
-                if isinstance(raw, str):
-                    data[key] = json.loads(raw) if raw else None
-            return data
-        return value
+            raw = data.get("subtitle_settings")
+            if isinstance(raw, str):
+                return {**data, "subtitle_settings": json.loads(raw) if raw else None}
+        return cast(object, value)
 
     revision: int = Field(ge=1)
 
@@ -391,7 +368,6 @@ class OutputPreviewQuery(PreviewOptions):
 
 
 class OutputExportBody(BaseModel):
-    intro_settings: IntroStyle | None = None
     subtitle_settings: ExportSubtitleSettings | None = None
     cover_version: int | None = Field(default=None, ge=0)
     cover_snapshot: CoverDesign | None = None
@@ -1062,7 +1038,6 @@ def create_app(
                 body.cover_snapshot,
                 body.cover_version,
                 body.subtitle_settings,
-                body.intro_settings,
             )
 
         response = submit_task(
@@ -1362,7 +1337,6 @@ def create_app(
         fields = set(HighlightTaskBody.model_fields) - {
             "cleanup_version",
             "boundary_version",
-            "publication_version",
             "asset_id",
             "custom_preset_id",
             "custom_preset_name",
@@ -1529,11 +1503,7 @@ def create_app(
                 body = body.model_copy(
                     update={
                         field: saved_request.get(field)
-                        for field in (
-                            "cleanup_version",
-                            "boundary_version",
-                            "publication_version",
-                        )
+                        for field in ("cleanup_version", "boundary_version")
                         if field not in body.model_fields_set
                     }
                 )
@@ -1551,7 +1521,6 @@ def create_app(
                 "asset_id": body.asset_id,
                 "cleanup_version": None,
                 "boundary_version": None,
-                "publication_version": None,
                 **body.brief().to_dict(),
             }
         ).brief()
@@ -1571,7 +1540,6 @@ def create_app(
         request_data = body.model_dump(mode="json")
         request_data["cleanup_version"] = resolved.cleanup_version
         request_data["boundary_version"] = resolved.boundary_version
-        request_data["publication_version"] = resolved.publication_version
         # Retain old idempotency requests when no custom template was used.
         for field in (
             "custom_preset_id",
@@ -1579,7 +1547,6 @@ def create_app(
             "editing_prompt",
             "cleanup_version",
             "boundary_version",
-            "publication_version",
         ):
             if request_data[field] is None:
                 request_data.pop(field)
@@ -1719,56 +1686,6 @@ def create_app(
                 output_id,
                 body.base_revision,
                 [row.model_dump() for row in body.ranges],
-            )
-        except RevisionConflict as error:
-            raise HTTPException(409, str(error)) from error
-        except (MiniCutError, ValueError) as error:
-            raise HTTPException(400, str(error)) from error
-
-    @api.put(
-        "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/appearance"
-    )
-    def put_output_appearance(  # pyright: ignore[reportUnusedFunction]
-        project_id: ProjectId,
-        collection_id: SafeFileName,
-        output_id: SafeFileName,
-        body: OutputAppearanceBody,
-    ) -> dict[str, object]:
-        from minicut.highlight_service import save_output_appearance
-
-        inspect(project_id)
-        try:
-            return save_output_appearance(
-                root / project_id,
-                collection_id,
-                output_id,
-                body.base_revision,
-                body.options,
-            )
-        except RevisionConflict as error:
-            raise HTTPException(409, str(error)) from error
-        except (MiniCutError, ValueError) as error:
-            raise HTTPException(400, str(error)) from error
-
-    @api.put(
-        "/api/projects/{project_id}/highlights/{collection_id}/outputs/{output_id}/intro"
-    )
-    def put_output_intro(  # pyright: ignore[reportUnusedFunction]
-        project_id: ProjectId,
-        collection_id: SafeFileName,
-        output_id: SafeFileName,
-        body: OutputIntroBody,
-    ) -> dict[str, object]:
-        from minicut.highlight_service import save_output_intro
-
-        inspect(project_id)
-        try:
-            return save_output_intro(
-                root / project_id,
-                collection_id,
-                output_id,
-                body.base_revision,
-                body.intro,
             )
         except RevisionConflict as error:
             raise HTTPException(409, str(error)) from error
@@ -2049,7 +1966,6 @@ def create_app(
             request = {
                 "cleanup_version": None,
                 "boundary_version": None,
-                "publication_version": None,
                 **cast(dict[str, object], request),
             }
             body = HighlightTaskBody.model_validate(request)
@@ -2239,20 +2155,14 @@ def create_app(
         )
 
     @api.get("/api/subtitle-fonts")
-    def get_subtitle_fonts() -> list[dict[str, object]]:  # pyright: ignore[reportUnusedFunction]
+    def get_subtitle_fonts() -> list[dict[str, str]]:  # pyright: ignore[reportUnusedFunction]
         return [
-            {
-                "id": key,
-                "name": name,
-                "family": font.family,
-                "supports_chinese": supports_chinese(font),
-            }
-            for key, (name, font) in available_subtitle_fonts().items()
+            {"id": key, "name": name}
+            for key, (name, _) in available_subtitle_fonts().items()
         ]
 
     api.include_router(cover_router(root))
     api.include_router(export_settings_router(root))
-    api.include_router(intro_router(root))
 
     def workflow_child(
         project_id: str,

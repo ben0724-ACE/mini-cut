@@ -1,4 +1,3 @@
-import {SaveStatus} from "./SaveStatus";
 import {useEffect,useRef,useState} from "react";
 import {defaultExportOptions,deleteExportPreset,exportPresetsChanged,listExportPresets,renameExportPreset,writeExportPreset,type ExportDraft,type ExportOptions,type ExportPreset} from "./exportSettingsApi";
 
@@ -19,14 +18,13 @@ export function ExportPresetControls({draft,onChange,disabled=false,batch=false,
   async function rename(){if(!current)return;const saved=await renameExportPreset(current.preset_id,name.trim());if(latest.current.preset_id===saved.preset_id)onChange({...latest.current,preset_name:saved.name});setNotice("已重命名导出预设");}
   async function remove(){if(!current)return;await deleteExportPreset(current.preset_id);if(latest.current.preset_id===current.preset_id)onChange({...latest.current,preset_id:null,preset_name:null});select("");setNotice("已删除预设，当前导出设置保留");}
   return <div className="export-preset-controls">
-    <p className="helper-text">预设包含画面、字幕方式、字幕排版与字体效果、音频处理及开场导读。</p>{disabledReason&&<p className="helper-text">{disabledReason}</p>}
+    <p className="helper-text">预设包含画面、字幕方式、字幕排版与字体效果及音频处理。</p>{disabledReason&&<p className="helper-text">{disabledReason}</p>}
     <label>导出预设<select aria-label="导出预设" value={selection} disabled={disabled||busy} onChange={event=>select(event.target.value)}><option value="">当前设置</option>{presets.map(item=><option key={item.preset_id} value={item.preset_id}>{item.name}</option>)}{selection&&!current&&<option value={selection}>{draft.preset_name??"原预设"}（未找到）</option>}</select></label>
-    <div className="preset-actions"><button type="button" disabled={blocked||!current} onClick={apply}>应用预设</button><button type="button" disabled={blocked} onClick={()=>{applyDraft({...draft,options:defaultExportOptions(),preset_id:null,preset_name:null},batch?"统一设置已恢复默认，逐条覆盖保留":"画面与音频已恢复默认，字幕排版与导读保留");}}>恢复默认</button></div>
-    {current&&<p className="helper-text">{current.options.intro_settings?`包含开场导读：${current.options.intro_settings.enabled?"开启":"关闭"}`:"旧版预设未包含导读设置，保留作品现有导读。"}</p>}
+    <div className="preset-actions"><button type="button" disabled={blocked||!current} onClick={apply}>应用预设</button><button type="button" disabled={blocked} onClick={()=>{applyDraft({...draft,options:defaultExportOptions(),preset_id:null,preset_name:null},batch?"统一设置已恢复默认，逐条覆盖保留":"画面与音频已恢复默认，字幕排版保留");}}>恢复默认</button></div>
     {current&&!current.options.subtitle_settings&&<p className="helper-text">旧版预设：未包含完整字幕设置，应用时保留当前字幕排版。</p>}
     {loading&&<p role="status">正在读取导出预设…</p>}{loadError&&<p role="alert">{loadError}<button type="button" onClick={()=>setRetry(value=>value+1)}>重试</button></p>}
     {draft.preset_id&&!applied&&!loading&&!loadError&&<p className="helper-text">原预设已删除或未找到，当前设置仍然保留。</p>}
-    <details className="preset-management"><summary>管理预设 <SaveStatus dirty={!!name.trim()&&name.trim()!==(current?.name??"")} saving={busy}/></summary><p className="helper-text">另存或更新会修改共享预设，不影响已有作品。{batch&&"逐条覆盖不存入预设。"}</p><label>导出预设名称<input aria-label="导出预设名称" maxLength={80} value={name} disabled={blocked} onChange={event=>setName(event.target.value)} placeholder="例如：竖屏 · 1080 · 烧录字幕" /></label>
+    <details className="preset-management"><summary>管理预设</summary><p className="helper-text">另存或更新会修改共享预设，不影响已有作品。{batch&&"逐条覆盖不存入预设。"}</p><label>导出预设名称<input aria-label="导出预设名称" maxLength={80} value={name} disabled={blocked} onChange={event=>setName(event.target.value)} placeholder="例如：竖屏 · 1080 · 烧录字幕" /></label>
       <div className="preset-actions"><button type="button" disabled={blocked||!name.trim()} onClick={()=>void mutate(saveAs)}>另存为预设</button><button type="button" disabled={blocked||!applied||selection!==draft.preset_id} onClick={()=>void mutate(update)}>更新预设</button><button type="button" disabled={blocked||!current||!name.trim()||name.trim()===current.name} onClick={()=>void mutate(rename)}>重命名预设</button><button type="button" className="danger-button" disabled={blocked||!current} onClick={()=>setConfirmDelete(true)}>删除预设</button></div>
       {confirmDelete&&current&&<div className="preset-delete-confirm"><p>删除“{current.name}”？已应用设置和已有导出保留。</p><button type="button" className="danger-button" disabled={blocked} onClick={()=>void mutate(remove)}>确认删除预设</button><button type="button" disabled={busy} onClick={()=>setConfirmDelete(false)}>取消删除</button></div>}
     </details>{busy&&<p role="status">正在应用或保存导出预设…</p>}{error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}

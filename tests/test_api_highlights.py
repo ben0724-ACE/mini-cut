@@ -67,7 +67,6 @@ def test_highlight_tasks_are_idempotent_and_recover_shortfall(tmp_path: Path) ->
             assert len(calls) == 1
             assert calls[0].instructions == "保留限定条件"
             assert calls[0].boundary_version == 3
-            assert calls[0].publication_version == 2
 
     asyncio.run(run())
 
@@ -217,7 +216,6 @@ def test_boundary_request_version_is_preserved_on_resume(
                 await client.post("/api/projects/demo/tasks/old/resume")
             ).status_code == 202
             assert seen[-1].boundary_version == saved_version
-            assert seen[-1].publication_version is None
             assert (
                 await client.post(
                     "/api/projects/demo/tasks/highlights",
@@ -226,10 +224,8 @@ def test_boundary_request_version_is_preserved_on_resume(
                 )
             ).status_code == 202
             assert seen[-1].boundary_version == 3
-            assert seen[-1].publication_version == 2
             saved = json.loads((jobs / "new.json").read_text())
             assert saved["generation_config"]["boundary_version"] == 3
-            assert saved["generation_config"]["publication_version"] == 2
             saved.update(status="failed", result=None, error="interrupted")
             (jobs / "new.json").write_text(json.dumps(saved))
             assert (

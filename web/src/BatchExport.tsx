@@ -13,7 +13,6 @@ type Output = {output_id:string;title:string;revision:number};
 export function BatchExport({project,collection,outputs,selected,disabled,onSubmitted,onPreview}:{project:string;collection:string;outputs:Output[];selected:string[];disabled:boolean;onPreview?:(output:string)=>void;onSubmitted?:(entries:{outputId:string;taskId:string}[])=>void}) {
   const [tasks,setTasks]=useState<Record<string,OutputExportTask>>({}); const [error,setError]=useState("");
   const [templateApplying,setTemplateApplying]=useState(false);
-  const [introBusy,setIntroBusy]=useState(false);
   const [subtitleValid,setSubtitleValid]=useState(true);
   const [sending,setSending]=useState(false); const lock=useRef(false); const key=useRef<string|undefined>(undefined);
   const [recovering,setRecovering]=useState(true);const [query,setQuery]=useState(0);
@@ -31,7 +30,7 @@ export function BatchExport({project,collection,outputs,selected,disabled,onSubm
   function ready(output:Output){const entry=outputSettings[output.output_id];return entry?.route===exportSettingsRoute(project,collection,output.output_id)&&entry.loaded&&!entry.error;}
   function resolved(output:Output){return uniform?effectiveOutputOptions(settings.draft,output.output_id):outputSettings[output.output_id].options;}
   const outputsBlocked=chosen.some(output=>!ready(output));
-  const settingsBlocked=introBusy||!settings.loaded||!!settings.loadError||(uniform&&!subtitleValid);
+  const settingsBlocked=!settings.loaded||!!settings.loadError||(uniform&&!subtitleValid);
   function setOverrides(next:Record<string,GeometryOptions>){settings.change({...settings.draft,overrides:next});}
   const active=Object.values(tasks).some(task=>task.status==="pending"||task.status==="running");
   const resultEntries=outputs.flatMap(output=>tasks[output.output_id]?[{outputId:output.output_id,taskId:tasks[output.output_id].task_id}]:[]);
@@ -49,7 +48,7 @@ export function BatchExport({project,collection,outputs,selected,disabled,onSubm
       <label className="radio-field"><input type="radio" name={`batch-settings-${project}-${collection}`} checked={uniform} onChange={()=>settings.change({...settings.draft,settings_source:"uniform"})}/>统一使用批量设置／预设</label>
     </fieldset>
     <p className="helper-text">仅作用于本批次；字幕文字和时间轴沿用各作品，统一预设可包含字体与排版。</p>
-    {uniform&&<><ExportPresetControls draft={settings.draft} onChange={next=>{settings.change(next);setSubtitleValid(true);}} disabled={active||sending||!settings.loaded||!!settings.loadError||!subtitleValid||settings.saving||!!settings.saveError||introBusy} batch/><OutputSettingsControls draft={settings.draft} onChange={settings.change} disabled={active||sending||!settings.loaded||!!settings.loadError} label="批量" batch onSubtitleValid={setSubtitleValid} onIntroBusy={setIntroBusy}/>
+    {uniform&&<><ExportPresetControls draft={settings.draft} onChange={next=>{settings.change(next);setSubtitleValid(true);}} disabled={active||sending||!settings.loaded||!!settings.loadError||!subtitleValid||settings.saving||!!settings.saveError} batch/><OutputSettingsControls draft={settings.draft} onChange={settings.change} disabled={active||sending||!settings.loaded||!!settings.loadError} label="批量" batch onSubtitleValid={setSubtitleValid}/>
     <details><summary>逐条画幅覆盖</summary>{outputs.filter(output=>selected.includes(output.output_id)).map(output=><div key={output.output_id}><label className="checkbox-field"><input type="checkbox" disabled={active||sending||settingsBlocked} checked={!!overrides[output.output_id]} onChange={event=>setOverrides((()=>{const next={...overrides};if(event.target.checked)next[output.output_id]={aspect_ratio:options.aspect_ratio??"original",resolution:options.resolution??1080,fit:options.fit??"pad",crop_left:options.crop_left,crop_right:options.crop_right,crop_top:options.crop_top,crop_bottom:options.crop_bottom};else delete next[output.output_id];return next;})())} />单独设置 {output.title}</label>{overrides[output.output_id]&&<GeometrySettings label={output.title} value={overrides[output.output_id]} disabled={active||sending||settingsBlocked} onChange={geometry=>setOverrides({...overrides,[output.output_id]:geometry})} />}</div>)}</details>
     <button type="button" disabled={active||sending||settingsBlocked||Object.keys(overrides).length===0} onClick={()=>setOverrides({})}>清除全部逐条覆盖</button>
     {Object.keys(overrides).length>0&&<p className="helper-text">逐条画幅覆盖优先于统一设置。</p>}

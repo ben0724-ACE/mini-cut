@@ -30,11 +30,8 @@ class HighlightBrief:
     editing_prompt: str | None = None
     cleanup_version: int | None = None
     boundary_version: int | None = None
-    publication_version: int | None = None
 
     def __post_init__(self) -> None:
-        if self.publication_version not in {None, 1, 2}:
-            raise ValueError("unsupported publication copy version")
         if self.editing_prompt is not None and (
             type(self.editing_prompt) is not str
             or not self.editing_prompt.strip()
@@ -101,7 +98,7 @@ class HighlightBrief:
 
     def to_dict(self) -> dict[str, object]:
         data = asdict(self)
-        for field in ("cleanup_version", "boundary_version", "publication_version"):
+        for field in ("cleanup_version", "boundary_version"):
             if getattr(self, field) is None:
                 data.pop(field)
         if self.editing_prompt is not None:

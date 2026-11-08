@@ -1,4 +1,3 @@
-import type {IntroStyle} from "./introApi";
 import type {GenerationDraft} from "./generationDraft";
 import type {HighlightResult, TranscriptionOptions, HighlightOutput} from "./api";
 import type {ExportOptions} from "./exportSettingsApi";
@@ -14,7 +13,7 @@ export function saveMode(mode:WorkspaceMode,project="") {
 export type WorkflowLayout=Pick<HighlightOutput,"subtitle_style"|"subtitle_mode"|"subtitle_source_scale"|"subtitle_translation_scale"|"subtitle_horizontal_percent"|"subtitle_bottom_percent"|"subtitle_order"|"hook_transition_ms"|"hook_transition_kind">;
 export interface WorkflowBody {
   name:string;generation:GenerationDraft;transcription:TranscriptionOptions;export_options:ExportOptions;
-  layout:WorkflowLayout;intro?:IntroStyle|null;cover_template_id:string|null;auto_export:boolean;
+  layout:WorkflowLayout;cover_template_id:string|null;auto_export:boolean;
 }
 export interface Workflow extends WorkflowBody {workflow_id:string;cover_template_name?:string|null;created_at:string;updated_at:string}
 export interface WorkflowRun {

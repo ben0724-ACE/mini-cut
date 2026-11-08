@@ -13,7 +13,7 @@ export function validSubtitleSettings(settings:SubtitleSettings):boolean {
 }
 export function SubtitleAppearanceControls({settings,onChange,disabled=false,onValid}:{settings:SubtitleSettings;onChange:(settings:SubtitleSettings)=>void;disabled?:boolean;onValid?:(valid:boolean)=>void}) {
   const style=settings.subtitle_style??defaultSubtitleStyle();
-  const [fonts,setFonts]=useState<{id:string;name:string;supports_chinese?:boolean}[]>([]);
+  const [fonts,setFonts]=useState<{id:string;name:string}[]>([]);
   const [fontsError,setFontsError]=useState("");const [fontsLoading,setFontsLoading]=useState(true);const [fontRequest,setFontRequest]=useState(0);
   const controlsDisabled=disabled;
   const valid=validSubtitleSettings(settings);
@@ -26,7 +26,7 @@ export function SubtitleAppearanceControls({settings,onChange,disabled=false,onV
   function changeStyle(patch:Partial<SubtitleStyle>){change({...settings,subtitle_style:{...style,...patch}});}
   function fontSelect(key:"source_font_id"|"translation_font_id",label:string){
     const id=style[key];
-    return <label>{label}<select aria-label={label} value={id??""} disabled={controlsDisabled||fontsLoading} onChange={e=>changeStyle({[key]:e.target.value||null})}><option value="">默认中文字体</option>{id&&!fonts.some(font=>font.id===id)&&<option value={id}>{fontsLoading?"正在读取已选字体…":"已选字体不可用"}</option>}<optgroup label="支持中文">{fonts.filter(font=>font.supports_chinese!==false).map(font=><option key={font.id} value={font.id}>{font.name}</option>)}</optgroup><optgroup label="其他本机字体">{fonts.filter(font=>font.supports_chinese===false).map(font=><option key={font.id} value={font.id}>{font.name}</option>)}</optgroup></select></label>;
+    return <label>{label}<select aria-label={label} value={id??""} disabled={controlsDisabled||fontsLoading} onChange={e=>changeStyle({[key]:e.target.value||null})}><option value="">默认中文字体</option>{id&&!fonts.some(font=>font.id===id)&&<option value={id}>{fontsLoading?"正在读取已选字体…":"已选字体不可用"}</option>}{fonts.map(font=><option key={font.id} value={font.id}>{font.name}</option>)}</select></label>;
   }
   return <>
     <div className="subtitle-settings-grid">

@@ -48,13 +48,6 @@ UNIFIED_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
     "所有可编辑的选材要求仅来自 brief.editing_prompt。",
 )
 
-# Preserve the historical v10/v11 text above for resumed requests and receipts.
-PUBLICATION_PROMPT_VERSION = "highlights-v12"
-PUBLICATION_INSTRUCTION = """需要 social_copy 时，写可兼作视频开场导读的作品简介：建议 30–60 字、1–2 句自然中文。
-直接交代所选片段讨论的具体问题、核心观点或解释方向，保留说话者立场、必要背景和限定；不重复标题，不预告选段未包含的内容。
-避免“这段视频”“值得一听”“听听他如何”等泛化引导，不用夸张反问或悬念凑字，不堆术语；信息不足时宁可简短。
-只概括原话，不添加外部事实、数据、人物身份或替用户编造个人观点；不把选材理由写成简介，不加平台格式、标签或互动要求。"""
-
 
 @dataclass(frozen=True, slots=True)
 class HighlightSuggestion:
@@ -112,15 +105,6 @@ class HighlightPlanner:
         system_prompt = (
             UNIFIED_SYSTEM_PROMPT if brief.editing_prompt is not None else SYSTEM_PROMPT
         )
-        if publication_metadata and brief.publication_version == 2:
-            system_prompt = (
-                system_prompt[: system_prompt.index("需要 social_copy 时，")]
-                + PUBLICATION_INSTRUCTION
-                + "\n"
-            )
-            prompt_version = PUBLICATION_PROMPT_VERSION + (
-                "" if brief.editing_prompt is not None else "-legacy"
-            )
         if not segments:
             raise ValueError("transcribed segments are required")
         compact = any(len(s.segment_id) > 64 for s in segments)
@@ -137,11 +121,7 @@ class HighlightPlanner:
             "hook_segment_ids": [],
         }
         if publication_metadata:
-            example["social_copy"] = (
-                "用简短中文交代具体问题和核心观点，保留必要限定，可兼作片头导读。"
-                if brief.publication_version == 2
-                else "忠于原话、可直接发布的中文简介文案。"
-            )
+            example["social_copy"] = "忠于原话、可直接发布的中文简介文案。"
         payload = {
             "prompt_version": prompt_version,
             "segments": [

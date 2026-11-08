@@ -1,10 +1,9 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { defaultSubtitleStyle, readHighlightTask, saveOutputSubtitleSettings, startOutputTranslation, type HighlightOutput, type HighlightResult, type SubtitleSettings } from "./api";
 
-import {SaveStatus} from "./SaveStatus";
 import {SubtitleAppearanceControls,validSubtitleSettings} from "./SubtitleAppearanceControls";
 
-export function OutputSubtitleSettings({project,collection,plan,disabled,disabledReason,onUpdated,onDirty,onSaving}:{project:string;collection:string;plan:HighlightOutput;disabled:boolean;disabledReason?:string;onUpdated:(result:HighlightResult)=>void;onDirty?:(dirty:boolean)=>void;onSaving?:(saving:boolean)=>void}) {
+export function OutputSubtitleSettings({project,collection,plan,disabled,disabledReason,onUpdated,onDirty}:{project:string;collection:string;plan:HighlightOutput;disabled:boolean;disabledReason?:string;onUpdated:(result:HighlightResult)=>void;onDirty?:(dirty:boolean)=>void}) {
   const taskStorageKey=`minicut-translation:${project}:${collection}:${plan.output_id}`;
   const initial:SubtitleSettings={subtitle_mode:plan.subtitle_mode??plan.clips.find(c=>c.translation_language)?.subtitle_mode??"bilingual",subtitle_source_scale:plan.subtitle_source_scale??1,subtitle_translation_scale:plan.subtitle_translation_scale??1,subtitle_horizontal_percent:plan.subtitle_horizontal_percent??50,subtitle_bottom_percent:plan.subtitle_bottom_percent??10,subtitle_order:plan.subtitle_order??"source_first",subtitle_style:plan.subtitle_style??defaultSubtitleStyle()};
   const [settings,setSettings]=useState(initial);
@@ -47,7 +46,6 @@ export function OutputSubtitleSettings({project,collection,plan,disabled,disable
     }catch(reason){setError(reason instanceof Error?reason.message:"启动翻译失败");}
     finally{requestLock.current=false;setSubmitting(false);}
   }
-  useEffect(()=>{onSaving?.(saving);return()=>onSaving?.(false);},[saving,onSaving]);
   useEffect(()=>{onDirty?.(changed);return()=>onDirty?.(false);},[changed,onDirty]);
   useEffect(()=>{
     if(!taskId)return;
@@ -64,7 +62,7 @@ export function OutputSubtitleSettings({project,collection,plan,disabled,disable
     return()=>{active=false;window.clearInterval(timer);};
   },[project,taskId,taskStorageKey,onUpdated]);
   return <section className="subtitle-settings" aria-label="本作品字幕设置">
-    <h3>本作品字幕设置 <SaveStatus dirty={changed} saving={saving}/></h3>
+    <h3>本作品字幕设置</h3>
     <p className="helper-text">保存生成新版本；缺少译文时显示原文。烧录双语字幕各预留两行，首行位置固定；长句优先按停顿和句界分页，请在成片预览中核对。</p>
     {!plan.subtitle_style&&<p className="helper-text">此作品仍使用旧版排版。首次保存设置后启用新样式，请更新成片预览核对。</p>}
     <SubtitleAppearanceControls settings={settings} onChange={change} disabled={controlsDisabled} onValid={setAppearanceValid}/>
