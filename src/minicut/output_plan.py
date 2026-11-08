@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import cast
 
+from minicut.intro import IntroSettings
 from minicut.semantic_segment import (
     SemanticSegment,
     validate_segment_context_dependencies,
@@ -116,6 +117,11 @@ class OutputPlan:
     subtitle_order: str = "source_first"
     subtitle_style: SubtitleStyle | None = None
     workflow: str | None = None
+    intro: IntroSettings | None = None
+
+    @property
+    def intro_duration_ms(self) -> int:
+        return self.intro.duration_ms if self.intro else 0
 
     def __post_init__(self) -> None:
         if self.subtitle_mode not in {None, "bilingual", "translated", "source"}:
@@ -224,6 +230,9 @@ class OutputPlan:
             if data.get("subtitle_style") is not None
             else None,
             cast(str | None, data.get("workflow")),
+            IntroSettings.from_dict(cast(Mapping[str, object], data["intro"]))
+            if data.get("intro") is not None
+            else None,
         )
 
 

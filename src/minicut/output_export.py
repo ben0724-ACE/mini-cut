@@ -13,6 +13,7 @@ from minicut.export_settings import (
     PreviewOptions,
 )
 from minicut.ffmpeg_paths import ffmpeg_file
+from minicut.intro_library import IntroStyle, apply_intro_style
 from minicut.output_plan import OutputPlan
 from minicut.output_reader import OutputReader
 from minicut.output_render import OutputRenderRequest, RenderOutputUseCase
@@ -26,7 +27,7 @@ from minicut.subtitle import parse_srt
 from minicut.transcription_task import CancellationToken
 
 _DEFAULT_PROFILE = RenderProfile()
-RENDER_ENGINE_VERSION = 12
+RENDER_ENGINE_VERSION = 19
 
 
 def _extract_cover(
@@ -74,11 +75,12 @@ def export_output(
     cover_design: CoverDesign | None = None,
     cover_version: int | None = None,
     subtitle_settings: ExportSubtitleSettings | None = None,
+    intro_settings: IntroStyle | None = None,
 ) -> dict[str, object]:
     snapshot = OutputReader(project, collection).output(
         output, revision, require_current=not preview
     )
-    plan = snapshot.plan
+    plan = apply_intro_style(snapshot.plan, intro_settings)
     segments, transcript = snapshot.source.segments, snapshot.source.transcript
     asset_id = snapshot.source.collection.asset_id
     if not preview and cover_design is not None:
@@ -112,6 +114,7 @@ def export_output(
             video_metadata=metadata,
             plan_revision=revision,
             subtitle_settings=subtitle_settings,
+            intro_settings=intro_settings,
         )
     )
     cover_path: Path | None = None
@@ -131,6 +134,7 @@ def export_output(
         "title": plan.title,
         "workflow": plan.workflow,
         "social_copy": plan.social_copy,
+        "intro": asdict(plan.intro) if plan.intro else None,
         "render_engine_version": RENDER_ENGINE_VERSION,
         "revision": revision,
         "width": metadata.width,
@@ -145,6 +149,7 @@ def export_output(
         "subtitle_url": base
         + quote(str(result.subtitle_path.relative_to(project / "exports")), safe="/"),
         "subtitle_warnings": list(result.subtitle_warnings),
+        "intro_settings": intro_settings.model_dump() if intro_settings else None,
         "subtitle_settings": subtitle_settings.model_dump()
         if subtitle_settings
         else None,
@@ -177,6 +182,7 @@ def preview_output(
     asset_id = snapshot.source.collection.asset_id
     if options.subtitle_settings is not None:
         plan = replace(plan, **options.subtitle_settings.plan_changes())
+    plan = apply_intro_style(plan, options.intro_settings)
     cancellation.raise_if_cancelled()
     asset = next(
         asset
@@ -219,7 +225,9 @@ def preview_output(
                 "reused": True,
                 "duration_ms": compile_output_timeline(
                     plan, segments, asset_id
-                ).estimated_duration_ms,
+                ).estimated_duration_ms
+                + plan.intro_duration_ms,
+                "intro": asdict(plan.intro) if plan.intro else None,
                 "media_url": base
                 + quote(str(path.relative_to(project / "exports")), safe="/"),
                 "subtitle_url": base
@@ -248,6 +256,7 @@ def preview_output(
             profile,
             preview=True,
             subtitle_settings=options.subtitle_settings,
+            intro_settings=options.intro_settings,
         ),
         "reused": False,
         "preview_options": options.model_dump(),

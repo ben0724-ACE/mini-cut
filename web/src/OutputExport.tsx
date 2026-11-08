@@ -5,8 +5,9 @@ import { startOutputExport, readOutputExport, recoverOutputExport, cancelOutputE
 import { OutputSettingsSummary } from "./OutputSettingsSummary";
 import { exportSettingsRoute } from "./exportSettingsApi";
 import { ExportDraftStatus, useExportDraft } from "./useExportDraft";
+import type {IntroSettings} from "./api";
 
-export function OutputExport({project,collection,output,revision,onAdjust,onSubmitted,disabled=false,coverVersion,cover,disabledReason}:{project:string;collection:string;output:string;revision:number;onAdjust?:(section:"frame"|"subtitles")=>void;disabled?:boolean;coverVersion?:number;cover?:ReactNode;disabledReason?:string;onSubmitted?:(entries:{outputId:string;taskId:string}[])=>void}) {
+export function OutputExport({project,collection,output,revision,intro,onAdjust,onSubmitted,disabled=false,coverVersion,cover,coverDirty,coverSaving,disabledReason}:{project:string;collection:string;output:string;revision:number;intro?:IntroSettings|null;onAdjust?:(section:"frame"|"subtitles"|"intro")=>void;disabled?:boolean;coverVersion?:number;cover?:ReactNode;coverDirty?:boolean;coverSaving?:boolean;disabledReason?:string;onSubmitted?:(entries:{outputId:string;taskId:string}[])=>void}) {
   const settings=useExportDraft(exportSettingsRoute(project,collection,output));
   const options=settings.draft.options;
   const settingsBlocked=!settings.loaded||!!settings.loadError;
@@ -21,9 +22,10 @@ export function OutputExport({project,collection,output,revision,onAdjust,onSubm
   const requestSettings=JSON.stringify({options,revision,coverVersion});
   useEffect(()=>{key.current=undefined;},[requestSettings]);
   async function submit(){if(disabled||lock.current||active||recovering||settingsBlocked||error)return;lock.current=true;setSending(true);setError("");key.current??=crypto.randomUUID();try{const submitted=await startOutputExport(project,collection,output,revision,{...options,cover_version:coverVersion},key.current);setTask(submitted);key.current=undefined;onSubmitted?.([{outputId:output,taskId:submitted.task_id}]);}catch(reason){setError(reason instanceof Error?reason.message:"导出失败");}finally{lock.current=false;setSending(false);}}
-  return <section aria-label="单作品导出"><ExportSections cover={cover}><h2>最终画面设置</h2>
+  return <section aria-label="单作品导出"><ExportSections cover={cover} coverDirty={coverDirty} coverSaving={coverSaving}><h2>最终画面设置</h2>
     {settings.loaded&&<OutputSettingsSummary options={options} presetName={settings.draft.preset_name}/>}
-    {onAdjust&&<div className="action-row"><button type="button" onClick={()=>onAdjust("frame")}>调整画面</button><button type="button" onClick={()=>onAdjust("subtitles")}>调整字幕</button></div>}
+    <p className="helper-text">{intro?`开场导读：${intro.duration_ms/1000} 秒 · ${intro.music?(intro.audio_id?"自定义 BGM":"克制科技感配乐"):"无音乐"} · ${intro.motion?(intro.motion_style==="rise"?"轻盈入场":"淡入淡出"):"静态文字"} · ${intro.title}`:"开场导读：关闭"}</p>
+    {onAdjust&&<div className="action-row"><button type="button" onClick={()=>onAdjust("frame")}>调整画面</button><button type="button" onClick={()=>onAdjust("subtitles")}>调整字幕</button><button type="button" onClick={()=>onAdjust("intro")}>调整导读</button></div>}
     </ExportSections>
     <ExportDraftStatus state={settings}/>
     {disabled&&<p className="helper-text">{disabledReason??"请先保存或放弃封面修改，等待封面读取完成后导出。"}</p>}

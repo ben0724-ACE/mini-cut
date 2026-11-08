@@ -4,14 +4,16 @@ import userEvent from "@testing-library/user-event";
 import {WorkflowManager} from "./WorkflowManager";
 import {defaultGenerationDraft} from "./generationDraft";
 import {defaultExportOptions} from "./exportSettingsApi";
+import * as introApi from "./introApi";
 import * as api from "./api";
 import * as exportApi from "./exportSettingsApi";
 import * as coverApi from "./coverApi";
 import * as workflowApi from "./workflowApi";
-vi.mock("./api",async original=>({...await original<typeof import("./api")>(),getTranscriptionDefaults:vi.fn(),listGenerationPresets:vi.fn(),getGenerationDraft:vi.fn(),recoverTranscription:vi.fn(),recoverHighlights:vi.fn()}));
+vi.mock("./api",async original=>({...await original<typeof import("./api")>(),listSubtitleFonts:vi.fn().mockResolvedValue([]),getTranscriptionDefaults:vi.fn(),listGenerationPresets:vi.fn(),getGenerationDraft:vi.fn(),recoverTranscription:vi.fn(),recoverHighlights:vi.fn()}));
 vi.mock("./exportSettingsApi",async original=>({...await original<typeof import("./exportSettingsApi")>(),listExportPresets:vi.fn()}));
 vi.mock("./coverApi",async original=>({...await original<typeof import("./coverApi")>(),listCoverTemplates:vi.fn()}));
-vi.mock("./workflowApi",async original=>({...await original<typeof import("./workflowApi")>(),listWorkflows:vi.fn(),writeWorkflow:vi.fn()}));
+vi.mock("./workflowApi",async original=>({...await original<typeof import("./workflowApi")>(),listWorkflows:vi.fn(),writeWorkflow:vi.fn(),renameWorkflow:vi.fn()}));
+
 beforeEach(()=>{vi.clearAllMocks();vi.mocked(api.getTranscriptionDefaults).mockResolvedValue({options:{provider:"whisper",model:"small",language:"zh"},mlx_supported:false});vi.mocked(workflowApi.listWorkflows).mockResolvedValue([]);vi.mocked(api.listGenerationPresets).mockResolvedValue([{preset_id:"g",name:"AI 访谈",draft:{...defaultGenerationDraft(),count:5},created_at:"",updated_at:""}]);vi.mocked(exportApi.listExportPresets).mockResolvedValue([{preset_id:"e",name:"竖屏",options:{...defaultExportOptions(),aspect_ratio:"9:16"},created_at:"",updated_at:""}]);vi.mocked(coverApi.listCoverTemplates).mockResolvedValue([]);});
 afterEach(()=>localStorage.clear());
 it("按需读取预设，将生成和导出预设组合成独立工作流",async()=>{
@@ -42,4 +44,35 @@ it("工作流导出预设带入原文译文字体和共用效果",async()=>{
   vi.mocked(workflowApi.writeWorkflow).mockImplementation(async body=>({...body,workflow_id:"w",created_at:"",updated_at:""}));const user=userEvent.setup();render(<WorkflowManager project="p"/>);
   await user.click(screen.getByRole("button",{name:"管理我的工作流"}));await waitFor(()=>expect(screen.getByLabelText("工作流名称")).toBeEnabled());await user.type(screen.getByLabelText("工作流名称"),"完整样式");await user.selectOptions(screen.getByLabelText("工作流导出预设"),"full");await user.click(screen.getByText("另存为工作流"));
   await waitFor(()=>expect(workflowApi.writeWorkflow).toHaveBeenCalledWith(expect.objectContaining({layout:expect.objectContaining(layout),export_options:expect.objectContaining({subtitle_settings:layout})}),undefined));
+});
+
+it("原工作流选择导出预设即可带入导读，无独立导读配置",async()=>{
+  const intro_settings={...introApi.defaultIntroStyle(),enabled:true,font_id:"heiti",motion_strength:1.4,transition_ms:800};
+  vi.mocked(exportApi.listExportPresets).mockResolvedValueOnce([{preset_id:"intro-e",name:"竖屏含导读",options:{...defaultExportOptions(),intro_settings},created_at:"",updated_at:""}]);
+  vi.mocked(workflowApi.writeWorkflow).mockImplementation(async body=>({...body,workflow_id:"w",created_at:"",updated_at:""}));
+  const user=userEvent.setup();render(<WorkflowManager project="p"/>);
+  await user.click(screen.getByRole("button",{name:"管理我的工作流"}));
+  await waitFor(()=>expect(screen.getByLabelText("工作流名称")).toBeEnabled());
+  await user.type(screen.getByLabelText("工作流名称"),"原有工作流");
+  await user.selectOptions(screen.getByLabelText("工作流导出预设"),"intro-e");
+  expect(screen.queryByLabelText("工作流启用开场导读")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("导读预设")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button",{name:"另存为工作流"}));
+  await waitFor(()=>expect(workflowApi.writeWorkflow).toHaveBeenCalledWith(expect.objectContaining({export_options:expect.objectContaining({intro_settings})}),undefined));
+});
+
+
+it("重命名工作流后仍提示尚未保存的配置修改",async()=>{
+  const current:workflowApi.Workflow={workflow_id:"existing",name:"原工作流",generation:defaultGenerationDraft(),export_options:defaultExportOptions(),transcription:{provider:"whisper",model:"small",language:"zh"},layout:{},cover_template_id:null,auto_export:false,created_at:"",updated_at:""};
+  vi.mocked(workflowApi.listWorkflows).mockResolvedValueOnce([current]);
+  vi.mocked(workflowApi.renameWorkflow).mockResolvedValueOnce({...current,name:"改名"});
+  const user=userEvent.setup();render(<WorkflowManager project="p"/>);
+  await user.click(screen.getByRole("button",{name:"管理我的工作流"}));
+  await waitFor(()=>expect(screen.getByLabelText("工作流名称")).toBeEnabled());
+  await user.selectOptions(screen.getByLabelText("已有工作流"),"existing");
+  await user.selectOptions(screen.getByLabelText("工作流导出预设"),"e");
+  await user.clear(screen.getByLabelText("工作流名称"));await user.type(screen.getByLabelText("工作流名称"),"改名");
+  await user.click(screen.getByRole("button",{name:"重命名工作流"}));
+  await screen.findByText("工作流已重命名");
+  expect(screen.getByRole("group",{name:"工作流配置 未保存"})).toBeInTheDocument();
 });

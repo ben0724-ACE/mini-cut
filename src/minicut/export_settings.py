@@ -14,6 +14,7 @@ from minicut.generation_presets import (
     PresetNotFound,
     PresetRenameBody,
 )
+from minicut.intro_library import IntroStyle, validate_intro_style
 from minicut.render_profile import RenderProfile
 from minicut.subtitle_style import SubtitleStyle
 
@@ -59,6 +60,7 @@ class ExportOptions(ExportGeometry):
     audio_fade_ms: int = Field(default=0, ge=0, le=500, strict=True)
     denoiser_id: Literal["none", "afftdn"] = "none"
     subtitle_settings: ExportSubtitleSettings | None = None
+    intro_settings: IntroStyle | None = None
 
 
 class PreviewOptions(ExportOptions):
@@ -157,6 +159,7 @@ class ExportPresetBody(PresetRenameBody):
 
 class ExportPresetLibrary:
     def __init__(self, root: Path) -> None:
+        self.root = root
         self.path = root / ".minicut/export-presets.sqlite3"
 
     def _connect(self) -> sqlite3.Connection:
@@ -190,6 +193,8 @@ class ExportPresetLibrary:
     def save(
         self, body: ExportPresetBody, identity: str | None = None
     ) -> dict[str, object]:
+        if body.options.intro_settings is not None:
+            validate_intro_style(self.root, body.options.intro_settings)
         now = datetime.now(UTC).isoformat()
         try:
             with self._connect() as db:

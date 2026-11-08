@@ -4,6 +4,7 @@ import os
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from PIL import ImageFont
@@ -53,7 +54,83 @@ def available_subtitle_fonts() -> dict[str, tuple[str, SubtitleFont]]:
             fonts[key] = (name, SubtitleFont(family, path, index))
         except (OSError, ValueError, UserInputError):
             continue
+    # Preserve saved aliases, then discover the rest of the installed faces.
+    for directory in installed_font_directories():
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.rglob("*")):
+            if (
+                path.suffix.lower() not in {".ttf", ".ttc", ".otf"}
+                or "LastResort" in path.name
+            ):
+                continue
+            try:
+                stat = path.stat()
+                faces = _font_faces(path, stat.st_size, stat.st_mtime_ns)
+            except OSError:
+                continue
+            for family, style, index, _ in faces:
+                identity = "local_" + (family + "\0" + style).encode("utf-8").hex()
+                if len(identity) > 512:
+                    continue
+                try:
+                    font = SubtitleFont(family, path, index)
+                except ValueError:
+                    continue
+                fonts.setdefault(identity, (f"{family} · {style}", font))
     return fonts
+
+
+def installed_font_directories() -> tuple[Path, ...]:
+    if sys.platform == "darwin":
+        return (
+            Path("/System/Library/Fonts"),
+            Path("/Library/Fonts"),
+            Path.home() / "Library/Fonts",
+        )
+    if sys.platform == "win32":
+        return (
+            Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts",
+            Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
+            / "Microsoft/Windows/Fonts",
+        )
+    return (
+        Path("/usr/share/fonts"),
+        Path("/usr/local/share/fonts"),
+        Path.home() / ".fonts",
+        Path.home() / ".local/share/fonts",
+    )
+
+
+@lru_cache(maxsize=1024)
+def _font_faces(
+    path: Path, size: int, modified: int
+) -> tuple[tuple[str, str, int, bool], ...]:
+    del size, modified  # Cache entries are invalidated by ordinary file metadata.
+    result: list[tuple[str, str, int, bool]] = []
+    for index in range(128 if path.suffix.lower() == ".ttc" else 1):
+        try:
+            face = ImageFont.truetype(str(path), 24, index=index)
+            family, style = face.getname()
+            cjk = list(face.getmask("中")) != list(face.getmask("\U0010ffff"))  # type: ignore[arg-type]
+            if family:
+                result.append((family, style or "Regular", index, cjk))
+        except (OSError, ValueError):
+            break
+    return tuple(result)
+
+
+def supports_chinese(font: SubtitleFont) -> bool:
+    try:
+        stat = font.path.stat()
+        return any(
+            index == font.index and cjk
+            for _, _, index, cjk in _font_faces(
+                font.path, stat.st_size, stat.st_mtime_ns
+            )
+        )
+    except OSError:
+        return False
 
 
 def resolve_selected_subtitle_font(font_id: str) -> SubtitleFont:

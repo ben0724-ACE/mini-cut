@@ -12,9 +12,16 @@ from typing import ParamSpec, TypeVar, cast
 from minicut.boundary_refinement import refine_boundaries
 from minicut.deepseek_provider import DeepSeekProvider
 from minicut.errors import UserInputError
+from minicut.export_settings import ExportOptions
 from minicut.highlight_brief import HighlightBrief
 from minicut.highlight_planner import HighlightPlanner
 from minicut.highlight_workflow import plan_highlights
+from minicut.intro import IntroSettings, intro_frame_ms
+from minicut.intro_library import (
+    apply_intro_style,
+    intro_audio_path,
+    validate_intro_style,
+)
 from minicut.model_journal import ModelJournal, RecordedProvider
 from minicut.output_plan import OutputItem, OutputRole
 from minicut.output_reader import OutputReader, source_segments
@@ -154,7 +161,9 @@ def generate_highlights(
                     "revision": plan.revision,
                     "hook_transition_ms": plan.hook_transition_ms,
                     "hook_transition_kind": plan.hook_transition_kind,
-                    "duration_ms": timeline.estimated_duration_ms,
+                    "duration_ms": timeline.estimated_duration_ms
+                    + plan.intro_duration_ms,
+                    "intro": asdict(plan.intro) if plan.intro else None,
                     "clips": [
                         {
                             "instance_id": item.instance_id,
@@ -228,6 +237,7 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
                 row["workflow"] = plan.workflow
                 row["title"] = plan.title
                 row["social_copy"] = plan.social_copy
+                row["intro"] = asdict(plan.intro) if plan.intro else None
                 row["revision"] = plan.revision
                 row["hook_transition_ms"] = plan.hook_transition_ms
                 row["hook_transition_kind"] = plan.hook_transition_kind
@@ -247,9 +257,12 @@ def read_highlights(project: Path, collection_id: str) -> dict[str, object]:
                         )
                     }
                 )
-                row["duration_ms"] = compile_output_timeline(
-                    plan, segments, collection.asset_id
-                ).estimated_duration_ms
+                row["duration_ms"] = (
+                    compile_output_timeline(
+                        plan, segments, collection.asset_id
+                    ).estimated_duration_ms
+                    + plan.intro_duration_ms
+                )
                 row["clips"] = [
                     {
                         "instance_id": item.instance_id,
@@ -590,6 +603,7 @@ def output_versions(
             else None,
             "hook_transition_ms": plan.hook_transition_ms,
             "hook_transition_kind": plan.hook_transition_kind,
+            "intro": asdict(plan.intro) if plan.intro else None,
             **{
                 key: getattr(plan, key)
                 for key in (
@@ -603,7 +617,8 @@ def output_versions(
             },
             "duration_ms": compile_output_timeline(
                 plan, segments, history.source.collection.asset_id
-            ).estimated_duration_ms,
+            ).estimated_duration_ms
+            + plan.intro_duration_ms,
             "clips": [
                 {
                     "instance_id": item.instance_id,
@@ -837,5 +852,83 @@ def rename_output(
             ),
         ),
         segments,
+    )
+    return read_highlights(project, collection_id)
+
+
+@_atomic_output_edit
+def save_output_appearance(
+    project: Path,
+    collection_id: str,
+    output_id: str,
+    base_revision: int,
+    options: ExportOptions,
+) -> dict[str, object]:
+    """Apply one export preset's subtitle and intro appearance in one revision."""
+    source = OutputReader(project, collection_id).read()
+    repository = OutputCollectionRepository(project, collection_id)
+    plan = repository.read_plan(source.collection, source.segments, output_id)
+    if plan.revision != base_revision:
+        raise RevisionConflict("作品已有新版本，请刷新后重试")
+    updated = plan
+    if options.subtitle_settings is not None:
+        settings = options.subtitle_settings
+        if settings.subtitle_style:
+            for font_id in (
+                settings.subtitle_style.source_font_id,
+                settings.subtitle_style.translation_font_id,
+            ):
+                if font_id:
+                    resolve_selected_subtitle_font(font_id)
+        updated = replace(updated, **settings.plan_changes())
+    if options.intro_settings is not None:
+        validate_intro_style(project.parent, options.intro_settings)
+        updated = apply_intro_style(updated, options.intro_settings)
+        if updated.intro is not None:
+            intro_frame_ms(updated, source.segments)
+    if updated != plan:
+        updated = replace(updated, revision=plan.revision + 1)
+        repository.write(
+            replace(
+                source.collection,
+                plans=tuple(
+                    updated if existing.output_id == output_id else existing
+                    for existing in source.collection.plans
+                ),
+            ),
+            source.segments,
+        )
+    return read_highlights(project, collection_id)
+
+
+@_atomic_output_edit
+def save_output_intro(
+    project: Path,
+    collection_id: str,
+    output_id: str,
+    base_revision: int,
+    intro: IntroSettings | None,
+) -> dict[str, object]:
+    source = OutputReader(project, collection_id).read()
+    repository = OutputCollectionRepository(project, collection_id)
+    plan = repository.read_plan(source.collection, source.segments, output_id)
+    if plan.revision != base_revision:
+        raise RevisionConflict("作品已有新版本，请刷新后重试")
+    updated = replace(plan, intro=intro, revision=plan.revision + 1)
+    if intro is not None:
+        intro_frame_ms(updated, source.segments)
+        if intro.font_id:
+            resolve_selected_subtitle_font(intro.font_id)
+        if intro.audio_id:
+            intro_audio_path(project.parent, intro.audio_id)
+    repository.write(
+        replace(
+            source.collection,
+            plans=tuple(
+                updated if existing.output_id == output_id else existing
+                for existing in source.collection.plans
+            ),
+        ),
+        source.segments,
     )
     return read_highlights(project, collection_id)

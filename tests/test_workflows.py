@@ -5,7 +5,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 from threading import Event
-from typing import NoReturn
+from typing import NoReturn, cast
 
 import httpx
 import pytest
@@ -184,7 +184,21 @@ def test_one_click_reuses_tasks_idempotency_and_applies_saved_settings(
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
-            saved = (await client.post("/api/workflows", json=definition())).json()
+            saved = (
+                await client.post(
+                    "/api/workflows",
+                    json=definition(
+                        export_options={
+                            **cast(dict[str, object], definition()["export_options"]),
+                            "intro_settings": {
+                                "font_id": None,
+                                "motion_strength": 1.7,
+                                "transition_ms": 800,
+                            },
+                        }
+                    ),
+                )
+            ).json()
             body = {"asset_id": "asset", "workflow_id": saved["workflow_id"]}
             headers = {"Idempotency-Key": "first"}
             assert (
@@ -198,10 +212,15 @@ def test_one_click_reuses_tasks_idempotency_and_applies_saved_settings(
             assert transcription.calls[0].language == "en"
             assert calls[0].editing_prompt == "完整的知识解释\n\n保留例子和限定条件"
             assert calls[0].boundary_version == 3
+            assert calls[0].publication_version == 2
             if not empty:
                 output = completed["result"]["outputs"][0]
                 assert output["subtitle_source_scale"] == 1.2
                 assert output["hook_transition_ms"] == 500
+                assert output["intro"]["title"] == output["title"]
+                assert output["intro"]["motion_strength"] == 1.7
+                assert output["intro"]["transition_ms"] == 800
+                assert output["intro"]["frame_ms"] is None
                 route = f"/api/projects/demo/highlights/{completed['result']['collection_id']}/outputs/o/export-settings"
                 assert (await client.get(route)).json()["draft"]["options"][
                     "aspect_ratio"

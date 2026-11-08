@@ -4,7 +4,12 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from minicut.errors import UserInputError
-from minicut.subtitle_font import SubtitleFont, resolve_subtitle_font
+from minicut.subtitle_font import (
+    SubtitleFont,
+    available_subtitle_fonts,
+    resolve_subtitle_font,
+    supports_chinese,
+)
 
 
 class SubtitleFontTest(unittest.TestCase):
@@ -56,3 +61,29 @@ class SubtitleFontTest(unittest.TestCase):
                         UserInputError, "MINICUT_SUBTITLE_FONT_PATH"
                     ):
                         resolve_subtitle_font({}, platform=platform)
+
+
+def test_discovers_other_installed_faces_and_keeps_stable_identifiers(
+    tmp_path: Path,
+) -> None:
+    font_file = tmp_path / "new-font.ttc"
+    font_file.write_bytes(b"font")
+    with (
+        patch("minicut.cover_design.cover_fonts", return_value={}),
+        patch(
+            "minicut.subtitle_font.installed_font_directories", return_value=(tmp_path,)
+        ),
+        patch(
+            "minicut.subtitle_font._font_faces",
+            return_value=(
+                ("新字体", "Regular", 0, True),
+                ("Latin Font", "Bold", 1, False),
+            ),
+        ),
+    ):
+        fonts = available_subtitle_fonts()
+        assert len(fonts) == 2
+        first = list(fonts)[0]
+        assert bytes.fromhex(first.removeprefix("local_")).decode() == "新字体\0Regular"
+        assert supports_chinese(fonts[first][1])
+        assert not supports_chinese(list(fonts.values())[1][1])

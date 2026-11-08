@@ -21,6 +21,7 @@ export function MinimalWorkspace({project,onRefine}:{project:string;onRefine:(co
   const lock=useRef(false);const runKey=useRef<string|null>(null);const uploaded=useRef<string|null>(null);const exportKey=useRef<string|null>(null);
   const active=run?.status==="pending"||run?.status==="running";
   const workflow=workflows.find(w=>w.workflow_id===workflowId);const output=result?.outputs.find(o=>o.output_id===focused)??result?.outputs[0];
+  const workflowIntro=workflow?.export_options.intro_settings??(workflow?.intro?{...workflow.intro,enabled:true}:null);
   const collection=result?.collection_id??"";const outputIds=JSON.stringify(result?.outputs.map(o=>o.output_id)??[]);
   const exportsForCollection=run?.result?.collection_id===collection?run.exports??[]:[];
   const workflowExports=JSON.stringify(exportsForCollection);
@@ -95,7 +96,7 @@ export function MinimalWorkspace({project,onRefine}:{project:string;onRefine:(co
       </div></div>
       <button className="primary-button minimal-run" disabled={blocked||!workflow||(!file&&!assetId)} onClick={()=>void action(start)}>{busy?status||"正在提交…":active?"正在执行…":workflow?.auto_export?"一键生成并导出":"一键生成"}</button>
       <div className="minimal-launch-meta">
-        <span>{workflow?`${workflow.transcription.language==="en"?"英文":"中文"} · ${workflow.generation.preset==="clean_speech"?1:workflow.generation.count} 条 · ${workflow.generation.limit_duration&&workflow.generation.preset!=="clean_speech"?`${workflow.generation.min_seconds}–${workflow.generation.max_seconds} 秒`:"不限时"} · ${workflow.export_options.aspect_ratio==="original"?"原始比例":workflow.export_options.aspect_ratio} · ${workflow.auto_export?"自动导出":"生成后审阅"}`:loaded?"点击“管理”保存常用工作流，之后直接运行。":"正在恢复工作区…"}</span>
+        <span>{workflow?`${workflow.transcription.language==="en"?"英文":"中文"} · ${workflow.generation.preset==="clean_speech"?1:workflow.generation.count} 条 · ${workflow.generation.limit_duration&&workflow.generation.preset!=="clean_speech"?`${workflow.generation.min_seconds}–${workflow.generation.max_seconds} 秒`:"不限时"} · ${workflow.export_options.aspect_ratio==="original"?"原始比例":workflow.export_options.aspect_ratio} · ${workflowIntro?.enabled?`导读 ${workflowIntro.duration_ms/1000} 秒`:"无导读"} · ${workflow.auto_export?"自动导出":"生成后审阅"}`:loaded?"点击“管理”保存常用工作流，之后直接运行。":"正在恢复工作区…"}</span>
         <span title="视频在本地处理，转录文本会发送至配置的 AI 服务。">AI 处理可能产生费用</span>
       </div>
     </div>

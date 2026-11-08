@@ -95,6 +95,39 @@ def test_single_request_multiple_candidates_and_insufficiency() -> None:
     assert "API" not in provider.requests[0].user_prompt
 
 
+def test_new_publication_prompt_is_concise_without_an_extra_request_or_legacy_changes() -> (
+    None
+):
+    import asyncio
+    from dataclasses import replace
+
+    from minicut.highlight_planner import (
+        PUBLICATION_PROMPT_VERSION,
+        UNIFIED_SYSTEM_PROMPT,
+    )
+
+    brief = HighlightBrief.for_preset(
+        HighlightPreset.PODCAST, editing_prompt="保留完整的解释"
+    )
+    provider = FakeProvider({"candidates": [candidate(["a", "b"])], "notes": []})
+    planner = HighlightPlanner(provider)
+    asyncio.run(planner.plan(brief, source()))
+    legacy = provider.requests[0]
+    assert legacy.system_prompt == UNIFIED_SYSTEM_PROMPT
+    assert "publication_version" not in json.loads(legacy.user_prompt)["brief"]
+    result = asyncio.run(planner.plan(replace(brief, publication_version=2), source()))
+    assert len(provider.requests) == 2
+    assert result.prompt_version == PUBLICATION_PROMPT_VERSION
+    current = provider.requests[1]
+    assert "30–60 字" in current.system_prompt
+    assert "保留说话者立场" in current.system_prompt
+    assert "不添加外部事实" in current.system_prompt
+    assert "两到四句" not in current.system_prompt
+    assert json.loads(current.user_prompt)["brief"]["publication_version"] == 2
+    asyncio.run(planner.plan(brief, source()))
+    assert provider.requests[2] == legacy
+
+
 def test_discovery_mode_omits_publication_copy_without_an_extra_request() -> None:
     import asyncio
 

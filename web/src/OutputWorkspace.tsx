@@ -1,7 +1,7 @@
 import {CleanupReview} from "./CleanupReview";
 import { createPortal } from "react-dom";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { saveOutputSubtitleSettings, previewManualSplit, applyManualSplit, splitOutputSentences, saveOutputRanges, getHighlights, editOutputItem, reorderOutput, getOutputVersions, type HighlightResult, type HighlightClip } from "./api";
+import { saveOutputAppearance, previewManualSplit, applyManualSplit, splitOutputSentences, saveOutputRanges, getHighlights, editOutputItem, reorderOutput, getOutputVersions, type HighlightResult, type HighlightClip } from "./api";
 import { QuickPreview, type Audition } from "./QuickPreview";
 import { registerDraftGuard } from "./draftNavigation";
 import { RenderedPreview } from "./RenderedPreview";
@@ -13,15 +13,19 @@ import { OutputExport } from "./OutputExport";
 import { Workbench, type WorkbenchTab } from "./Workbench";
 import { outputBoundaryWarnings } from "./GenerationDetails";
 import {exportSettingsRoute,type ExportDraft,type ExportOptions} from "./exportSettingsApi";
-import {useExportDraft} from "./useExportDraft";
+import {SaveStatus,type SaveState} from "./SaveStatus";
+import {useExportDraft,exportSaveState} from "./useExportDraft";
 import {effectiveOutputOptions,outputSettingsLabel} from "./OutputSettingsSummary";
 import {OutputSettingsControls} from "./OutputSettingsControls";
 import {ExportPresetControls} from "./ExportPresetControls";
 import {subtitleSettingsFromPlan} from "./SubtitleAppearanceControls";
 import {ExportDraftStatus} from "./useExportDraft";
+import {exportIntroSettings} from "./introApi";
+import {OutputIntro} from "./OutputIntro";
+import {saveOutputIntro} from "./api";
 interface Panels {preview:ReactNode;edit:ReactNode;exportPanel:ReactNode}
-type EditSection = "frame" | "subtitles" | "sentences" | "hook";
-const editSections:{id:EditSection;label:string}[]=[{id:"frame",label:"画面设置"},{id:"subtitles",label:"字幕设置"},{id:"sentences",label:"逐句编辑"},{id:"hook",label:"开场预告"}];
+type EditSection = "frame" | "subtitles" | "sentences" | "hook" | "intro";
+const editSections:{id:EditSection;label:string}[]=[{id:"frame",label:"画面设置"},{id:"subtitles",label:"字幕设置"},{id:"sentences",label:"逐句编辑"},{id:"hook",label:"开场预告"},{id:"intro",label:"开场导读"}];
 export function OutputWorkspace({project,collection,output,compose,onUpdated,onDirty,onExportSubmitted,onEditRequested,onBatchSettingsRequested,batchPreviewRequest}:{project:string;collection:string;output:string;compose?:(panels:Panels)=>ReactNode;onUpdated?:(result:HighlightResult)=>void;onDirty?:(dirty:boolean)=>void;onExportSubmitted?:(entries:{outputId:string;taskId:string}[])=>void;onEditRequested?:()=>void;onBatchSettingsRequested?:()=>void;batchPreviewRequest?:{output:string;id:string}}) {
   const singleSettings=useExportDraft(exportSettingsRoute(project,collection,output));
   const batchSettings=useExportDraft(exportSettingsRoute(project,collection));
@@ -31,6 +35,9 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
   const [localPanel,setLocalPanel]=useState<WorkbenchTab>(new URLSearchParams(window.location.search).get("panel")==="export"?"export":"edit");
   const [previewSnapshot,setPreviewSnapshot]=useState<{revision:number;options:ExportOptions;id:string;source:"output"|"batch"}|null>(null);
   const [subtitleDirty,setSubtitleDirty]=useState(false);
+  const [introDirty,setIntroDirty]=useState(false);
+  const [subtitleSaving,setSubtitleSaving]=useState(false),[introSaving,setIntroSaving]=useState(false);
+  const [activeSaveSection,setActiveSaveSection]=useState<EditSection|null>(null),[hookSaveState,setHookSaveState]=useState<SaveState>();
   const editTabsId=useId();
   const [editSection,setEditSection]=useState<EditSection>("frame");
   const [hookSourceId,setHookSourceId]=useState("");
@@ -48,15 +55,15 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
       return {...previous,[draftScope]:drafts};
     });
   }
-  const [result,setResult]=useState<HighlightResult|null>(null);const [error,setError]=useState("");const [saving,setBusy]=useState(false);const [coverDirty,setCoverDirty]=useState(false);const [coverVersion,setCoverVersion]=useState<number>();const busy=saving||coverDirty;const lock=useRef(false);
+  const [result,setResult]=useState<HighlightResult|null>(null);const [error,setError]=useState("");const [saving,setBusy]=useState(false);const [coverDirty,setCoverDirty]=useState(false);const [coverVersion,setCoverVersion]=useState<number>();const [coverSaving,setCoverSaving]=useState(false);const busy=saving||coverDirty||introDirty;const lock=useRef(false);
   const [ranges,setRanges]=useState<Record<string,{start:number;end:number}>>({});
   const [undo,setUndo]=useState<typeof ranges[]>([]);const [redo,setRedo]=useState<typeof ranges[]>([]);
   const [audition,setAudition]=useState<Audition>();const [rendered,setRendered]=useState(false);const [duration,setDuration]=useState(0);
   const [navigation,setNavigation]=useState<(()=>void)|null>(null);
   const dirty=Object.keys(ranges).length>0;
-  useEffect(()=>{onDirty?.(dirty||coverDirty||subtitleDirty||textDirty);return()=>onDirty?.(false);},[dirty,coverDirty,subtitleDirty,textDirty,onDirty]);
+  useEffect(()=>{onDirty?.(dirty||coverDirty||subtitleDirty||textDirty||introDirty);return()=>onDirty?.(false);},[dirty,coverDirty,subtitleDirty,textDirty,introDirty,onDirty]);
   useEffect(()=>{if(!dirty)return;const unload=(event:BeforeUnloadEvent)=>event.preventDefault();window.addEventListener("beforeunload",unload);const unregister=registerDraftGuard(proceed=>setNavigation(()=>proceed));return()=>{window.removeEventListener("beforeunload",unload);unregister();};},[dirty]);
-  function changeRange(id:string,start:number,end:number){setUndo([...undo,ranges]);setRedo([]);setRanges({...ranges,[id]:{start,end}});setRendered(false);}
+  function changeRange(id:string,start:number,end:number){setUndo([...undo,ranges]);setRedo([]);const next={...ranges};const clip=result?.outputs.find(p=>p.output_id===output)?.clips.find(c=>c.instance_id===id);if(clip?.start_ms===start&&clip.end_ms===end)delete next[id];else next[id]={start,end};setRanges(next);setRendered(false);}
   function discard(){setRanges({});setUndo([]);setRedo([]);}
   const [jumpTo,setJumpTo]=useState<{ms:number;sequence:number}>();
   const [versions,setVersions]=useState<Awaited<ReturnType<typeof getOutputVersions>>>([]);
@@ -80,7 +87,7 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
     });
     setJumpTo(undefined);setResult(updated);onUpdated?.(updated);setViewVersion(undefined);setVersions([]);
   }
-  async function update(operation:()=>Promise<HighlightResult>,resetTextIds:string[]=[]){if(lock.current)throw new Error("请等待当前保存完成");lock.current=true;setBusy(true);setActionError("");try{receiveUpdated(await operation(),resetTextIds);}finally{lock.current=false;setBusy(false);}}
+  async function update(operation:()=>Promise<HighlightResult>,resetTextIds:string[]=[]){if(lock.current)throw new Error("请等待当前保存完成");lock.current=true;setBusy(true);setActiveSaveSection(editSection);setActionError("");try{receiveUpdated(await operation(),resetTextIds);}finally{lock.current=false;setBusy(false);setActiveSaveSection(null);}}
   useEffect(()=>{const controller=new AbortController();getHighlights(project,collection,controller.signal).then(value=>{if(!controller.signal.aborted)setResult(value);}).catch(reason=>{if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"读取作品失败");});return()=>controller.abort();},[project,collection]);
   const lastBatchRequest=useRef("");
   useEffect(()=>{
@@ -122,10 +129,12 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
     <button className="primary-button" disabled={dirty||busy||unsavedSubtitles||!outputSettings.loaded||!!outputSettings.loadError||(previewSource==="batch"&&(!batchSettings.loaded||!!batchSettings.loadError))} onClick={()=>{setPreviewSnapshot({revision:viewVersion??plan.revision,options:{...effectiveOptions},id:crypto.randomUUID(),source:previewSource});setRendered(true);}}>{previewSnapshot?"更新成片预览":"生成成片预览"}</button>
     {outputSettings.loadError&&<p role="alert">{outputSettings.loadError}<button onClick={outputSettings.retryLoad}>重试读取作品设置</button></p>}
     {unsavedSubtitles&&<p>先保存字幕修改，再生成预览。</p>}
+    {introDirty&&<p>先保存或放弃导读修改，再生成成片预览。</p>}
+    {!rendered&&(visibleVersion??plan).intro&&<p className="helper-text">快速预览只播放原视频；已保存导读请在成片预览中查看。</p>}
     {dirty&&<p>有未保存的范围修改；已有成片属于保存前的旧版本。</p>}
   </>;
   const boundaryWarnings=outputBoundaryWarnings(result.notes??[],plan.title);
-  const subtitleSettings=<OutputSubtitleSettings key={`${collection}:${output}:${viewVersion??plan.revision}`} project={project} collection={collection} plan={subtitlePlan} disabled={busy||historical||dirty} disabledReason={historical?"历史版本只读，请切回当前版本后修改或翻译。":dirty?"请先保存或放弃范围修改，再修改或翻译字幕。":undefined} onDirty={setSubtitleDirty} onUpdated={updated=>receiveUpdated(updated)} />;
+  const subtitleSettings=<OutputSubtitleSettings key={`${collection}:${output}:${viewVersion??plan.revision}`} project={project} collection={collection} plan={subtitlePlan} disabled={busy||historical||dirty} disabledReason={historical?"历史版本只读，请切回当前版本后修改或翻译。":dirty?"请先保存或放弃范围修改，再修改或翻译字幕。":undefined} onDirty={setSubtitleDirty} onSaving={setSubtitleSaving} onUpdated={updated=>receiveUpdated(updated)} />;
   const hookCandidates=visibleClips.filter(clip=>clip.role==="body"&&!clip.deleted&&!visibleClips.some(hook=>hook.role==="hook"&&hook.segment_id===clip.segment_id&&hook.start_ms===clip.start_ms&&hook.end_ms===clip.end_ms));
   const selectedHookSource=hookCandidates.find(clip=>clip.instance_id===hookSourceId)??hookCandidates[0];
   function changeRole(clip:HighlightClip,role:"hook"|"body"){
@@ -159,17 +168,26 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
   }
   async function applyPreset(next:ExportDraft){
     await singleSettings.flush();
-    const subtitles=next.options.subtitle_settings;
-    if(subtitles&&JSON.stringify(subtitles)!==JSON.stringify(subtitleSettingsFromPlan(currentPlan))){
-      await update(()=>saveOutputSubtitleSettings(project,collection,output,currentPlan.revision,subtitles));
+    if(next.options.subtitle_settings||next.options.intro_settings){
+      await update(()=>saveOutputAppearance(project,collection,output,currentPlan.revision,next.options));
     }
-    singleSettings.change({...next,options:{...next.options,subtitle_settings:null}});
-    try{await singleSettings.flush();}catch{throw new Error("字幕设置已应用；画面和音频设置尚未同步，请点击重试保存导出设置。");}
+    singleSettings.change({...next,options:{...next.options,subtitle_settings:null,intro_settings:null}});
+    try{await singleSettings.flush();}catch{throw new Error("作品设置已应用；画面和音频设置尚未同步，请点击重试保存导出设置。");}
   }
+  const frameSave=exportSaveState(singleSettings,["aspect_ratio","resolution","fit","crop_left","crop_right","crop_top","crop_bottom","audio_fade_ms","denoiser_id"]);
+  const subtitleAutoSave=exportSaveState(singleSettings,["subtitle_mode","subtitle_settings"]);
+  const sectionStatus:Record<EditSection,SaveState>={
+    frame:frameSave,
+    subtitles:subtitleSaving||subtitleAutoSave==="saving"?"saving":subtitleDirty||subtitleAutoSave?"dirty":undefined,
+    sentences:visibleClips.some(c=>c.role==="body"&&(ranges[c.instance_id]||textDrafts[c.instance_id]))?"dirty":undefined,
+    hook:hookSaveState??(visibleClips.some(c=>c.role==="hook"&&(ranges[c.instance_id]||textDrafts[c.instance_id]))?"dirty":undefined),
+    intro:introSaving?"saving":introDirty?"dirty":undefined,
+  };
+  if(saving&&activeSaveSection)sectionStatus[activeSaveSection]="saving";
   const edit=<>
     {plan.workflow==="speech_cleanup"&&<CleanupReview key={output} project={project} collection={collection} plan={plan} sourceUrl={sourceUrl} sourceDuration={limit} disabled={busy||historical||dirty||unsavedSubtitles} onUpdated={value=>receiveUpdated(value)} onRestore={id=>update(()=>editOutputItem(project,collection,output,id,{deleted:false}))}/>}
     {navigation&&createPortal(<div className="draft-dialog" role="dialog" aria-label="未保存修改"><p>范围尚未保存，是否保存后切换？</p><button disabled={busy||!valid} onClick={()=>void saveDraft().then(ok=>{if(ok){const go=navigation;setNavigation(null);go();}})}>保存并切换</button><button onClick={()=>{const go=navigation;discard();setNavigation(null);go();}}>放弃并切换</button><button onClick={()=>setNavigation(null)}>继续编辑</button></div>,document.body)}
-    <section className="output-preset-section" aria-label="成片导出预设"><h3>导出预设</h3><ExportPresetControls draft={singleSettings.draft} onChange={singleSettings.change} saveOptions={{...singleSettings.draft.options,subtitle_settings:subtitleSettingsFromPlan(currentPlan)}} onApply={applyPreset} disabled={busy||historical||dirty||unsavedSubtitles||!singleSettings.loaded||!!singleSettings.loadError||singleSettings.saving||!!singleSettings.saveError} disabledReason={dirty||unsavedSubtitles?"先保存或放弃当前修改，再保存或应用预设。":historical?"历史版本只读，请切回当前版本后应用预设。":undefined}/><ExportDraftStatus state={singleSettings}/></section>
+    <section className="output-preset-section" aria-label="成片导出预设"><h3>导出预设</h3><ExportPresetControls draft={singleSettings.draft} onChange={singleSettings.change} saveOptions={{...singleSettings.draft.options,subtitle_settings:subtitleSettingsFromPlan(currentPlan),intro_settings:exportIntroSettings(currentPlan.intro)}} onApply={applyPreset} disabled={busy||historical||dirty||unsavedSubtitles||!singleSettings.loaded||!!singleSettings.loadError||singleSettings.saving||!!singleSettings.saveError} disabledReason={dirty||unsavedSubtitles?"先保存或放弃当前修改，再保存或应用预设。":historical?"历史版本只读，请切回当前版本后应用预设。":undefined}/><ExportDraftStatus state={singleSettings}/></section>
     <div className="edit-section-tabs" role="tablist" aria-label="编辑区域">
       {editSections.map(({id,label},index)=><button
         type="button" role="tab" key={id}
@@ -187,13 +205,13 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
           setEditSection(editSections[next].id);
           document.getElementById(editTabsId+"-tab-"+editSections[next].id)?.focus();
         }}
-      >{label}{(id==="sentences"&&(dirty||sentenceDraft)||id==="hook"&&(dirty||hookDraft))&&<span className="edit-tab-unsaved">未保存</span>}</button>)}
+      >{label}{" "}<SaveStatus dirty={sectionStatus[id]==="dirty"} saving={sectionStatus[id]==="saving"}/></button>)}
     </div>
     <details className="edit-history"><summary>版本记录</summary><button disabled={busy||dirty} onClick={()=>{setHistoryError("");void getOutputVersions(project,collection,output).then(setVersions).catch(reason=>setHistoryError(reason instanceof Error?reason.message:"读取版本失败"));}}>查看版本</button>{historyError&&<p role="alert">{historyError}</p>}{versions.length>0&&<label>预览版本<select disabled={dirty} value={viewVersion??plan.revision} onChange={event=>setViewVersion(Number(event.target.value))}>{versions.map(version=><option key={version.revision} value={version.revision}>版本 {version.revision}</option>)}</select></label>}<p className="muted">历史只读，记录启用前的版本不可找回。</p></details>
     {((editSection==="sentences"||editSection==="hook")||dirty)&&<div className="draft-toolbar"><button className="primary-button" disabled={!dirty||busy||!valid} onClick={()=>void saveDraft()}>保存修改</button><button disabled={!undo.length||busy} onClick={()=>{setRedo([...redo,ranges]);setRanges(undo[undo.length-1]);setUndo(undo.slice(0,-1));}}>撤销</button><button disabled={!redo.length||busy} onClick={()=>{setUndo([...undo,ranges]);setRanges(redo[redo.length-1]);setRedo(redo.slice(0,-1));}}>重做</button><button disabled={!dirty||busy} onClick={discard}>放弃修改</button>{dirty&&<p role="status">范围未保存；保存会重新提取变更片段的字幕，并重置其已校正字幕及译文。</p>}{!valid&&<p role="alert">起止时间必须位于源素材内，且结束晚于开始。</p>}</div>}
     {actionError&&<p role="alert">{actionError}</p>}
     <section id={editTabsId+"-panel-frame"} role="tabpanel" aria-labelledby={editTabsId+"-tab-frame"} hidden={editSection!=="frame"}>
-      <h3>作品画面设置</h3><p className="helper-text">作品预览和导出共用这些设置。</p>
+      <h3>作品画面设置 <SaveStatus dirty={frameSave==="dirty"} saving={frameSave==="saving"}/></h3><p className="helper-text">作品预览和导出共用这些设置。</p>
       <OutputSettingsControls draft={singleSettings.draft} onChange={singleSettings.change} disabled={historical||!singleSettings.loaded||!!singleSettings.loadError} label="作品" sourceUrl={sourceUrl} sourceTime={sourceTime} showSubtitles={false}/>
       <ExportDraftStatus state={singleSettings}/><button type="button" onClick={()=>openEdit("subtitles")}>继续调整字幕</button>
     </section>
@@ -206,14 +224,17 @@ export function OutputWorkspace({project,collection,output,compose,onUpdated,onD
       <details className="edit-guidance"><summary>编辑说明（范围、字幕与分句）</summary><p>范围调整可立即试听；统一点“保存修改”后会重新提取变更片段的字幕，并清除其已校正字幕和译文。相邻范围重叠会重复播放。</p><p>修改显示字幕不改变声音或时间；若有译文，也请同步核对。</p><p>手动分句时，在字幕中按句子或对话轮次换行，仅添加换行和标点，先预览时间再确认。分句依据原转录，建议试听；确认后生成新版本，但不渲染视频。</p><p>删除片段可恢复，作品至少保留一段正文。</p></details>
       <ol className="segments">{visibleClips.map((clip,index)=>clip.role==="body"?renderClip(clip,index):null)}</ol>
     </section>
+    <section id={editTabsId+"-panel-intro"} role="tabpanel" aria-labelledby={editTabsId+"-tab-intro"} hidden={editSection!=="intro"}>
+      <OutputIntro key={`intro:${collection}:${output}:${viewVersion??plan.revision}`} plan={subtitlePlan} sourceUrl={sourceUrl} aspectRatio={effectiveOptions.aspect_ratio} disabled={saving||coverDirty||historical||dirty||unsavedSubtitles} onDirty={setIntroDirty} onSaving={setIntroSaving} onSave={intro=>update(()=>saveOutputIntro(project,collection,output,plan.revision,intro))}/>
+    </section>
     <section id={editTabsId+"-panel-hook"} role="tabpanel" aria-labelledby={editTabsId+"-tab-hook"} hidden={editSection!=="hook"}>
       <div className="hook-source-picker"><label>选择正文原话<select aria-label="选择预告原话" value={selectedHookSource?.instance_id??""} disabled={busy||historical||dirty||!selectedHookSource} onChange={event=>setHookSourceId(event.target.value)}>{hookCandidates.length===0&&<option value="">无可选片段</option>}{hookCandidates.map(clip=><option key={clip.instance_id} value={clip.instance_id}>{clip.text.slice(0,90)}</option>)}</select></label><button disabled={busy||historical||dirty||!selectedHookSource} onClick={()=>{if(selectedHookSource)changeRole(selectedHookSource,"hook");}}>复制为开场预告</button></div>
       <p className="helper-text">预告复制正文原话，正文保留。</p>
-      <OutputOrderControls transitionKind={(visibleVersion??plan).hook_transition_kind??"fade"} transitionMs={(visibleVersion??plan).hook_transition_ms??300} clips={visibleClips} busy={busy||historical||dirty} save={(order,roles,transition,kind)=>update(()=>reorderOutput(project,collection,output,order,roles,transition,kind))} />
+      <OutputOrderControls transitionKind={(visibleVersion??plan).hook_transition_kind??"fade"} transitionMs={(visibleVersion??plan).hook_transition_ms??300} clips={visibleClips} busy={busy||historical||dirty} onStatus={setHookSaveState} save={(order,roles,transition,kind)=>update(()=>reorderOutput(project,collection,output,order,roles,transition,kind))} />
       {!visibleClips.some(clip=>clip.role==="hook")&&<p className="muted">当前没有开场预告。</p>}
       <ol className="segments">{visibleClips.map((clip,index)=>clip.role==="hook"?renderClip(clip,index):null)}</ol>
     </section>
   </>;
-  const exportPanel=dirty?<p>请先保存或放弃范围修改后导出。</p>:historical?<p>切回当前版本后导出</p>:<OutputExport cover={<CoverEditor key={`cover:${collection}:${output}:${plan.revision}`} project={project} collection={collection} output={output} revision={plan.revision} clips={plan.clips} onDirty={setCoverDirty} onSaved={setCoverVersion} />} disabled={coverDirty||coverVersion===undefined||unsavedSubtitles} disabledReason={unsavedSubtitles?"先保存字幕修改，再导出。":undefined} coverVersion={coverVersion} onAdjust={openEdit} key={`${collection}:${output}:${plan.revision}`} project={project} collection={collection} output={output} revision={plan.revision} onSubmitted={onExportSubmitted} />;
+  const exportPanel=dirty?<p>请先保存或放弃范围修改后导出。</p>:historical?<p>切回当前版本后导出</p>:<OutputExport intro={plan.intro} coverDirty={coverDirty} coverSaving={coverSaving} cover={<CoverEditor key={`cover:${collection}:${output}:${plan.revision}`} project={project} collection={collection} output={output} revision={plan.revision} clips={plan.clips} onDirty={setCoverDirty} onSaving={setCoverSaving} onSaved={setCoverVersion} />} disabled={coverDirty||coverVersion===undefined||unsavedSubtitles||introDirty} disabledReason={introDirty?"先保存或放弃导读修改，再导出。":unsavedSubtitles?"先保存字幕修改，再导出。":undefined} coverVersion={coverVersion} onAdjust={openEdit} key={`${collection}:${output}:${plan.revision}`} project={project} collection={collection} output={output} revision={plan.revision} onSubmitted={onExportSubmitted} />;
   return compose?compose({preview,edit,exportPanel}):<Workbench tab={localPanel} onTabChange={setLocalPanel} sidebar={<><h2>当前作品</h2><p>{plan.title}</p>{plan.workflow!=="speech_cleanup"&&<details><summary>选材理由</summary><p>{plan.reason}</p></details>}<a href={`?project=${encodeURIComponent(project)}`}>返回候选列表</a></>} preview={preview} generate={<p>返回候选列表以生成新作品</p>} edit={edit} exportPanel={exportPanel} />;
 }
