@@ -728,6 +728,8 @@ def create_app(
         return {"deleted": True}
 
     def inspect(project_id: str) -> InspectResult:
+        if not (root / project_id / "manifest.json").is_file():
+            raise HTTPException(status_code=404, detail="项目已删除或不存在")
         try:
             return inspector.execute(InspectRequest(root / project_id))
         except MiniCutError as error:
@@ -881,7 +883,7 @@ def create_app(
             result = inspect(child.name)
             projects.append(
                 ProjectSummaryResponse(
-                    project_id=result.project_id,
+                    project_id=child.name,
                     asset_count=len(result.asset_ids),
                     name=ProjectRepository(child).read().name,
                 )
@@ -898,7 +900,7 @@ def create_app(
     ) -> ProjectDetailResponse:
         result = inspect(project_id)
         return ProjectDetailResponse(
-            project_id=result.project_id,
+            project_id=project_id,
             asset_count=len(result.asset_ids),
             asset_ids=list(result.asset_ids),
             name=ProjectRepository(root / project_id).read().name,
